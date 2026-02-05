@@ -1029,7 +1029,7 @@ pub struct VectorOrigination {
 }
 
 /// Layer structure
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Layer {
     pub top: Option<i32>,
     pub left: Option<i32>,

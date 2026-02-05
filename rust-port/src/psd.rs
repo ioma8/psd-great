@@ -517,7 +517,7 @@ pub struct ArtboardOffset {
 }
 
 /// Main PSD document structure
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Psd {
     pub width: u32,
     pub height: u32,
