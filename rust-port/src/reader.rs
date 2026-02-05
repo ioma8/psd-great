@@ -626,7 +626,7 @@ fn read_global_layer_mask_info<R: Read + Seek>(
         let color_space_2 = reader.read_u16()?;
         let color_space_3 = reader.read_u16()?;
         let color_space_4 = reader.read_u16()?;
-        let opacity = reader.read_u16()? as f64 / 255.0;
+        let opacity = reader.read_u16()?;
         let kind = reader.read_u8()?;
         
         reader.skip_bytes(reader.bytes_left(end_offset))?;
@@ -637,7 +637,7 @@ fn read_global_layer_mask_info<R: Read + Seek>(
             color_space2: color_space_2,
             color_space3: color_space_3,
             color_space4: color_space_4,
-            opacity: (opacity * 255.0).round() as u16,
+            opacity,
             kind,
         }))
     })
@@ -649,17 +649,17 @@ fn read_image_data<R: Read + Seek>(
     psd: &mut Psd,
 ) -> Result<()> {
     let compression = reader.read_u16()?;
-    let compression = Compression::from_u16(compression)?;
+    let _compression = Compression::from_u16(compression)?;
 
-    let width = psd.width;
-    let height = psd.height;
-    let channel_count = if reader.global_alpha { 4 } else { 3 };
-
-    // For now, just skip the image data
-    // In a full implementation, we would decompress and store it
+    // For now, we skip the entire image data section
+    // In a full implementation, we would:
+    // 1. Calculate the size based on compression type and dimensions
+    // 2. Read and decompress the data appropriately
+    // 3. Store it in psd.image_data
     
-    // This is a simplified version - actual implementation would read and decompress
-    reader.skip_bytes((width * height * channel_count) as usize)?;
+    // This is a placeholder - actual implementation would properly handle compressed data
+    // For now, we'll just mark that we've reached this point
+    // The section reading will handle skipping any remaining bytes
 
     Ok(())
 }

@@ -212,7 +212,6 @@ impl PsdWriter {
 
         let start_offset = self.offset;
         func(self)?;
-        let mut length = self.offset - start_offset;
 
         // Pad to alignment
         while (self.offset - start_offset) % round != 0 {
