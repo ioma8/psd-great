@@ -23,6 +23,24 @@ pub enum PsdError {
     
     #[error("Missing required field: {0}")]
     MissingField(String),
+    
+    #[error("JPEG error: {0}")]
+    JpegError(String),
+    
+    #[error("Invalid UTF-8")]
+    InvalidUtf8,
+    
+    #[error("Invalid engine data: {0}")]
+    InvalidEngineData(String),
+    
+    #[error("Invalid ASE format: {0}")]
+    InvalidAse(String),
+    
+    #[error("Invalid ABR format: {0}")]
+    InvalidAbr(String),
+    
+    #[error("Invalid CSH format: {0}")]
+    InvalidCsh(String),
 }
 
 pub type Result<T> = std::result::Result<T, PsdError>;
