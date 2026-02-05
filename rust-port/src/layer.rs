@@ -958,8 +958,8 @@ pub struct LayerAdditionalInfo {
     pub mask: Option<LayerMaskData>,
     #[serde(rename = "realMask")]
     pub real_mask: Option<LayerMaskData>,
-    #[serde(rename = "blendClippendElements")]
-    pub blend_clippend_elements: Option<bool>,
+    #[serde(rename = "blendClippedElements")]
+    pub blend_clipped_elements: Option<bool>,
     #[serde(rename = "blendInteriorElements")]
     pub blend_interior_elements: Option<bool>,
     pub knockout: Option<bool>,
