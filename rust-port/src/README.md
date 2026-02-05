@@ -205,8 +205,43 @@ This port includes **ALL** types from the original TypeScript `psd.ts` file (185
 ## Future Work
 
 While this module provides complete data structure definitions, future work could include:
-- Binary PSD file reading/writing implementation
-- Image data encoding/decoding
-- Compression algorithms (RLE, ZIP)
+- ~~Binary PSD file reading/writing implementation~~ ✅ Complete
+- ~~Image data encoding/decoding~~ ✅ Complete
+- ~~Compression algorithms (RLE, ZIP)~~ ✅ Complete
 - Advanced filter implementations
 - Validation logic for PSD constraints
+- Full 16-bit and 32-bit per channel support
+- Complete CMYK and Lab color mode support
+
+## Reader/Writer Modules
+
+### `reader.rs` ✅
+PSD file reading implementation:
+- Binary data reading (big-endian)
+- Header parsing
+- Layer hierarchy reconstruction
+- Image resource parsing
+- Compression support (RLE, ZIP)
+
+### `writer.rs` ✅
+PSD file writing implementation:
+- Binary data writing (big-endian)
+- Header generation
+- Layer hierarchy flattening
+- Image resource writing
+- Compression support (RLE, ZIP)
+
+### `helpers.rs` ✅
+Helper utilities:
+- Blend mode conversion
+- Image data utilities
+- Color space handling
+- Channel offset calculations
+
+### `compression.rs` ✅
+Compression algorithms:
+- RLE compression/decompression
+- ZIP compression/decompression
+- Prediction filters
+
+See [detailed documentation](./README_MODULES.md) for reader/writer modules.
