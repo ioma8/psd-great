@@ -225,7 +225,10 @@ impl<'a> EngineDataParser<'a> {
         if self.stack.is_empty() {
             return Err(PsdError::InvalidEngineData("Stack underflow".to_string()));
         }
-        self.stack.pop();
+        // Only pop if there's more than one item (don't pop the root)
+        if self.stack.len() > 1 {
+            self.stack.pop();
+        }
         Ok(())
     }
 
@@ -559,6 +562,9 @@ impl EngineDataSerializer {
                         self.write_value(val, Some(&key), true)?;
                     }
                 }
+            } else {
+                // For non-object values in condensed mode, still write the value
+                self.write_value(data, None, false)?;
             }
         } else {
             self.write_str("\n\n");
@@ -578,11 +584,13 @@ mod tests {
         let data = b"<< /key 123 >>";
         let result = parse_engine_data(data).unwrap();
         
+        eprintln!("Result: {:?}", result);
+        
         if let EngineValue::Object(map) = result {
             assert_eq!(map.len(), 1);
             assert_eq!(map.get("key").and_then(|v| v.as_number()), Some(123.0));
         } else {
-            panic!("Expected object");
+            panic!("Expected object, got: {:?}", result);
         }
     }
 
