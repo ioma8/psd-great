@@ -17,6 +17,9 @@
 //! - `writer` - PSD file writing functionality
 //! - `helpers` - Helper utilities for PSD operations
 //! - `compression` - Compression and decompression algorithms
+//! - `descriptor` - Descriptor structure parsing and writing
+//! - `image_resources` - Image resource handlers
+//! - `additional_info` - Layer additional information handlers
 
 pub mod error;
 pub mod types;
@@ -28,6 +31,9 @@ pub mod reader;
 pub mod writer;
 pub mod helpers;
 pub mod compression;
+pub mod descriptor;
+pub mod image_resources;
+pub mod additional_info;
 
 // Re-export commonly used types at the crate root
 pub use error::{PsdError, Result};

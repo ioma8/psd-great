@@ -222,6 +222,28 @@ impl<R: Read + Seek> PsdReader<R> {
         let val = self.read_i32()?;
         Ok(val as f64 / 16777216.0)
     }
+
+    /// Read a color value
+    pub fn read_color(&mut self) -> Result<crate::types::Color> {
+        use crate::types::{Color, RGBA};
+        let color_space = self.read_u16()?;
+        
+        match color_space {
+            0 => {
+                // RGB
+                let r = (self.read_u16()? >> 8) as u8;
+                let g = (self.read_u16()? >> 8) as u8;
+                let b = (self.read_u16()? >> 8) as u8;
+                self.read_u16()?; // Skip padding
+                Ok(Color::RGBA(RGBA { r, g, b, a: 255 }))
+            }
+            _ => {
+                // Skip other color spaces for now
+                self.skip_bytes(6)?;
+                Ok(Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))
+            }
+        }
+    }
 }
 
 /// Read a PSD file from a reader
