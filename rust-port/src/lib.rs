@@ -13,6 +13,10 @@
 //! - `layer` - Layer structure and related types including adjustments
 //! - `psd` - Main Psd structure and image resources
 //! - `error` - Error types using thiserror
+//! - `reader` - PSD file reading functionality
+//! - `writer` - PSD file writing functionality
+//! - `helpers` - Helper utilities for PSD operations
+//! - `compression` - Compression and decompression algorithms
 
 pub mod error;
 pub mod types;
@@ -20,6 +24,10 @@ pub mod effects;
 pub mod text;
 pub mod layer;
 pub mod psd;
+pub mod reader;
+pub mod writer;
+pub mod helpers;
+pub mod compression;
 
 // Re-export commonly used types at the crate root
 pub use error::{PsdError, Result};
@@ -51,3 +59,7 @@ pub use psd::{
     Psd, ImageResources, ReadOptions, WriteOptions,
     GlobalLayerMaskInfo, Annotation,
 };
+pub use reader::{PsdReader, read_psd};
+pub use writer::{PsdWriter, write_psd};
+pub use helpers::{to_blend_mode, from_blend_mode, has_alpha};
+pub use compression::{compress_rle, decompress_rle, compress_zip, decompress_zip};

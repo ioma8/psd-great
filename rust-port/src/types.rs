@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Blend mode types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlendMode {
     PassThrough,
@@ -46,6 +46,22 @@ pub enum ColorMode {
     Multichannel = 7,
     Duotone = 8,
     Lab = 9,
+}
+
+impl ColorMode {
+    pub fn from_u16(value: u16) -> crate::error::Result<Self> {
+        match value {
+            0 => Ok(ColorMode::Bitmap),
+            1 => Ok(ColorMode::Grayscale),
+            2 => Ok(ColorMode::Indexed),
+            3 => Ok(ColorMode::RGB),
+            4 => Ok(ColorMode::CMYK),
+            7 => Ok(ColorMode::Multichannel),
+            8 => Ok(ColorMode::Duotone),
+            9 => Ok(ColorMode::Lab),
+            _ => Err(crate::error::PsdError::InvalidColorMode(value as u8)),
+        }
+    }
 }
 
 /// Section divider types for layer groups
@@ -357,6 +373,21 @@ pub enum ChannelID {
     RealUserMask = -3,
 }
 
+impl ChannelID {
+    pub fn from_i16(value: i16) -> Self {
+        match value {
+            0 => ChannelID::Color0,
+            1 => ChannelID::Color1,
+            2 => ChannelID::Color2,
+            3 => ChannelID::Color3,
+            -1 => ChannelID::Transparency,
+            -2 => ChannelID::UserMask,
+            -3 => ChannelID::RealUserMask,
+            _ => ChannelID::Color0, // Default fallback
+        }
+    }
+}
+
 /// Compression type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u16)]
@@ -365,6 +396,21 @@ pub enum Compression {
     RleCompressed = 1,
     ZipWithoutPrediction = 2,
     ZipWithPrediction = 3,
+}
+
+impl Compression {
+    pub fn from_u16(value: u16) -> crate::error::Result<Self> {
+        match value {
+            0 => Ok(Compression::RawData),
+            1 => Ok(Compression::RleCompressed),
+            2 => Ok(Compression::ZipWithoutPrediction),
+            3 => Ok(Compression::ZipWithPrediction),
+            _ => Err(crate::error::PsdError::Compression(format!(
+                "Invalid compression type: {}",
+                value
+            ))),
+        }
+    }
 }
 
 /// Layer composition captured info flags
@@ -424,6 +470,6 @@ pub struct Fraction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PixelData {
     pub data: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
+    pub width: usize,
+    pub height: usize,
 }
