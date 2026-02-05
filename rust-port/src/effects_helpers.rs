@@ -10,6 +10,9 @@ use crate::types::{BlendMode, Color, RGBA, UnitsValue, Units, BevelStyle, BevelD
 use crate::writer::PsdWriter;
 use std::io::{Read, Seek};
 
+/// Default black color used when no color is specified
+const DEFAULT_COLOR: Color = Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 });
+
 const BEVEL_STYLES_MAP: &[BevelStyle] = &[
     BevelStyle::InnerBevel, // placeholder for index 0
     BevelStyle::OuterBevel,
@@ -379,12 +382,12 @@ fn write_shadow_info(writer: &mut PsdWriter, shadow: &LayerEffectShadow) -> Resu
     writer.write_fixed_point_32(0.0)?; // intensity
     writer.write_fixed_point_32(shadow.angle.unwrap_or(0.0))?;
     writer.write_fixed_point_32(shadow.distance.as_ref().map(|d| d.value).unwrap_or(0.0))?;
-    writer.write_color(Some(shadow.color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
+    writer.write_color(Some(shadow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
     write_blend_mode(writer, shadow.blend_mode.unwrap_or(BlendMode::Normal))?;
     writer.write_u8(if shadow.enabled.unwrap_or(false) { 1 } else { 0 })?;
     writer.write_u8(if shadow.use_global_light.unwrap_or(false) { 1 } else { 0 })?;
     write_fixed_point8(writer, shadow.opacity.unwrap_or(1.0))?;
-    writer.write_color(Some(shadow.color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?; // native color
+    writer.write_color(Some(shadow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?; // native color
     Ok(())
 }
 
@@ -447,11 +450,11 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
         writer.write_u32(2)?;
         writer.write_fixed_point_32(glow.size.as_ref().map(|s| s.value).unwrap_or(0.0))?;
         writer.write_fixed_point_32(0.0)?; // intensity
-        writer.write_color(Some(glow.color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
+        writer.write_color(Some(glow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
         write_blend_mode(writer, glow.blend_mode.unwrap_or(BlendMode::Normal))?;
         writer.write_u8(if glow.enabled.unwrap_or(false) { 1 } else { 0 })?;
         write_fixed_point8(writer, glow.opacity.unwrap_or(0.0))?;
-        writer.write_color(Some(glow.color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
+        writer.write_color(Some(glow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
     }
 
     if let Some(glow) = inner_glow {
@@ -461,12 +464,12 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
         writer.write_u32(2)?;
         writer.write_fixed_point_32(glow.size.as_ref().map(|s| s.value).unwrap_or(0.0))?;
         writer.write_fixed_point_32(0.0)?; // intensity
-        writer.write_color(Some(glow.color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
+        writer.write_color(Some(glow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
         write_blend_mode(writer, glow.blend_mode.unwrap_or(BlendMode::Normal))?;
         writer.write_u8(if glow.enabled.unwrap_or(false) { 1 } else { 0 })?;
         write_fixed_point8(writer, glow.opacity.unwrap_or(0.0))?;
         writer.write_u8(0)?; // inverted
-        writer.write_color(Some(glow.color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
+        writer.write_color(Some(glow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
     }
 
     if let Some(bevel_effect) = bevel {
@@ -479,8 +482,8 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
         writer.write_fixed_point_32(bevel_effect.size.as_ref().map(|s| s.value).unwrap_or(0.0))?;
         write_blend_mode(writer, bevel_effect.highlight_blend_mode.unwrap_or(BlendMode::Normal))?;
         write_blend_mode(writer, bevel_effect.shadow_blend_mode.unwrap_or(BlendMode::Normal))?;
-        writer.write_color(Some(bevel_effect.highlight_color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
-        writer.write_color(Some(bevel_effect.shadow_color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
+        writer.write_color(Some(bevel_effect.highlight_color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
+        writer.write_color(Some(bevel_effect.shadow_color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
         
         let style = bevel_effect.style.unwrap_or(BevelStyle::InnerBevel);
         let style_index = BEVEL_STYLES_MAP.iter()
@@ -496,8 +499,8 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
         let direction = bevel_effect.direction.unwrap_or(BevelDirection::Up);
         writer.write_u8(if direction == BevelDirection::Down { 1 } else { 0 })?;
         
-        writer.write_color(Some(bevel_effect.highlight_color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
-        writer.write_color(Some(bevel_effect.shadow_color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
+        writer.write_color(Some(bevel_effect.highlight_color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
+        writer.write_color(Some(bevel_effect.shadow_color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
     }
 
     if let Some(fill) = solid_fill {
@@ -506,10 +509,10 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
         writer.write_u32(34)?;
         writer.write_u32(2)?;
         write_blend_mode(writer, fill.blend_mode.unwrap_or(BlendMode::Normal))?;
-        writer.write_color(Some(fill.color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
+        writer.write_color(Some(fill.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
         write_fixed_point8(writer, fill.opacity.unwrap_or(0.0))?;
         writer.write_u8(if fill.enabled.unwrap_or(false) { 1 } else { 0 })?;
-        writer.write_color(Some(fill.color.as_ref().unwrap_or(&Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 }))))?;
+        writer.write_color(Some(fill.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
     }
 
     Ok(())

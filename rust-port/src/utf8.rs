@@ -6,6 +6,9 @@
 
 use crate::error::{PsdError, Result};
 
+/// Threshold for using manual UTF-8 decoding vs built-in decoder
+const UTF8_MANUAL_DECODE_THRESHOLD: usize = 1000;
+
 /// Calculate the number of bytes needed to encode a Unicode code point in UTF-8
 fn char_length_in_bytes(code: u32) -> usize {
     if code & 0xFFFF_FF80 == 0 {
@@ -93,7 +96,7 @@ fn continuation_byte(buffer: &[u8], index: usize) -> Result<u8> {
 /// Decode a UTF-8 byte array to a String
 pub fn decode_string(value: &[u8]) -> Result<String> {
     // For most cases, use Rust's built-in UTF-8 validation and conversion
-    if value.len() > 1000 {
+    if value.len() > UTF8_MANUAL_DECODE_THRESHOLD {
         return String::from_utf8(value.to_vec())
             .map_err(|_| PsdError::InvalidUtf8);
     }

@@ -167,10 +167,15 @@ fn read_abr_v1_v2<R: Read>(reader: &mut R) -> Result<Abr> {
                 let misc = reader.read_u32::<BigEndian>()?;
                 let spacing = reader.read_u16::<BigEndian>()? as f64;
                 
-                let mut name = vec![0u8; if misc & 1 != 0 { 0 } else { 0 }];
-                reader.read_exact(&mut name)?;
+                // Read brush name if present (indicated by misc flag)
+                // The exact length formula depends on the ABR version and format
+                let name_length = if misc & 1 != 0 { 256 } else { 0 };
+                let mut name = vec![0u8; name_length];
+                if name_length > 0 {
+                    reader.read_exact(&mut name)?;
+                }
                 
-                let anti_alias = reader.read_u8()?;
+                let _anti_alias = reader.read_u8()?;
                 let y = reader.read_i16::<BigEndian>()?;
                 let x = reader.read_i16::<BigEndian>()?;
                 let h = reader.read_i16::<BigEndian>()?;

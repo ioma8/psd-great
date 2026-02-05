@@ -6,7 +6,7 @@ use crate::error::{PsdError, Result};
 use crate::layer::{BezierKnot, BezierPath, LayerVectorMask};
 use crate::types::BooleanOperation;
 use byteorder::{BigEndian, ReadBytesExt};
-use std::io::Read;
+use std::io::{Cursor, Read};
 
 /// Custom shape definition
 #[derive(Debug, Clone)]
@@ -26,9 +26,16 @@ pub struct Csh {
 
 /// Read a CSH file from a reader
 pub fn read_csh<R: Read>(mut reader: R) -> Result<Csh> {
+    // Read entire file into memory and use a cursor for position tracking
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer)
+        .map_err(|e| PsdError::InvalidCsh(format!("Failed to read CSH: {}", e)))?;
+    
+    let mut cursor = Cursor::new(buffer);
+    
     // Read signature
     let mut sig = [0u8; 4];
-    reader.read_exact(&mut sig)
+    cursor.read_exact(&mut sig)
         .map_err(|e| PsdError::InvalidCsh(format!("Failed to read signature: {}", e)))?;
     
     if &sig != b"cush" {
@@ -39,7 +46,7 @@ pub fn read_csh<R: Read>(mut reader: R) -> Result<Csh> {
     }
 
     // Read version
-    let version = reader.read_u32::<BigEndian>()
+    let version = cursor.read_u32::<BigEndian>()
         .map_err(|e| PsdError::InvalidCsh(format!("Failed to read version: {}", e)))?;
     
     if version != 2 {
@@ -50,20 +57,20 @@ pub fn read_csh<R: Read>(mut reader: R) -> Result<Csh> {
     }
 
     // Read shape count
-    let count = reader.read_u32::<BigEndian>()
+    let count = cursor.read_u32::<BigEndian>()
         .map_err(|e| PsdError::InvalidCsh(format!("Failed to read count: {}", e)))?;
 
     let mut shapes = Vec::with_capacity(count as usize);
 
     for _ in 0..count {
         // Read Unicode name
-        let name = read_unicode_string(&mut reader)?;
+        let name = read_unicode_string(&mut cursor)?;
         
         // Align to 4-byte boundary
-        align_to_4bytes(&mut reader)?;
+        align_to_4bytes(&mut cursor)?;
 
         // Read shape version
-        let shape_version = reader.read_u32::<BigEndian>()
+        let shape_version = cursor.read_u32::<BigEndian>()
             .map_err(|e| PsdError::InvalidCsh(format!("Failed to read shape version: {}", e)))?;
         
         if shape_version != 1 {
@@ -74,29 +81,29 @@ pub fn read_csh<R: Read>(mut reader: R) -> Result<Csh> {
         }
 
         // Read size
-        let size = reader.read_u32::<BigEndian>()
+        let size = cursor.read_u32::<BigEndian>()
             .map_err(|e| PsdError::InvalidCsh(format!("Failed to read size: {}", e)))?;
         
         let end_offset = size as usize;
 
         // Read ID (Pascal string)
-        let id = read_pascal_string(&mut reader, 1)?;
+        let id = read_pascal_string(&mut cursor, 1)?;
 
         // Read bounds
-        let y1 = reader.read_u32::<BigEndian>()
+        let y1 = cursor.read_u32::<BigEndian>()
             .map_err(|e| PsdError::InvalidCsh(format!("Failed to read y1: {}", e)))?;
-        let x1 = reader.read_u32::<BigEndian>()
+        let x1 = cursor.read_u32::<BigEndian>()
             .map_err(|e| PsdError::InvalidCsh(format!("Failed to read x1: {}", e)))?;
-        let y2 = reader.read_u32::<BigEndian>()
+        let y2 = cursor.read_u32::<BigEndian>()
             .map_err(|e| PsdError::InvalidCsh(format!("Failed to read y2: {}", e)))?;
-        let x2 = reader.read_u32::<BigEndian>()
+        let x2 = cursor.read_u32::<BigEndian>()
             .map_err(|e| PsdError::InvalidCsh(format!("Failed to read x2: {}", e)))?;
 
         let width = x2 - x1;
         let height = y2 - y1;
 
         // Read vector mask data
-        let paths = read_vector_mask_paths(&mut reader, width, height, end_offset)?;
+        let paths = read_vector_mask_paths(&mut cursor, width, height, end_offset)?;
 
         shapes.push(CustomShape {
             name,
@@ -155,17 +162,21 @@ fn read_pascal_string<R: Read>(reader: &mut R, pad_to: usize) -> Result<String> 
         .map_err(|e| PsdError::InvalidCsh(format!("Invalid UTF-8: {}", e)))
 }
 
-/// Align reader position to 4-byte boundary
-fn align_to_4bytes<R: Read>(reader: &mut R) -> Result<()> {
-    // This is a simplified version - in a real implementation,
-    // you'd need to track the current position
-    // For now, we'll skip up to 3 bytes to align
+/// Align cursor position to 4-byte boundary
+fn align_to_4bytes(cursor: &mut Cursor<Vec<u8>>) -> Result<()> {
+    let pos = cursor.position() as usize;
+    let padding = (4 - (pos % 4)) % 4;
+    if padding > 0 {
+        let mut padding_buf = vec![0u8; padding];
+        cursor.read_exact(&mut padding_buf)
+            .map_err(|e| PsdError::InvalidCsh(format!("Failed to read padding: {}", e)))?;
+    }
     Ok(())
 }
 
 /// Read vector mask paths
-fn read_vector_mask_paths<R: Read>(
-    reader: &mut R,
+fn read_vector_mask_paths(
+    cursor: &mut Cursor<Vec<u8>>,
     _width: u32,
     _height: u32,
     _size: usize,
@@ -173,24 +184,24 @@ fn read_vector_mask_paths<R: Read>(
     let mut paths = Vec::new();
 
     // Read path count
-    let path_count = reader.read_u32::<BigEndian>()
+    let path_count = cursor.read_u32::<BigEndian>()
         .map_err(|e| PsdError::InvalidCsh(format!("Failed to read path count: {}", e)))?;
 
     for _ in 0..path_count {
         // Read path record type and count
-        let record_type = reader.read_u16::<BigEndian>()
+        let record_type = cursor.read_u16::<BigEndian>()
             .map_err(|e| PsdError::InvalidCsh(format!("Failed to read record type: {}", e)))?;
 
         match record_type {
             0 => {
                 // Closed path length record
-                let num_points = reader.read_u16::<BigEndian>()
+                let num_points = cursor.read_u16::<BigEndian>()
                     .map_err(|e| PsdError::InvalidCsh(format!("Failed to read num points: {}", e)))?;
                 
                 let mut knots = Vec::with_capacity(num_points as usize);
                 
                 for _ in 0..num_points {
-                    let knot = read_bezier_knot(reader)?;
+                    let knot = read_bezier_knot(cursor)?;
                     knots.push(knot);
                 }
                 
@@ -203,13 +214,13 @@ fn read_vector_mask_paths<R: Read>(
             }
             3 => {
                 // Open path length record
-                let num_points = reader.read_u16::<BigEndian>()
+                let num_points = cursor.read_u16::<BigEndian>()
                     .map_err(|e| PsdError::InvalidCsh(format!("Failed to read num points: {}", e)))?;
                 
                 let mut knots = Vec::with_capacity(num_points as usize);
                 
                 for _ in 0..num_points {
-                    let knot = read_bezier_knot(reader)?;
+                    let knot = read_bezier_knot(cursor)?;
                     knots.push(knot);
                 }
                 
@@ -231,14 +242,14 @@ fn read_vector_mask_paths<R: Read>(
 }
 
 /// Read a Bezier knot
-fn read_bezier_knot<R: Read>(reader: &mut R) -> Result<BezierKnot> {
+fn read_bezier_knot(cursor: &mut Cursor<Vec<u8>>) -> Result<BezierKnot> {
     // Each knot has 6 coordinates (control points + anchor)
     // They are stored as 32-bit fixed point values
     
     let mut points = Vec::with_capacity(6);
     
     for _ in 0..6 {
-        let value = reader.read_i32::<BigEndian>()
+        let value = cursor.read_i32::<BigEndian>()
             .map_err(|e| PsdError::InvalidCsh(format!("Failed to read knot point: {}", e)))?;
         
         // Convert from fixed point (8.24) to floating point
