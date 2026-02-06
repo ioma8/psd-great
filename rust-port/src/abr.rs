@@ -8,7 +8,7 @@ use crate::layer::PatternInfo;
 use crate::psd::ReadOptions;
 use crate::reader::PsdReader;
 use byteorder::{BigEndian, ReadBytesExt};
-use std::io::{Cursor, Read, Seek};
+use std::io::{Cursor, Read};
 
 /// Brush file structure
 #[derive(Debug, Clone)]
@@ -133,7 +133,7 @@ fn read_abr_v1_v2<R: Read>(reader: &mut R) -> Result<Abr> {
         match brush_type {
             1 => {
                 // Computed brush
-                let misc = reader.read_u32::<BigEndian>()?;
+                let _misc = reader.read_u32::<BigEndian>()?;
                 let spacing = reader.read_u16::<BigEndian>()? as f64;
                 let diameter = reader.read_u16::<BigEndian>()? as f64;
                 let roundness = reader.read_u16::<BigEndian>()? as f64;
@@ -182,7 +182,7 @@ fn read_abr_v1_v2<R: Read>(reader: &mut R) -> Result<Abr> {
                 let w = reader.read_i16::<BigEndian>()?;
 
                 let depth = reader.read_u16::<BigEndian>()?;
-                let compression = reader.read_u8()?;
+                let _compression = reader.read_u8()?;
 
                 let bounds = BrushBounds {
                     x: x as i32,
@@ -232,8 +232,8 @@ fn read_abr_v1_v2<R: Read>(reader: &mut R) -> Result<Abr> {
 /// Read ABR version 6+
 fn read_abr_v6_plus(data: &[u8]) -> Result<Abr> {
     let mut brushes = Vec::new();
-    let mut samples = Vec::new();
-    let mut patterns = Vec::new();
+    let samples = Vec::new();
+    let patterns = Vec::new();
 
     let mut offset = 2; // Skip version
 

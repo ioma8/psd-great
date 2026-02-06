@@ -362,16 +362,16 @@ pub fn write_psd(psd: &Psd, options: &WriteOptions) -> Result<Vec<u8>> {
 }
 
 /// Write color mode data section
-fn write_color_mode_data(writer: &mut PsdWriter, psd: &Psd) -> Result<()> {
-    writer.write_section(1, false, |writer| {
+fn write_color_mode_data(writer: &mut PsdWriter, _psd: &Psd) -> Result<()> {
+    writer.write_section(1, false, |_writer| {
         // Empty for RGB mode
         Ok(())
     })
 }
 
 /// Write image resources section
-fn write_image_resources(writer: &mut PsdWriter, psd: &Psd, options: &WriteOptions) -> Result<()> {
-    writer.write_section(1, false, |writer| {
+fn write_image_resources(writer: &mut PsdWriter, _psd: &Psd, _options: &WriteOptions) -> Result<()> {
+    writer.write_section(1, false, |_writer| {
         // Write minimal image resources for now
         Ok(())
     })
@@ -400,18 +400,33 @@ fn write_layer_info(writer: &mut PsdWriter, psd: &Psd, options: &WriteOptions) -
     let psb = options.psb.unwrap_or(false);
     writer.write_section(2, psb, |writer| {
         let layers = flatten_layers(psd.children.as_ref());
+        let channel_ids = [
+            ChannelID::Transparency,
+            ChannelID::Color0,
+            ChannelID::Color1,
+            ChannelID::Color2,
+        ];
+        let prepared_payloads: Vec<Vec<Vec<u8>>> = layers
+            .iter()
+            .map(|layer| {
+                channel_ids
+                    .iter()
+                    .map(|&channel_id| layer_channel_payload(layer, channel_id, options))
+                    .collect::<Result<Vec<Vec<u8>>>>()
+            })
+            .collect::<Result<Vec<Vec<Vec<u8>>>>>()?;
         
         let layer_count = layers.len() as i16;
         writer.write_i16(layer_count)?;
 
         // Write layer records
-        for layer in &layers {
-            write_layer_record(writer, layer, options)?;
+        for (layer, payloads) in layers.iter().zip(prepared_payloads.iter()) {
+            write_layer_record(writer, layer, payloads, options)?;
         }
 
         // Write layer channel image data
-        for layer in &layers {
-            write_layer_channel_data(writer, layer, options)?;
+        for payloads in &prepared_payloads {
+            write_layer_channel_data(writer, payloads, options)?;
         }
 
         Ok(())
@@ -447,7 +462,12 @@ fn flatten_layers(children: Option<&Vec<Layer>>) -> Vec<Layer> {
 }
 
 /// Write a single layer record
-fn write_layer_record(writer: &mut PsdWriter, layer: &Layer, options: &WriteOptions) -> Result<()> {
+fn write_layer_record(
+    writer: &mut PsdWriter,
+    layer: &Layer,
+    channel_payloads: &[Vec<u8>],
+    options: &WriteOptions,
+) -> Result<()> {
     let psb = options.psb.unwrap_or(false);
     
     // Write bounds
@@ -466,9 +486,12 @@ fn write_layer_record(writer: &mut PsdWriter, layer: &Layer, options: &WriteOpti
     let channel_count = channel_ids.len() as u16;
     writer.write_u16(channel_count)?;
 
-    for channel_id in channel_ids {
-        let channel_payload_len = layer_channel_payload(layer, channel_id, options)?.len() as u32;
-        writer.write_i16(channel_id as i16)?;
+    for (idx, channel_id) in channel_ids.iter().enumerate() {
+        let channel_payload_len = channel_payloads
+            .get(idx)
+            .map(|p| p.len())
+            .unwrap_or(0) as u32;
+        writer.write_i16(*channel_id as i16)?;
         if psb {
             writer.write_u32(0)?;
         }
@@ -520,25 +543,18 @@ fn write_layer_record(writer: &mut PsdWriter, layer: &Layer, options: &WriteOpti
 /// Write layer channel image data
 fn write_layer_channel_data(
     writer: &mut PsdWriter,
-    layer: &Layer,
+    channel_payloads: &[Vec<u8>],
     options: &WriteOptions,
 ) -> Result<()> {
-    let channel_ids = [
-        ChannelID::Transparency,
-        ChannelID::Color0,
-        ChannelID::Color1,
-        ChannelID::Color2,
-    ];
     let compression = if options.compress.unwrap_or(false) {
         Compression::RleCompressed
     } else {
         Compression::RawData
     };
 
-    for channel_id in channel_ids {
-        let payload = layer_channel_payload(layer, channel_id, options)?;
+    for payload in channel_payloads {
         writer.write_u16(compression as u16)?;
-        writer.write_bytes(&payload)?;
+        writer.write_bytes(payload)?;
     }
 
     Ok(())

@@ -3,7 +3,6 @@
 //! Supports RLE and ZIP compression methods used in PSD files.
 
 use crate::error::{PsdError, Result};
-use crate::types::{PixelData, Compression};
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
 use flate2::Compression as FlateCompression;
@@ -16,24 +15,37 @@ use std::io::{Read, Write};
 pub fn decompress_rle(
     input: &[u8],
     output: &mut [u8],
-    width: usize,
+    _width: usize,
     height: usize,
     byte_counts: &[u16],
 ) -> Result<()> {
-    let mut input_pos = 0;
-    let mut output_pos = 0;
+    let mut input_pos: usize = 0;
+    let mut output_pos: usize = 0;
+
+    if byte_counts.len() < height {
+        return Err(PsdError::Compression(
+            "RLE: missing row byte counts".to_string(),
+        ));
+    }
 
     for row in 0..height {
         let byte_count = byte_counts[row] as usize;
-        let row_end = input_pos + byte_count;
+        let row_end = input_pos
+            .checked_add(byte_count)
+            .ok_or_else(|| PsdError::Compression("RLE: row size overflow".to_string()))?;
+        if row_end > input.len() {
+            return Err(PsdError::Compression(
+                "RLE: row exceeds input length".to_string(),
+            ));
+        }
 
         while input_pos < row_end && output_pos < output.len() {
-            let len = input[input_pos] as i8;
+            let header = input[input_pos];
             input_pos += 1;
 
-            if len < 0 {
-                // Repeat next byte (-len + 1) times
-                let count = (-len + 1) as usize;
+            if header > 128 {
+                // Repeat next byte (257 - header) times
+                let count = 257usize - header as usize;
                 if input_pos >= input.len() {
                     return Err(PsdError::Compression(
                         "RLE: unexpected end of input".to_string(),
@@ -49,9 +61,9 @@ pub fn decompress_rle(
                     output[output_pos] = value;
                     output_pos += 1;
                 }
-            } else {
-                // Copy next (len + 1) bytes
-                let count = (len + 1) as usize;
+            } else if header < 128 {
+                // Copy next (header + 1) bytes
+                let count = header as usize + 1;
                 for _ in 0..count {
                     if input_pos >= input.len() {
                         return Err(PsdError::Compression(
@@ -65,7 +77,14 @@ pub fn decompress_rle(
                     input_pos += 1;
                     output_pos += 1;
                 }
+            } else {
+                // 128 is a NOP in PackBits.
             }
+        }
+
+        // Skip any unread row bytes if malformed streams decode early.
+        if input_pos < row_end {
+            input_pos = row_end;
         }
     }
 
@@ -105,8 +124,6 @@ fn compress_rle_row(row: &[u8]) -> Result<Vec<u8>> {
     let mut i = 0;
 
     while i < row.len() {
-        let start = i;
-        
         // Check for run
         if i + 2 < row.len() && row[i] == row[i + 1] && row[i] == row[i + 2] {
             let value = row[i];

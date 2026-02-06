@@ -92,12 +92,11 @@ fn main() -> Result<()> {
     println!("\nWriting to: {}", output_path);
     let buffer = write_psd(&psd, &write_options)?;
     
-    // Uncomment to actually save the file
-    // let mut file = File::create(&output_path)?;
-    // file.write_all(&buffer)?;
+    let mut file = File::create(&output_path)?;
+    file.write_all(&buffer)?;
     
     println!("  Buffer size: {} bytes", buffer.len());
-    // println!("  Saved successfully!");
+    println!("  Saved successfully!");
 
     println!("\n✅ PSD modification complete!");
     

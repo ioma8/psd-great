@@ -5,10 +5,18 @@
 
 use ag_psd::*;
 use ag_psd::layer::SectionDivider;
+use std::env;
 use std::fs::File;
 use std::io::Write;
 
 fn main() -> Result<()> {
+    let args: Vec<String> = env::args().collect();
+    let output_path = if args.len() >= 2 {
+        args[1].as_str()
+    } else {
+        "created_example.psd"
+    };
+
     println!("Creating a new PSD document...\n");
 
     // Create a PSD with RGB color mode
@@ -182,11 +190,9 @@ fn main() -> Result<()> {
     let buffer = write_psd(&psd, &options)?;
     println!("  Buffer size: {} bytes", buffer.len());
 
-    // Save to file (optional - commented out to avoid creating files during testing)
-    // let output_path = "created_example.psd";
-    // let mut file = File::create(output_path)?;
-    // file.write_all(&buffer)?;
-    // println!("  Saved to: {}", output_path);
+    let mut file = File::create(output_path)?;
+    file.write_all(&buffer)?;
+    println!("  Saved to: {}", output_path);
 
     println!("\n✅ PSD created successfully!");
 

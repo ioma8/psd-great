@@ -6,7 +6,6 @@
 use crate::error::{PsdError, Result};
 use crate::reader::PsdReader;
 use crate::writer::PsdWriter;
-use crate::descriptor::{Descriptor, DescriptorValue};
 use crate::types::Color;
 use std::collections::HashMap;
 use std::io::{Read, Seek};

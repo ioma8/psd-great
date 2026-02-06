@@ -125,7 +125,7 @@ pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
     for _ in 0..blocks_count {
         let block_type = reader.read_u16::<BigEndian>()
             .map_err(|e| PsdError::InvalidAse(format!("Failed to read block type: {}", e)))?;
-        let length = reader.read_u32::<BigEndian>()
+        let _length = reader.read_u32::<BigEndian>()
             .map_err(|e| PsdError::InvalidAse(format!("Failed to read block length: {}", e)))?;
 
         match block_type {

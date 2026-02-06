@@ -205,7 +205,7 @@ impl<'a> EngineDataParser<'a> {
             self.push_container(EngineValue::Object(HashMap::new()));
         }
 
-        if let Some(StackItem::Property(ref key)) = self.stack.last() {
+        if let Some(StackItem::Property(ref _key)) = self.stack.last() {
             if name == "nil" {
                 self.push_value(EngineValue::Null)?;
             } else {

@@ -213,7 +213,7 @@ impl<R: Read + Seek> PsdReader<R> {
             "ObAr" => {
                 // Object array
                 let _count = self.read_i32()?;
-                let (name, class_id) = self.read_class_structure()?;
+                let (_name, _class_id) = self.read_class_structure()?;
                 let item_count = self.read_i32()?;
                 
                 let mut items = Vec::new();
@@ -247,7 +247,7 @@ impl<R: Read + Seek> PsdReader<R> {
                 let mut points = Vec::new();
                 
                 for _ in 0..point_count {
-                    let (name, class_id) = self.read_class_structure()?;
+                    let (_name, _class_id) = self.read_class_structure()?;
                     let _item_count = self.read_u32()?;
                     
                     // Read Hrzn

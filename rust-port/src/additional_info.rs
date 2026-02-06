@@ -562,8 +562,8 @@ impl<R: Read + Seek> PsdReader<R> {
         let start_offset = self.offset;
         
         // Read type (may be 'plcL' or 'sold')
-        let placed_type = self.read_signature()?;
-        let version = self.read_u32()?;
+        let _placed_type = self.read_signature()?;
+        let _version = self.read_u32()?;
         
         // Read UUID
         let id_length = 32;

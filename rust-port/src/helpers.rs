@@ -3,7 +3,7 @@
 //! Includes blend mode conversion, color space utilities, and image data handling.
 
 use crate::error::{PsdError, Result};
-use crate::types::{BlendMode, PixelData, ChannelID, Color, RGBA, RGB, HSB, CMYK, LAB, Grayscale};
+use crate::types::{BlendMode, PixelData, ChannelID};
 use crate::compression;
 use std::collections::HashMap;
 
@@ -222,7 +222,7 @@ pub fn write_data_raw(data: &PixelData, offset: usize) -> Option<Vec<u8>> {
 pub fn write_data_rle(
     data: &PixelData,
     offsets: &[usize],
-    large: bool,
+    _large: bool,
 ) -> Result<Option<Vec<u8>>> {
     let width = data.width;
     let height = data.height;

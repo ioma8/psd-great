@@ -3,7 +3,7 @@
 //! Provides reading of Adobe Photoshop Custom Shape files.
 
 use crate::error::{PsdError, Result};
-use crate::layer::{BezierKnot, BezierPath, LayerVectorMask};
+use crate::layer::{BezierKnot, BezierPath};
 use crate::types::BooleanOperation;
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::{Cursor, Read};
