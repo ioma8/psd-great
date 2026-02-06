@@ -15,3 +15,5 @@
 .v8-cache
 TODO.md
 .idea
+/rust-port/target
+/rust-port/Cargo.lock
