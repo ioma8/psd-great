@@ -124,43 +124,35 @@ fn compress_rle_row(row: &[u8]) -> Result<Vec<u8>> {
     let mut i = 0;
 
     while i < row.len() {
-        // Check for run
-        if i + 2 < row.len() && row[i] == row[i + 1] && row[i] == row[i + 2] {
-            let value = row[i];
-            let mut count = 1;
-            i += 1;
-            
-            while i < row.len() && row[i] == value && count < 128 {
-                count += 1;
-                i += 1;
-            }
-            
-            // Write run
-            result.push((1 - count) as u8);
-            result.push(value);
-        } else {
-            // Collect literal bytes
-            let mut literal = Vec::new();
-            
-            while i < row.len() && literal.len() < 128 {
-                literal.push(row[i]);
-                i += 1;
-                
-                // Check if we should stop (run ahead)
-                if i + 2 < row.len() 
-                    && row[i] == row[i + 1] 
-                    && row[i] == row[i + 2] {
-                    i -= 1;
-                    literal.pop();
-                    break;
-                }
-            }
-            
-            if !literal.is_empty() {
-                result.push((literal.len() - 1) as u8);
-                result.extend_from_slice(&literal);
-            }
+        // Try to encode a run first.
+        let mut run_len = 1usize;
+        while i + run_len < row.len() && row[i + run_len] == row[i] && run_len < 128 {
+            run_len += 1;
         }
+        if run_len >= 3 {
+            result.push((1i16 - run_len as i16) as u8);
+            result.push(row[i]);
+            i += run_len;
+            continue;
+        }
+
+        // Otherwise encode a literal block up to 128 bytes or until next run.
+        let lit_start = i;
+        let mut lit_len = 0usize;
+        while i < row.len() && lit_len < 128 {
+            if i + 2 < row.len() && row[i] == row[i + 1] && row[i] == row[i + 2] {
+                break;
+            }
+            i += 1;
+            lit_len += 1;
+        }
+        if lit_len == 0 {
+            // Fallback safety; should never happen due run path above.
+            lit_len = 1;
+            i += 1;
+        }
+        result.push((lit_len - 1) as u8);
+        result.extend_from_slice(&row[lit_start..lit_start + lit_len]);
     }
 
     Ok(result)
