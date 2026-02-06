@@ -3,12 +3,13 @@
 //! Provides functionality to write PSD files.
 
 use crate::error::{PsdError, Result};
-use crate::types::{BlendMode, ChannelID, ColorMode, Compression, PixelData, Color};
+use crate::types::{BlendMode, ChannelID, ColorMode, Compression, Color};
 use crate::psd::{Psd, WriteOptions, GlobalLayerMaskInfo};
 use crate::layer::Layer;
-use crate::helpers::{from_blend_mode, clamp, has_alpha, write_data_rle, write_data_zip_without_prediction};
+use crate::helpers::{from_blend_mode, clamp, has_alpha};
+use crate::compression;
 use byteorder::{BigEndian, WriteBytesExt};
-use std::io::{Write, Cursor};
+use std::io::Cursor;
 
 /// PSD writer for binary data
 pub struct PsdWriter {
@@ -455,25 +456,23 @@ fn write_layer_record(writer: &mut PsdWriter, layer: &Layer, options: &WriteOpti
     writer.write_i32(layer.bottom.unwrap_or(0))?;
     writer.write_i32(layer.right.unwrap_or(0))?;
 
-    // Write channel count (R, G, B, A)
-    let channel_count = 4u16;
+    // Write channel count (A, R, G, B)
+    let channel_ids = [
+        ChannelID::Transparency,
+        ChannelID::Color0,
+        ChannelID::Color1,
+        ChannelID::Color2,
+    ];
+    let channel_count = channel_ids.len() as u16;
     writer.write_u16(channel_count)?;
 
-    // Write channel info placeholders
-    for i in 0..channel_count {
-        let channel_id = match i {
-            0 => ChannelID::Transparency,
-            1 => ChannelID::Color0,
-            2 => ChannelID::Color1,
-            3 => ChannelID::Color2,
-            _ => ChannelID::Color0,
-        };
-        
+    for channel_id in channel_ids {
+        let channel_payload_len = layer_channel_payload(layer, channel_id, options)?.len() as u32;
         writer.write_i16(channel_id as i16)?;
         if psb {
             writer.write_u32(0)?;
         }
-        writer.write_u32(2)?; // Placeholder length (just compression field)
+        writer.write_u32(channel_payload_len + 2)?; // Compression field + payload
     }
 
     // Write blend mode signature
@@ -524,9 +523,22 @@ fn write_layer_channel_data(
     layer: &Layer,
     options: &WriteOptions,
 ) -> Result<()> {
-    // Write compression type for each channel
-    for _ in 0..4 {
-        writer.write_u16(Compression::RawData as u16)?;
+    let channel_ids = [
+        ChannelID::Transparency,
+        ChannelID::Color0,
+        ChannelID::Color1,
+        ChannelID::Color2,
+    ];
+    let compression = if options.compress.unwrap_or(false) {
+        Compression::RleCompressed
+    } else {
+        Compression::RawData
+    };
+
+    for channel_id in channel_ids {
+        let payload = layer_channel_payload(layer, channel_id, options)?;
+        writer.write_u16(compression as u16)?;
+        writer.write_bytes(&payload)?;
     }
 
     Ok(())
@@ -556,18 +568,108 @@ fn write_global_layer_mask_info(
 fn write_image_data(
     writer: &mut PsdWriter,
     psd: &Psd,
-    _options: &WriteOptions,
-    _global_alpha: bool,
+    options: &WriteOptions,
+    global_alpha: bool,
 ) -> Result<()> {
-    writer.write_u16(Compression::RleCompressed as u16)?;
+    let compression = if options.compress.unwrap_or(false) {
+        Compression::RleCompressed
+    } else {
+        Compression::RawData
+    };
+    writer.write_u16(compression as u16)?;
 
-    // Write minimal empty image data
-    if let Some(ref _image_data) = psd.image_data {
-        // In a full implementation, compress and write the actual image data
-        // For now, write empty data
+    let fallback_width = psd.width as usize;
+    let fallback_height = psd.height as usize;
+    let fallback_rgba = vec![0u8; fallback_width * fallback_height * 4];
+    let (image_data, width, height) = if let Some(ref image_data) = psd.image_data {
+        (image_data.data.as_slice(), image_data.width, image_data.height)
+    } else {
+        (fallback_rgba.as_slice(), fallback_width, fallback_height)
+    };
+
+    let offsets: &[usize] = if global_alpha { &[0, 1, 2, 3] } else { &[0, 1, 2] };
+    match compression {
+        Compression::RawData => {
+            for &offset in offsets {
+                writer.write_bytes(&extract_channel_data_from_rgba(image_data, width, height, offset))?;
+            }
+        }
+        Compression::RleCompressed => {
+            let mut compressed_channels = Vec::with_capacity(offsets.len());
+            for &offset in offsets {
+                let raw = extract_channel_data_from_rgba(image_data, width, height, offset);
+                let compressed = compression::compress_rle(&raw, width, height)?;
+                compressed_channels.push(compressed);
+            }
+
+            // PSD composite RLE stores all row byte-counts first, then compressed row data.
+            for channel in &compressed_channels {
+                let table_len = height * 2;
+                writer.write_bytes(&channel[..table_len])?;
+            }
+            for channel in &compressed_channels {
+                let table_len = height * 2;
+                writer.write_bytes(&channel[table_len..])?;
+            }
+        }
+        Compression::ZipWithoutPrediction | Compression::ZipWithPrediction => {
+            return Err(PsdError::UnsupportedFeature(
+                "ZIP image compression is not supported for writing".to_string(),
+            ));
+        }
     }
 
     Ok(())
+}
+
+fn layer_channel_payload(layer: &Layer, channel_id: ChannelID, options: &WriteOptions) -> Result<Vec<u8>> {
+    let width = (layer.right.unwrap_or(0) - layer.left.unwrap_or(0)).max(0) as usize;
+    let height = (layer.bottom.unwrap_or(0) - layer.top.unwrap_or(0)).max(0) as usize;
+    let image_data = layer.image_data.as_ref();
+    let offset = match channel_id {
+        ChannelID::Color0 => 0,
+        ChannelID::Color1 => 1,
+        ChannelID::Color2 => 2,
+        ChannelID::Transparency => 3,
+        _ => 0,
+    };
+    let raw = extract_layer_channel_data(image_data, width, height, offset);
+
+    if options.compress.unwrap_or(false) {
+        compression::compress_rle(&raw, width, height)
+    } else {
+        Ok(raw)
+    }
+}
+
+fn extract_layer_channel_data(image_data: Option<&crate::types::PixelData>, width: usize, height: usize, offset: usize) -> Vec<u8> {
+    let mut out = vec![0u8; width * height];
+    if let Some(image_data) = image_data {
+        for i in 0..(width * height) {
+            let src = i * 4 + offset;
+            if src < image_data.data.len() {
+                out[i] = image_data.data[src];
+            } else if offset == 3 {
+                out[i] = 255;
+            }
+        }
+    } else if offset == 3 {
+        out.fill(255);
+    }
+    out
+}
+
+fn extract_channel_data_from_rgba(image_data: &[u8], width: usize, height: usize, offset: usize) -> Vec<u8> {
+    let mut out = vec![0u8; width * height];
+    for i in 0..(width * height) {
+        let src = i * 4 + offset;
+        if src < image_data.len() {
+            out[i] = image_data[src];
+        } else if offset == 3 {
+            out[i] = 255;
+        }
+    }
+    out
 }
 
 #[cfg(test)]

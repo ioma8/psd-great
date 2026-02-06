@@ -3,15 +3,13 @@
 //! Provides functionality to read PSD files and parse their structure.
 
 use crate::error::{PsdError, Result};
-use crate::types::{
-    BlendMode, ChannelID, ColorMode, Compression, PixelData, SectionDividerType,
-};
+use crate::types::{ChannelID, ColorMode, Compression, PixelData, SectionDividerType};
 use crate::psd::{Psd, ReadOptions, GlobalLayerMaskInfo};
-use crate::layer::{Layer, LayerMaskData};
-use crate::helpers::{to_blend_mode, setup_grayscale, decode_bitmap, offset_for_channel};
+use crate::layer::Layer;
+use crate::helpers::to_blend_mode;
 use crate::compression;
 use byteorder::{BigEndian, ReadBytesExt};
-use std::io::{Read, Seek, SeekFrom, Cursor};
+use std::io::{Read, Seek, SeekFrom};
 
 /// PSD reader for binary data
 pub struct PsdReader<R: Read + Seek> {
@@ -582,16 +580,95 @@ fn read_layer_channel_image_data<R: Read + Seek>(
     layer: &mut Layer,
     channels: &[ChannelInfo],
 ) -> Result<()> {
+    if reader.options.skip_layer_image_data.unwrap_or(false) {
+        for channel in channels {
+            reader.skip_bytes(channel.length as usize)?;
+        }
+        return Ok(());
+    }
+
+    let width = (layer.right.unwrap_or(0) - layer.left.unwrap_or(0)).max(0) as usize;
+    let height = (layer.bottom.unwrap_or(0) - layer.top.unwrap_or(0)).max(0) as usize;
+    if width == 0 || height == 0 {
+        for channel in channels {
+            reader.skip_bytes(channel.length as usize)?;
+        }
+        return Ok(());
+    }
+
+    let expected_len = width * height;
+    let mut red: Option<Vec<u8>> = None;
+    let mut green: Option<Vec<u8>> = None;
+    let mut blue: Option<Vec<u8>> = None;
+    let mut alpha: Option<Vec<u8>> = None;
+
     for channel in channels {
         let compression = reader.read_u16()?;
         let compression = Compression::from_u16(compression)?;
+        let data_length = channel
+            .length
+            .checked_sub(2)
+            .ok_or_else(|| PsdError::InvalidFormat("Invalid channel length".to_string()))?
+            as usize;
 
-        let data_length = channel.length - 2; // Subtract compression field size
-
-        // Skip channel data for now
-        reader.skip_bytes(data_length as usize)?;
+        let decoded = match compression {
+            Compression::RawData => {
+                let data = reader.read_bytes(data_length)?;
+                normalize_channel_data(data, expected_len)
+            }
+            Compression::RleCompressed => {
+                let row_count = height;
+                let byte_counts_len = row_count * 2;
+                if data_length < byte_counts_len {
+                    return Err(PsdError::InvalidFormat(
+                        "Invalid RLE channel data length".to_string(),
+                    ));
+                }
+                let mut byte_counts = Vec::with_capacity(row_count);
+                for _ in 0..row_count {
+                    byte_counts.push(reader.read_u16()?);
+                }
+                let compressed_len = data_length - byte_counts_len;
+                let compressed = reader.read_bytes(compressed_len)?;
+                let mut out = vec![0u8; expected_len];
+                compression::decompress_rle(
+                    &compressed,
+                    &mut out,
+                    width,
+                    height,
+                    &byte_counts,
+                )?;
+                out
+            }
+            Compression::ZipWithoutPrediction => {
+                let compressed = reader.read_bytes(data_length)?;
+                let out = compression::decompress_zip(&compressed, expected_len)?;
+                normalize_channel_data(out, expected_len)
+            }
+            Compression::ZipWithPrediction => {
+                let compressed = reader.read_bytes(data_length)?;
+                let out = compression::decompress_zip_with_prediction(&compressed, width, height, 1)?;
+                normalize_channel_data(out, expected_len)
+            }
+        };
+        match channel.id {
+            ChannelID::Color0 => red = Some(decoded),
+            ChannelID::Color1 => green = Some(decoded),
+            ChannelID::Color2 => blue = Some(decoded),
+            ChannelID::Transparency => alpha = Some(decoded),
+            _ => {}
+        }
     }
 
+    let mut rgba = vec![0u8; expected_len * 4];
+    for i in 0..expected_len {
+        rgba[i * 4] = red.as_ref().and_then(|d| d.get(i)).copied().unwrap_or(0);
+        rgba[i * 4 + 1] = green.as_ref().and_then(|d| d.get(i)).copied().unwrap_or(0);
+        rgba[i * 4 + 2] = blue.as_ref().and_then(|d| d.get(i)).copied().unwrap_or(0);
+        rgba[i * 4 + 3] = alpha.as_ref().and_then(|d| d.get(i)).copied().unwrap_or(255);
+    }
+
+    layer.image_data = Some(PixelData { data: rgba, width, height });
     Ok(())
 }
 
@@ -671,25 +748,102 @@ fn read_image_data<R: Read + Seek>(
     psd: &mut Psd,
 ) -> Result<()> {
     let compression = reader.read_u16()?;
-    let _compression = Compression::from_u16(compression)?;
+    let compression = Compression::from_u16(compression)?;
+    let width = psd.width as usize;
+    let height = psd.height as usize;
+    if width == 0 || height == 0 {
+        return Ok(());
+    }
 
-    // For now, we skip the entire image data section
-    // In a full implementation, we would:
-    // 1. Calculate the size based on compression type and dimensions
-    // 2. Read and decompress the data appropriately
-    // 3. Store it in psd.image_data
-    
-    // This is a placeholder - actual implementation would properly handle compressed data
-    // For now, we'll just mark that we've reached this point
-    // The section reading will handle skipping any remaining bytes
+    let channels = psd.channels.unwrap_or(3) as usize;
+    if channels == 0 {
+        return Ok(());
+    }
+    let channel_len = width * height;
+
+    let mut planes: Vec<Vec<u8>> = Vec::with_capacity(channels);
+    match compression {
+        Compression::RawData => {
+            for _ in 0..channels {
+                let plane = reader.read_bytes(channel_len)?;
+                planes.push(normalize_channel_data(plane, channel_len));
+            }
+        }
+        Compression::RleCompressed => {
+            let row_count = channels * height;
+            let mut byte_counts = Vec::with_capacity(row_count);
+            for _ in 0..row_count {
+                byte_counts.push(reader.read_u16()?);
+            }
+            for channel_index in 0..channels {
+                let start = channel_index * height;
+                let end = start + height;
+                let channel_counts = &byte_counts[start..end];
+                let compressed_len = channel_counts.iter().map(|v| *v as usize).sum();
+                let compressed = reader.read_bytes(compressed_len)?;
+                let mut out = vec![0u8; channel_len];
+                compression::decompress_rle(
+                    &compressed,
+                    &mut out,
+                    width,
+                    height,
+                    channel_counts,
+                )?;
+                planes.push(out);
+            }
+        }
+        Compression::ZipWithoutPrediction | Compression::ZipWithPrediction => {
+            return Err(PsdError::UnsupportedFeature(
+                "ZIP composite image data is not supported yet".to_string(),
+            ));
+        }
+    }
+
+    let mut rgba = vec![0u8; channel_len * 4];
+    for i in 0..channel_len {
+        rgba[i * 4] = planes
+            .get(0)
+            .and_then(|d| d.get(i))
+            .copied()
+            .unwrap_or(0);
+        rgba[i * 4 + 1] = planes
+            .get(1)
+            .and_then(|d| d.get(i))
+            .copied()
+            .unwrap_or(0);
+        rgba[i * 4 + 2] = planes
+            .get(2)
+            .and_then(|d| d.get(i))
+            .copied()
+            .unwrap_or(0);
+        rgba[i * 4 + 3] = planes
+            .get(3)
+            .and_then(|d| d.get(i))
+            .copied()
+            .unwrap_or(255);
+    }
+
+    psd.image_data = Some(PixelData { data: rgba, width, height });
 
     Ok(())
+}
+
+fn normalize_channel_data(mut data: Vec<u8>, expected_len: usize) -> Vec<u8> {
+    if data.len() < expected_len {
+        data.resize(expected_len, 0);
+        return data;
+    }
+    if data.len() > expected_len {
+        data.truncate(expected_len);
+    }
+    data
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use crate::{write_psd, Layer, Psd, PixelData, WriteOptions};
 
     #[test]
     fn test_read_signature() {
@@ -716,5 +870,54 @@ mod tests {
         let mut reader = PsdReader::new(Cursor::new(data), ReadOptions::default());
         assert_eq!(reader.read_u16().unwrap(), 1);
         assert_eq!(reader.read_u32().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_roundtrip_reads_layer_and_composite_pixels() {
+        let layer = Layer {
+            top: Some(0),
+            left: Some(0),
+            bottom: Some(1),
+            right: Some(1),
+            image_data: Some(PixelData {
+                data: vec![255, 0, 0, 255],
+                width: 1,
+                height: 1,
+            }),
+            ..Default::default()
+        };
+        let psd = Psd {
+            width: 1,
+            height: 1,
+            children: Some(vec![layer]),
+            image_data: Some(PixelData {
+                data: vec![0, 255, 0, 255],
+                width: 1,
+                height: 1,
+            }),
+            ..Default::default()
+        };
+        let bytes = write_psd(&psd, &WriteOptions { compress: Some(false), ..Default::default() })
+            .expect("write psd");
+        let loaded = read_psd(
+            Cursor::new(bytes),
+            ReadOptions {
+                skip_layer_image_data: Some(false),
+                skip_composite_image_data: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("read psd");
+
+        let top = loaded
+            .children
+            .as_ref()
+            .and_then(|c| c.first())
+            .and_then(|l| l.image_data.as_ref())
+            .expect("layer image");
+        assert_eq!(top.data, vec![255, 0, 0, 255]);
+
+        let composite = loaded.image_data.expect("composite image");
+        assert_eq!(composite.data, vec![0, 255, 0, 255]);
     }
 }
