@@ -125,13 +125,21 @@ impl<'a> EngineDataParser<'a> {
     }
 
     fn get_text_byte(&mut self) -> Result<u8> {
-        let byte = self.data.get(self.index)
-            .ok_or(PsdError::InvalidEngineData("Unexpected end of data".to_string()))?;
+        let byte = self
+            .data
+            .get(self.index)
+            .ok_or(PsdError::InvalidEngineData(
+                "Unexpected end of data".to_string(),
+            ))?;
         self.index += 1;
 
         if *byte == b'\\' {
-            let next = self.data.get(self.index)
-                .ok_or(PsdError::InvalidEngineData("Unexpected end after escape".to_string()))?;
+            let next = self
+                .data
+                .get(self.index)
+                .ok_or(PsdError::InvalidEngineData(
+                    "Unexpected end after escape".to_string(),
+                ))?;
             self.index += 1;
             Ok(*next)
         } else {
@@ -146,12 +154,15 @@ impl<'a> EngineDataParser<'a> {
         }
 
         // Check for UTF-16 BOM
-        if self.index + 1 < self.data.len() 
-            && self.data[self.index] == 0xFE 
-            && self.data[self.index + 1] == 0xFF {
+        if self.index + 1 < self.data.len()
+            && self.data[self.index] == 0xFE
+            && self.data[self.index + 1] == 0xFF
+        {
             self.index += 2;
         } else {
-            return Err(PsdError::InvalidEngineData("Missing UTF-16 BOM".to_string()));
+            return Err(PsdError::InvalidEngineData(
+                "Missing UTF-16 BOM".to_string(),
+            ));
         }
 
         let mut result = Vec::new();
@@ -186,15 +197,22 @@ impl<'a> EngineDataParser<'a> {
             let key = key.clone();
             self.stack.pop();
 
-            if let Some(StackItem::Value(EngineValue::Object(ref mut map))) = self.stack.last_mut() {
+            if let Some(StackItem::Value(EngineValue::Object(ref mut map))) = self.stack.last_mut()
+            {
                 map.insert(key, value);
             } else {
-                return Err(PsdError::InvalidEngineData("Expected object on stack".to_string()));
+                return Err(PsdError::InvalidEngineData(
+                    "Expected object on stack".to_string(),
+                ));
             }
-        } else if let Some(StackItem::Value(EngineValue::Array(ref mut arr))) = self.stack.last_mut() {
+        } else if let Some(StackItem::Value(EngineValue::Array(ref mut arr))) =
+            self.stack.last_mut()
+        {
             arr.push(value);
         } else {
-            return Err(PsdError::InvalidEngineData("Invalid stack state".to_string()));
+            return Err(PsdError::InvalidEngineData(
+                "Invalid stack state".to_string(),
+            ));
         }
 
         Ok(())
@@ -215,7 +233,9 @@ impl<'a> EngineDataParser<'a> {
         } else if let Some(StackItem::Value(EngineValue::Object(_))) = self.stack.last() {
             self.stack.push(StackItem::Property(name));
         } else {
-            return Err(PsdError::InvalidEngineData("Invalid property context".to_string()));
+            return Err(PsdError::InvalidEngineData(
+                "Invalid property context".to_string(),
+            ));
         }
 
         Ok(())
@@ -227,7 +247,21 @@ impl<'a> EngineDataParser<'a> {
         }
         // Only pop if there's more than one item (don't pop the root)
         if self.stack.len() > 1 {
-            self.stack.pop();
+            if let Some(popped) = self.stack.pop() {
+                // If a Property is right below the popped value, consume it and
+                // insert the value into the parent object.
+                if let Some(StackItem::Property(key)) = self.stack.last() {
+                    let key = key.clone();
+                    self.stack.pop(); // Remove the property
+                    if let Some(StackItem::Value(EngineValue::Object(ref mut map))) =
+                        self.stack.last_mut()
+                    {
+                        if let StackItem::Value(value) = popped {
+                            map.insert(key, value);
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -309,7 +343,8 @@ impl<'a> EngineDataParser<'a> {
                 }
 
                 let num_str = String::from_utf8_lossy(&self.data[start..self.index]);
-                let num = num_str.parse::<f64>()
+                let num = num_str
+                    .parse::<f64>()
                     .map_err(|e| PsdError::InvalidEngineData(format!("Invalid number: {}", e)))?;
                 self.push_value(EngineValue::Number(num))?;
             } else {
@@ -325,22 +360,47 @@ impl<'a> EngineDataParser<'a> {
             if let Some(StackItem::Value(value)) = self.stack.pop() {
                 Ok(value)
             } else {
-                Err(PsdError::InvalidEngineData("Expected value on stack".to_string()))
+                Err(PsdError::InvalidEngineData(
+                    "Expected value on stack".to_string(),
+                ))
             }
         } else {
-            Err(PsdError::InvalidEngineData("Incomplete parsing".to_string()))
+            Err(PsdError::InvalidEngineData(
+                "Incomplete parsing".to_string(),
+            ))
         }
     }
 }
 
 /// Float keys that should be serialized with decimal points
 const FLOAT_KEYS: &[&str] = &[
-    "Axis", "XY", "Zone", "WordSpacing", "FirstLineIndent", "GlyphSpacing",
-    "StartIndent", "EndIndent", "SpaceBefore", "SpaceAfter", "LetterSpacing",
-    "Values", "GridSize", "GridLeading", "PointBase", "BoxBounds",
-    "TransformPoint0", "TransformPoint1", "TransformPoint2", "FontSize",
-    "Leading", "HorizontalScale", "VerticalScale", "BaselineShift", "Tsume",
-    "OutlineWidth", "AutoLeading",
+    "Axis",
+    "XY",
+    "Zone",
+    "WordSpacing",
+    "FirstLineIndent",
+    "GlyphSpacing",
+    "StartIndent",
+    "EndIndent",
+    "SpaceBefore",
+    "SpaceAfter",
+    "LetterSpacing",
+    "Values",
+    "GridSize",
+    "GridLeading",
+    "PointBase",
+    "BoxBounds",
+    "TransformPoint0",
+    "TransformPoint1",
+    "TransformPoint2",
+    "FontSize",
+    "Leading",
+    "HorizontalScale",
+    "VerticalScale",
+    "BaselineShift",
+    "Tsume",
+    "OutlineWidth",
+    "AutoLeading",
 ];
 
 /// Int array keys
@@ -405,7 +465,7 @@ impl EngineDataSerializer {
 
     fn get_keys(map: &HashMap<String, EngineValue>) -> Vec<String> {
         let mut keys: Vec<String> = map.keys().cloned().collect();
-        
+
         // Move "99" and "98" to front if present
         if let Some(pos) = keys.iter().position(|k| k == "99") {
             let key = keys.remove(pos);
@@ -415,7 +475,7 @@ impl EngineDataSerializer {
             let key = keys.remove(pos);
             keys.insert(0, key);
         }
-        
+
         keys
     }
 
@@ -426,7 +486,12 @@ impl EngineDataSerializer {
         self.write(byte);
     }
 
-    fn write_value(&mut self, value: &EngineValue, key: Option<&str>, in_property: bool) -> Result<()> {
+    fn write_value(
+        &mut self,
+        value: &EngineValue,
+        key: Option<&str>,
+        in_property: bool,
+    ) -> Result<()> {
         match value {
             EngineValue::Null => {
                 if !in_property {
@@ -554,18 +619,7 @@ impl EngineDataSerializer {
 
     fn serialize(&mut self, data: &EngineValue) -> Result<()> {
         if self.condensed {
-            if let EngineValue::Object(map) = data {
-                for key in Self::get_keys(map) {
-                    if let Some(val) = map.get(&key) {
-                        self.write_indent();
-                        self.write_str(&format!("/{}", key));
-                        self.write_value(val, Some(&key), true)?;
-                    }
-                }
-            } else {
-                // For non-object values in condensed mode, still write the value
-                self.write_value(data, None, false)?;
-            }
+            self.write_value(data, None, false)?;
         } else {
             self.write_str("\n\n");
             self.write_value(data, None, false)?;
@@ -583,9 +637,9 @@ mod tests {
     fn test_parse_simple_object() {
         let data = b"<< /key 123 >>";
         let result = parse_engine_data(data).unwrap();
-        
+
         eprintln!("Result: {:?}", result);
-        
+
         if let EngineValue::Object(map) = result {
             assert_eq!(map.len(), 1);
             assert_eq!(map.get("key").and_then(|v| v.as_number()), Some(123.0));
@@ -598,7 +652,7 @@ mod tests {
     fn test_parse_array() {
         let data = b"[ 1 2 3 ]";
         let result = parse_engine_data(data).unwrap();
-        
+
         if let EngineValue::Array(arr) = result {
             assert_eq!(arr.len(), 3);
         } else {

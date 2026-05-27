@@ -3,8 +3,8 @@
 //! Provides reading and writing of ASE color palette files.
 
 use crate::error::{PsdError, Result};
-use std::io::{Read, Write};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use std::io::{Read, Write};
 
 /// Color type in ASE files
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,7 +20,10 @@ impl AseColorType {
             0 => Ok(AseColorType::Global),
             1 => Ok(AseColorType::Spot),
             2 => Ok(AseColorType::Normal),
-            _ => Err(PsdError::InvalidAse(format!("Invalid color type: {}", value))),
+            _ => Err(PsdError::InvalidAse(format!(
+                "Invalid color type: {}",
+                value
+            ))),
         }
     }
 }
@@ -92,9 +95,10 @@ pub struct Ase {
 pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
     // Read signature
     let mut sig = [0u8; 4];
-    reader.read_exact(&mut sig)
+    reader
+        .read_exact(&mut sig)
         .map_err(|e| PsdError::InvalidAse(format!("Failed to read signature: {}", e)))?;
-    
+
     if &sig != b"ASEF" {
         return Err(PsdError::InvalidAse(format!(
             "Invalid signature: expected ASEF, got {:?}",
@@ -103,9 +107,11 @@ pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
     }
 
     // Read version
-    let version_major = reader.read_u16::<BigEndian>()
+    let version_major = reader
+        .read_u16::<BigEndian>()
         .map_err(|e| PsdError::InvalidAse(format!("Failed to read version major: {}", e)))?;
-    let version_minor = reader.read_u16::<BigEndian>()
+    let version_minor = reader
+        .read_u16::<BigEndian>()
         .map_err(|e| PsdError::InvalidAse(format!("Failed to read version minor: {}", e)))?;
 
     if version_major != 1 || version_minor != 0 {
@@ -116,29 +122,34 @@ pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
     }
 
     // Read blocks count
-    let blocks_count = reader.read_u32::<BigEndian>()
+    let blocks_count = reader
+        .read_u32::<BigEndian>()
         .map_err(|e| PsdError::InvalidAse(format!("Failed to read blocks count: {}", e)))?;
 
     let mut colors = Vec::new();
     let mut group_stack: Vec<AseGroup> = Vec::new();
 
     for _ in 0..blocks_count {
-        let block_type = reader.read_u16::<BigEndian>()
+        let block_type = reader
+            .read_u16::<BigEndian>()
             .map_err(|e| PsdError::InvalidAse(format!("Failed to read block type: {}", e)))?;
-        let _length = reader.read_u32::<BigEndian>()
+        let _length = reader
+            .read_u32::<BigEndian>()
             .map_err(|e| PsdError::InvalidAse(format!("Failed to read block length: {}", e)))?;
 
         match block_type {
             0x0001 => {
                 // Color entry
-                let name_length = reader.read_u16::<BigEndian>()
-                    .map_err(|e| PsdError::InvalidAse(format!("Failed to read name length: {}", e)))?;
-                
+                let name_length = reader.read_u16::<BigEndian>().map_err(|e| {
+                    PsdError::InvalidAse(format!("Failed to read name length: {}", e))
+                })?;
+
                 let name = read_unicode_string(&mut reader, name_length as usize)?;
-                
+
                 let mut color_mode = [0u8; 4];
-                reader.read_exact(&mut color_mode)
-                    .map_err(|e| PsdError::InvalidAse(format!("Failed to read color mode: {}", e)))?;
+                reader.read_exact(&mut color_mode).map_err(|e| {
+                    PsdError::InvalidAse(format!("Failed to read color mode: {}", e))
+                })?;
 
                 let color = match &color_mode {
                     b"RGB " => {
@@ -146,8 +157,14 @@ pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
                         let g = reader.read_f32::<BigEndian>()?;
                         let b = reader.read_f32::<BigEndian>()?;
                         let color_type = AseColorType::from_u16(reader.read_u16::<BigEndian>()?)?;
-                        
-                        AseColor::RGB { name, r, g, b, color_type }
+
+                        AseColor::RGB {
+                            name,
+                            r,
+                            g,
+                            b,
+                            color_type,
+                        }
                     }
                     b"CMYK" => {
                         let c = reader.read_f32::<BigEndian>()?;
@@ -155,22 +172,39 @@ pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
                         let y = reader.read_f32::<BigEndian>()?;
                         let k = reader.read_f32::<BigEndian>()?;
                         let color_type = AseColorType::from_u16(reader.read_u16::<BigEndian>()?)?;
-                        
-                        AseColor::CMYK { name, c, m, y, k, color_type }
+
+                        AseColor::CMYK {
+                            name,
+                            c,
+                            m,
+                            y,
+                            k,
+                            color_type,
+                        }
                     }
                     b"Gray" => {
                         let k = reader.read_f32::<BigEndian>()?;
                         let color_type = AseColorType::from_u16(reader.read_u16::<BigEndian>()?)?;
-                        
-                        AseColor::Gray { name, k, color_type }
+
+                        AseColor::Gray {
+                            name,
+                            k,
+                            color_type,
+                        }
                     }
                     b"LAB " => {
                         let l = reader.read_f32::<BigEndian>()?;
                         let a = reader.read_f32::<BigEndian>()?;
                         let b = reader.read_f32::<BigEndian>()?;
                         let color_type = AseColorType::from_u16(reader.read_u16::<BigEndian>()?)?;
-                        
-                        AseColor::LAB { name, l, a, b, color_type }
+
+                        AseColor::LAB {
+                            name,
+                            l,
+                            a,
+                            b,
+                            color_type,
+                        }
                     }
                     _ => {
                         return Err(PsdError::InvalidAse(format!(
@@ -181,7 +215,7 @@ pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
                 };
 
                 let entry = AseColorOrGroup::Color(color);
-                
+
                 if let Some(group) = group_stack.last_mut() {
                     group.colors.push(entry);
                 } else {
@@ -190,11 +224,12 @@ pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
             }
             0xC001 => {
                 // Group start
-                let name_length = reader.read_u16::<BigEndian>()
-                    .map_err(|e| PsdError::InvalidAse(format!("Failed to read group name length: {}", e)))?;
-                
+                let name_length = reader.read_u16::<BigEndian>().map_err(|e| {
+                    PsdError::InvalidAse(format!("Failed to read group name length: {}", e))
+                })?;
+
                 let name = read_unicode_string(&mut reader, name_length as usize)?;
-                
+
                 group_stack.push(AseGroup {
                     name,
                     colors: Vec::new(),
@@ -204,7 +239,7 @@ pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
                 // Group end
                 if let Some(group) = group_stack.pop() {
                     let entry = AseColorOrGroup::Group(group);
-                    
+
                     if let Some(parent_group) = group_stack.last_mut() {
                         parent_group.colors.push(entry);
                     } else {
@@ -212,7 +247,7 @@ pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
                     }
                 } else {
                     return Err(PsdError::InvalidAse(
-                        "Group end without group start".to_string()
+                        "Group end without group start".to_string(),
                     ));
                 }
             }
@@ -231,39 +266,42 @@ pub fn read_ase<R: Read>(mut reader: R) -> Result<Ase> {
 /// Read a Unicode string (UTF-16 big-endian, null-terminated)
 fn read_unicode_string<R: Read>(reader: &mut R, length: usize) -> Result<String> {
     let mut buffer = Vec::with_capacity(length);
-    
+
     for _ in 0..length {
-        let ch = reader.read_u16::<BigEndian>()
+        let ch = reader
+            .read_u16::<BigEndian>()
             .map_err(|e| PsdError::InvalidAse(format!("Failed to read unicode char: {}", e)))?;
         if ch != 0 {
             buffer.push(ch);
         }
     }
-    
-    String::from_utf16(&buffer)
-        .map_err(|e| PsdError::InvalidAse(format!("Invalid UTF-16: {}", e)))
+
+    String::from_utf16(&buffer).map_err(|e| PsdError::InvalidAse(format!("Invalid UTF-16: {}", e)))
 }
 
 /// Write a Unicode string (UTF-16 big-endian, null-terminated)
 fn write_unicode_string<W: Write>(writer: &mut W, s: &str) -> Result<()> {
     let utf16: Vec<u16> = s.encode_utf16().collect();
-    
+
     for ch in utf16 {
-        writer.write_u16::<BigEndian>(ch)
+        writer
+            .write_u16::<BigEndian>(ch)
             .map_err(|e| PsdError::InvalidAse(format!("Failed to write unicode char: {}", e)))?;
     }
-    
+
     // Null terminator
-    writer.write_u16::<BigEndian>(0)
+    writer
+        .write_u16::<BigEndian>(0)
         .map_err(|e| PsdError::InvalidAse(format!("Failed to write null terminator: {}", e)))?;
-    
+
     Ok(())
 }
 
 /// Write an ASE file to a writer
 pub fn write_ase<W: Write>(mut writer: W, ase: &Ase) -> Result<()> {
     // Write signature
-    writer.write_all(b"ASEF")
+    writer
+        .write_all(b"ASEF")
         .map_err(|e| PsdError::InvalidAse(format!("Failed to write signature: {}", e)))?;
 
     // Write version (1.0)
@@ -283,7 +321,7 @@ pub fn write_ase<W: Write>(mut writer: W, ase: &Ase) -> Result<()> {
 /// Count total number of blocks (colors + group markers)
 fn count_blocks(entries: &[AseColorOrGroup]) -> usize {
     let mut count = 0;
-    
+
     for entry in entries {
         match entry {
             AseColorOrGroup::Color(_) => count += 1,
@@ -293,7 +331,7 @@ fn count_blocks(entries: &[AseColorOrGroup]) -> usize {
             }
         }
     }
-    
+
     count
 }
 
@@ -311,39 +349,52 @@ fn write_blocks<W: Write>(writer: &mut W, entries: &[AseColorOrGroup]) -> Result
             }
         }
     }
-    
+
     Ok(())
 }
 
 /// Write a color block
 fn write_color<W: Write>(writer: &mut W, color: &AseColor) -> Result<()> {
     writer.write_u16::<BigEndian>(0x0001)?; // Color block type
-    
+
     let name = color.name();
     let name_utf16_len = name.encode_utf16().count() + 1; // +1 for null terminator
-    
+
     match color {
-        AseColor::RGB { r, g, b, color_type, .. } => {
+        AseColor::RGB {
+            r,
+            g,
+            b,
+            color_type,
+            ..
+        } => {
             // Length: name_len(2) + name_chars*2 + mode(4) + values(3*4) + type(2)
             let length = 2 + (name_utf16_len * 2) + 4 + 12 + 2;
             writer.write_u32::<BigEndian>(length as u32)?;
-            
+
             writer.write_u16::<BigEndian>(name_utf16_len as u16)?;
             write_unicode_string(writer, name)?;
-            
+
             writer.write_all(b"RGB ")?;
             writer.write_f32::<BigEndian>(*r)?;
             writer.write_f32::<BigEndian>(*g)?;
             writer.write_f32::<BigEndian>(*b)?;
             writer.write_u16::<BigEndian>(*color_type as u16)?;
         }
-        AseColor::CMYK { c, m, y, k, color_type, .. } => {
+        AseColor::CMYK {
+            c,
+            m,
+            y,
+            k,
+            color_type,
+            ..
+        } => {
             let length = 2 + (name_utf16_len * 2) + 4 + 16 + 2;
             writer.write_u32::<BigEndian>(length as u32)?;
-            
+
             writer.write_u16::<BigEndian>(name_utf16_len as u16)?;
             write_unicode_string(writer, name)?;
-            
+
             writer.write_all(b"CMYK")?;
             writer.write_f32::<BigEndian>(*c)?;
             writer.write_f32::<BigEndian>(*m)?;
@@ -354,21 +405,27 @@ fn write_color<W: Write>(writer: &mut W, color: &AseColor) -> Result<()> {
         AseColor::Gray { k, color_type, .. } => {
             let length = 2 + (name_utf16_len * 2) + 4 + 4 + 2;
             writer.write_u32::<BigEndian>(length as u32)?;
-            
+
             writer.write_u16::<BigEndian>(name_utf16_len as u16)?;
             write_unicode_string(writer, name)?;
-            
+
             writer.write_all(b"Gray")?;
             writer.write_f32::<BigEndian>(*k)?;
             writer.write_u16::<BigEndian>(*color_type as u16)?;
         }
-        AseColor::LAB { l, a, b, color_type, .. } => {
+        AseColor::LAB {
+            l,
+            a,
+            b,
+            color_type,
+            ..
+        } => {
             let length = 2 + (name_utf16_len * 2) + 4 + 12 + 2;
             writer.write_u32::<BigEndian>(length as u32)?;
-            
+
             writer.write_u16::<BigEndian>(name_utf16_len as u16)?;
             write_unicode_string(writer, name)?;
-            
+
             writer.write_all(b"LAB ")?;
             writer.write_f32::<BigEndian>(*l)?;
             writer.write_f32::<BigEndian>(*a)?;
@@ -376,21 +433,21 @@ fn write_color<W: Write>(writer: &mut W, color: &AseColor) -> Result<()> {
             writer.write_u16::<BigEndian>(*color_type as u16)?;
         }
     }
-    
+
     Ok(())
 }
 
 /// Write group start marker
 fn write_group_start<W: Write>(writer: &mut W, name: &str) -> Result<()> {
     writer.write_u16::<BigEndian>(0xC001)?; // Group start block type
-    
+
     let name_utf16_len = name.encode_utf16().count() + 1;
     let length = 2 + (name_utf16_len * 2);
     writer.write_u32::<BigEndian>(length as u32)?;
-    
+
     writer.write_u16::<BigEndian>(name_utf16_len as u16)?;
     write_unicode_string(writer, name)?;
-    
+
     Ok(())
 }
 
@@ -446,7 +503,7 @@ mod tests {
             b: 0.0,
             color_type: AseColorType::Normal,
         };
-        
+
         assert_eq!(color.name(), "Test");
     }
 }

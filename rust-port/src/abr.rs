@@ -2,8 +2,8 @@
 //!
 //! Provides reading of Adobe Photoshop brush preset files.
 
-use crate::error::{PsdError, Result};
 use crate::descriptor::Descriptor;
+use crate::error::{PsdError, Result};
 use crate::layer::PatternInfo;
 use crate::psd::ReadOptions;
 use crate::reader::PsdReader;
@@ -102,32 +102,40 @@ pub struct Brush {
 /// Read an ABR file from a reader
 pub fn read_abr<R: Read>(mut reader: R) -> Result<Abr> {
     let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer)
+    reader
+        .read_to_end(&mut buffer)
         .map_err(|e| PsdError::InvalidAbr(format!("Failed to read ABR: {}", e)))?;
 
     let mut cursor = Cursor::new(&buffer);
-    let version = cursor.read_u16::<BigEndian>()
+    let version = cursor
+        .read_u16::<BigEndian>()
         .map_err(|e| PsdError::InvalidAbr(format!("Failed to read version: {}", e)))?;
 
     match version {
         1 | 2 => read_abr_v1_v2(&mut cursor),
         6 | 7 | 9 | 10 => read_abr_v6_plus(&buffer),
-        _ => Err(PsdError::InvalidAbr(format!("Unsupported ABR version: {}", version))),
+        _ => Err(PsdError::InvalidAbr(format!(
+            "Unsupported ABR version: {}",
+            version
+        ))),
     }
 }
 
 /// Read ABR version 1 or 2
 fn read_abr_v1_v2<R: Read>(reader: &mut R) -> Result<Abr> {
-    let count = reader.read_u16::<BigEndian>()
+    let count = reader
+        .read_u16::<BigEndian>()
         .map_err(|e| PsdError::InvalidAbr(format!("Failed to read brush count: {}", e)))?;
 
     let mut brushes = Vec::new();
     let mut samples = Vec::new();
 
     for _ in 0..count {
-        let brush_type = reader.read_u16::<BigEndian>()
+        let brush_type = reader
+            .read_u16::<BigEndian>()
             .map_err(|e| PsdError::InvalidAbr(format!("Failed to read brush type: {}", e)))?;
-        let size = reader.read_u32::<BigEndian>()
+        let size = reader
+            .read_u32::<BigEndian>()
             .map_err(|e| PsdError::InvalidAbr(format!("Failed to read size: {}", e)))?;
 
         match brush_type {
@@ -166,7 +174,7 @@ fn read_abr_v1_v2<R: Read>(reader: &mut R) -> Result<Abr> {
                 // Sampled brush
                 let misc = reader.read_u32::<BigEndian>()?;
                 let spacing = reader.read_u16::<BigEndian>()? as f64;
-                
+
                 // Read brush name if present (indicated by misc flag)
                 // The exact length formula depends on the ABR version and format
                 let name_length = if misc & 1 != 0 { 256 } else { 0 };
@@ -174,7 +182,7 @@ fn read_abr_v1_v2<R: Read>(reader: &mut R) -> Result<Abr> {
                 if name_length > 0 {
                     reader.read_exact(&mut name)?;
                 }
-                
+
                 let _anti_alias = reader.read_u8()?;
                 let y = reader.read_i16::<BigEndian>()?;
                 let x = reader.read_i16::<BigEndian>()?;
@@ -267,7 +275,12 @@ fn read_abr_v6_plus(data: &[u8]) -> Result<Abr> {
         if offset + 4 > data.len() {
             break;
         }
-        let size = u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]);
+        let size = u32::from_be_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]);
         offset += 4;
 
         let section_end = offset + size as usize;
@@ -282,7 +295,7 @@ fn read_abr_v6_plus(data: &[u8]) -> Result<Abr> {
                 // Descriptor section - contains brush presets
                 if offset + size as usize <= data.len() {
                     let section_data = &data[offset..offset + size as usize];
-                    
+
                     // Try to parse as descriptor
                     if let Ok(descriptor) = parse_brush_descriptor(section_data) {
                         if let Some(brush) = descriptor_to_brush(&descriptor) {
@@ -327,7 +340,9 @@ fn parse_brush_descriptor(data: &[u8]) -> Result<Descriptor> {
 
 /// Convert descriptor to brush
 fn descriptor_to_brush(descriptor: &Descriptor) -> Option<Brush> {
-    let name = descriptor.items.get("Nm  ")
+    let name = descriptor
+        .items
+        .get("Nm  ")
         .and_then(|v| {
             if let crate::descriptor::DescriptorValue::Text(s) = v {
                 Some(s.clone())
@@ -363,7 +378,7 @@ mod tests {
             w: 100,
             h: 200,
         };
-        
+
         assert_eq!(bounds.x, 10);
         assert_eq!(bounds.w, 100);
     }
@@ -376,7 +391,7 @@ mod tests {
             jitter: 0.5,
             minimum: 0.0,
         };
-        
+
         assert_eq!(dynamics.steps, 10);
     }
 }

@@ -23,6 +23,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # Byte order handling
 byteorder = "1.5"
+binrw = "0.15"
 # Lazy static for static hashmaps
 lazy_static = "1.4"
 

@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use crate::types::*;
 use crate::layer::{Layer, LayerAdditionalInfo, LinkedFile};
+use crate::types::*;
+use serde::{Deserialize, Serialize};
 
 /// Animations definition
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -516,6 +516,42 @@ pub struct ArtboardOffset {
     pub vertical: f64,
 }
 
+/// Variable set (resource 7000)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VariableSet {
+    #[serde(rename = "varName")]
+    pub var_name: Option<String>,
+    #[serde(rename = "trait")]
+    pub trait_name: Option<String>,
+    #[serde(rename = "docRef")]
+    pub doc_ref: Option<String>,
+    #[serde(rename = "placementMethod")]
+    pub placement_method: Option<String>,
+    pub align: Option<String>,
+    pub valign: Option<String>,
+    pub clip: Option<String>,
+}
+
+/// Custom point (resource 1073)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Display info (resource 1036)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DisplayInfo {
+    #[serde(rename = "hResUnit")]
+    pub h_res_unit: u16,
+    #[serde(rename = "vResUnit")]
+    pub v_res_unit: u16,
+    #[serde(rename = "widthUnit")]
+    pub width_unit: u16,
+    #[serde(rename = "heightUnit")]
+    pub height_unit: u16,
+}
+
 /// Main PSD document structure
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Psd {
@@ -530,17 +566,42 @@ pub struct Psd {
     pub children: Option<Vec<Layer>>,
     #[serde(rename = "imageData")]
     pub image_data: Option<PixelData>,
-    #[serde(rename = "imageResources")]
-    pub image_resources: Option<ImageResources>,
+    #[serde(skip)]
+    pub image_resources: Option<crate::image_resources::ImageResources>,
+    #[serde(skip)]
+    pub tagged_blocks: crate::additional_info::LayerAdditionalInfo,
     #[serde(rename = "linkedFiles")]
     pub linked_files: Option<Vec<LinkedFile>>,
     pub artboards: Option<ArtboardsInfo>,
     #[serde(rename = "globalLayerMaskInfo")]
     pub global_layer_mask_info: Option<GlobalLayerMaskInfo>,
     pub annotations: Option<Vec<Annotation>>,
-    
+
     #[serde(flatten)]
     pub additional_info: LayerAdditionalInfo,
+
+    /// Generic color mode data (preserved for non-Indexed modes)
+    #[serde(rename = "colorModeData")]
+    pub color_mode_data: Option<Vec<u8>>,
+
+    /// Document path selection descriptor (resource 3000)
+    #[serde(skip)]
+    pub path_selection_descriptor: Option<crate::descriptor::Descriptor>,
+
+    #[serde(rename = "variableSets")]
+    pub variable_sets: Option<Vec<VariableSet>>,
+    #[serde(rename = "dataSets")]
+    pub data_sets: Option<Vec<Vec<String>>>,
+    #[serde(skip)]
+    pub descriptor_1065: Option<crate::descriptor::Descriptor>,
+    #[serde(skip)]
+    pub descriptor_1074: Option<crate::descriptor::Descriptor>,
+    #[serde(skip)]
+    pub descriptor_1075: Option<crate::descriptor::Descriptor>,
+    #[serde(rename = "customPoints")]
+    pub custom_points: Option<Vec<CustomPoint>>,
+    #[serde(rename = "displayInfo")]
+    pub display_info: Option<DisplayInfo>,
 }
 
 /// Read options for PSD parsing

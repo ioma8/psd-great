@@ -38,14 +38,14 @@ pub enum BlendMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u16)]
 pub enum ColorMode {
-    Bitmap       = 0,
-    Grayscale    = 1,
-    Indexed      = 2,
-    RGB          = 3,
-    CMYK         = 4,
+    Bitmap = 0,
+    Grayscale = 1,
+    Indexed = 2,
+    RGB = 3,
+    CMYK = 4,
     Multichannel = 5,
-    Duotone      = 6,
-    Lab          = 7,
+    Duotone = 6,
+    Lab = 7,
 }
 
 impl ColorMode {

@@ -3,16 +3,21 @@
 //! Image resources contain document-level information like resolution,
 //! guides, grids, color profiles, and thumbnails.
 
+use crate::binrw_support::{
+    decode_be, encode_be, GridAndGuidesHeaderRecord, GuideRecord, ImageResourceHeaderRecord,
+    ImageResourceLengthRecord, LayerStateRecord, PrintFlagsRecord, PrintScaleRecord,
+    ResolutionInfoRecord, SignedI32Record, U16ListCountRecord, U32ValueRecord, U8BoolRecord,
+};
 use crate::descriptor::Descriptor;
 use crate::error::{PsdError, Result};
 use crate::reader::PsdReader;
-use crate::writer::PsdWriter;
 use crate::types::Color;
+use crate::writer::PsdWriter;
 use std::collections::HashMap;
 use std::io::{Read, Seek};
 
 /// Image resources structure
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ImageResources {
     /// Resolution information (DPI)
     pub resolution_info: Option<ResolutionInfo>,
@@ -40,8 +45,14 @@ pub struct ImageResources {
     pub global_altitude: Option<i32>,
     /// Layer state
     pub layer_state: Option<u16>,
-    /// Layers group indices
-    pub layers_group: Option<Vec<u16>>,
+    /// Layer clipping values (resource 1026)
+    pub clipping: Option<Vec<u16>>,
+    /// Resource visibility (resource 1072)
+    pub resource_visibility: Option<Vec<u8>>,
+    /// Custom points raw bytes (resource 1073)
+    pub custom_points: Option<Vec<u8>>,
+    /// Display info raw bytes (resource 1036)
+    pub display_info: Option<Vec<u8>>,
     /// Layer selection IDs
     pub layer_selection_ids: Option<Vec<u32>>,
     /// Alpha channel names
@@ -56,6 +67,8 @@ pub struct ImageResources {
     pub print_scale: Option<PrintScale>,
     /// Slices
     pub slices: Option<Slices>,
+    /// Path resources (2000..=2998)
+    pub path_resources: HashMap<u16, Vec<PathResourceRecord>>,
     /// Layer comps
     pub layer_comps: Option<LayerComps>,
     /// Timeline information
@@ -68,16 +81,20 @@ pub struct ImageResources {
     pub count_information: Option<Vec<CountGroup>>,
     /// URL list
     pub url_list: Option<Vec<UrlEntry>>,
-    /// Path resources (IDs 2000–2998) stored as raw bezier records
-    pub path_resources: HashMap<u16, Vec<u8>>,
     /// Variables XML (resource 7000)
     pub variables: Option<String>,
     /// Data sets XML (resource 7001)
     pub data_sets: Option<String>,
     /// Generic descriptor resources (1065, 1074, 1075)
     pub descriptor_resources: HashMap<u16, Descriptor>,
-    /// Unknown resources (for preservation)
-    pub unknown: HashMap<u16, Vec<u8>>,
+}
+
+/// Simplified path resource record (26-byte document path record)
+#[derive(Debug, Clone, PartialEq)]
+pub struct PathResourceRecord {
+    pub record_type: u16,
+    pub points: Vec<Point>,
+    pub closed: bool,
 }
 
 /// Resolution information
@@ -133,7 +150,9 @@ pub enum RenderingIntent {
 /// Proof setup
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProofSetup {
-    Builtin { name: String },
+    Builtin {
+        name: String,
+    },
     Custom {
         profile: String,
         rendering_intent: RenderingIntent,
@@ -221,8 +240,6 @@ pub enum PrintScaleStyle {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Slices {
     pub version: u32,
-    pub bounds: Bounds,
-    pub name: String,
     pub slices: Vec<Slice>,
 }
 
@@ -231,51 +248,23 @@ pub struct Slices {
 pub struct Slice {
     pub id: u32,
     pub group_id: u32,
-    pub origin: SliceOrigin,
+    pub origin: u32,
+    pub associated_layer_id: u32,
     pub name: String,
-    pub slice_type: SliceType,
+    pub slice_type: u32,
     pub bounds: Bounds,
-    pub url: Option<String>,
-    pub target: Option<String>,
-    pub message: Option<String>,
-    pub alt_tag: Option<String>,
-    pub cell_is_html: Option<bool>,
-    pub cell_text: Option<String>,
-    pub horizontal_align: Option<HorizontalAlign>,
-    pub vertical_align: Option<VerticalAlign>,
-    pub bg_color: Option<Color>,
-}
-
-/// Slice origin
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SliceOrigin {
-    UserGenerated = 1,
-    LayerBased = 2,
-}
-
-/// Slice type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SliceType {
-    Image = 1,
-    NoImage = 2,
-}
-
-/// Horizontal alignment
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HorizontalAlign {
-    Default = 0,
-    Left = 1,
-    Center = 3,
-    Right = 5,
-}
-
-/// Vertical alignment
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VerticalAlign {
-    Default = 0,
-    Top = 1,
-    Center = 3,
-    Bottom = 5,
+    pub url: String,
+    pub target: String,
+    pub message: String,
+    pub alt_tag: String,
+    pub cell_text: String,
+    pub horizontal_align: i32,
+    pub vertical_align: i32,
+    pub alpha: u8,
+    pub bg_color: [u8; 4],
+    pub cell_is_html: i32,
+    pub source_id: Option<u32>,
+    pub source_type: Option<u32>,
 }
 
 /// Bounds rectangle
@@ -365,52 +354,201 @@ pub struct UrlEntry {
 // Note: Function pointers can't use impl Trait, so handlers are called directly
 
 impl<R: Read + Seek> PsdReader<R> {
+    fn read_slice_string(&mut self) -> Result<String> {
+        let len = decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "slice string length")?.value
+            as usize;
+        Ok(String::from_utf8_lossy(&self.read_bytes(len)?).to_string())
+    }
+
+    fn read_slices(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
+        let start = self.offset;
+        if length < 8 {
+            self.skip_bytes(length)?;
+            return Ok(());
+        }
+        let version = decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "slices version")?.value;
+        let count =
+            decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "slices count")?.value as usize;
+        let mut slices = Vec::new();
+        for _ in 0..count {
+            if (self.offset - start) as usize + 16 > length {
+                break;
+            }
+            let id = self.read_i32()? as u32;
+            let group_id = self.read_i32()? as u32;
+            let origin = self.read_i32()? as u32;
+            let associated_layer_id = self.read_i32()? as u32;
+            let name = self.read_slice_string()?;
+            if (self.offset - start) as usize + 20 > length {
+                break;
+            }
+            let slice_type = self.read_i32()? as u32;
+            let top = self.read_i32()?;
+            let left = self.read_i32()?;
+            let bottom = self.read_i32()?;
+            let right = self.read_i32()?;
+            let url = self.read_slice_string()?;
+            let target = self.read_slice_string()?;
+            let message = self.read_slice_string()?;
+            let alt_tag = self.read_slice_string()?;
+            let cell_text = self.read_slice_string()?;
+            if (self.offset - start) as usize + 13 > length {
+                break;
+            }
+            let horizontal_align = self.read_i32()?;
+            let vertical_align = self.read_i32()?;
+            let alpha = self.read_u8()?;
+            if (self.offset - start) as usize + 8 > length {
+                break;
+            }
+            let bg_color = [
+                self.read_u8()?,
+                self.read_u8()?,
+                self.read_u8()?,
+                self.read_u8()?,
+            ];
+            let cell_is_html = self.read_i32()?;
+            let mut source_id = None;
+            let mut source_type = None;
+            if version >= 7 && (self.offset - start) as usize + 8 <= length {
+                source_id = Some(self.read_u32()?);
+                source_type = Some(self.read_u32()?);
+            }
+            slices.push(Slice {
+                id,
+                group_id,
+                origin,
+                associated_layer_id,
+                name,
+                slice_type,
+                bounds: Bounds {
+                    top,
+                    left,
+                    bottom,
+                    right,
+                },
+                url,
+                target,
+                message,
+                alt_tag,
+                cell_text,
+                horizontal_align,
+                vertical_align,
+                alpha,
+                bg_color,
+                cell_is_html,
+                source_id,
+                source_type,
+            });
+        }
+        resources.slices = Some(Slices { version, slices });
+        Ok(())
+    }
+
+    fn read_path_resource_records(
+        &mut self,
+        resources: &mut ImageResources,
+        resource_id: u16,
+        length: usize,
+    ) -> Result<()> {
+        let bytes = self.read_bytes(length)?;
+        let mut records = Vec::new();
+        let mut offset = 0usize;
+        while offset + 26 <= bytes.len() {
+            let record_type = u16::from_be_bytes([bytes[offset], bytes[offset + 1]]);
+            offset += 2;
+            let mut points = Vec::with_capacity(4);
+            for _ in 0..4 {
+                let x = i32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as f64
+                    / 65536.0;
+                offset += 4;
+                let y = i32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as f64
+                    / 65536.0;
+                offset += 4;
+                points.push(Point { x, y });
+            }
+            offset += 2;
+            records.push(PathResourceRecord {
+                record_type,
+                closed: matches!(record_type, 1 | 2 | 3),
+                points,
+            });
+        }
+        if !records.is_empty() {
+            resources.path_resources.insert(resource_id, records);
+        }
+        Ok(())
+    }
+
     /// Read resolution info (resource 1005)
     pub fn read_resolution_info(&mut self, resources: &mut ImageResources) -> Result<()> {
-        let horizontal_res = self.read_fixed_point_32()?;
-        let horizontal_res_unit = match self.read_u16()? {
+        let record: ResolutionInfoRecord = decode_be(&self.read_bytes(16)?, "resolution info")?;
+        let horizontal_res_unit = match record.horizontal_res_unit {
             1 => ResolutionUnit::PixelsPerInch,
             2 => ResolutionUnit::PixelsPerCentimeter,
-            v => return Err(PsdError::InvalidFormat(format!("Invalid resolution unit: {}", v))),
+            v => {
+                return Err(PsdError::InvalidFormat(format!(
+                    "Invalid resolution unit: {}",
+                    v
+                )))
+            }
         };
-        let width_unit = match self.read_u16()? {
+        let width_unit = match record.width_unit {
             1 => MeasurementUnit::Inches,
             2 => MeasurementUnit::Centimeters,
             3 => MeasurementUnit::Points,
             4 => MeasurementUnit::Picas,
             5 => MeasurementUnit::Columns,
-            v => return Err(PsdError::InvalidFormat(format!("Invalid measurement unit: {}", v))),
+            v => {
+                return Err(PsdError::InvalidFormat(format!(
+                    "Invalid measurement unit: {}",
+                    v
+                )))
+            }
         };
-        
-        let vertical_res = self.read_fixed_point_32()?;
-        let vertical_res_unit = match self.read_u16()? {
+
+        let vertical_res_unit = match record.vertical_res_unit {
             1 => ResolutionUnit::PixelsPerInch,
             2 => ResolutionUnit::PixelsPerCentimeter,
-            v => return Err(PsdError::InvalidFormat(format!("Invalid resolution unit: {}", v))),
+            v => {
+                return Err(PsdError::InvalidFormat(format!(
+                    "Invalid resolution unit: {}",
+                    v
+                )))
+            }
         };
-        let height_unit = match self.read_u16()? {
+        let height_unit = match record.height_unit {
             1 => MeasurementUnit::Inches,
             2 => MeasurementUnit::Centimeters,
             3 => MeasurementUnit::Points,
             4 => MeasurementUnit::Picas,
             5 => MeasurementUnit::Columns,
-            v => return Err(PsdError::InvalidFormat(format!("Invalid measurement unit: {}", v))),
+            v => {
+                return Err(PsdError::InvalidFormat(format!(
+                    "Invalid measurement unit: {}",
+                    v
+                )))
+            }
         };
-        
+
         resources.resolution_info = Some(ResolutionInfo {
-            horizontal_res,
+            horizontal_res: record.horizontal_res_fixed as f64 / 65536.0,
             horizontal_res_unit,
             width_unit,
-            vertical_res,
+            vertical_res: record.vertical_res_fixed as f64 / 65536.0,
             vertical_res_unit,
             height_unit,
         });
-        
+
         Ok(())
     }
 
     /// Read XMP metadata (resource 1060)
-    pub fn read_xmp_metadata(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
+    pub fn read_xmp_metadata(
+        &mut self,
+        resources: &mut ImageResources,
+        length: usize,
+    ) -> Result<()> {
         let data = self.read_bytes(length)?;
         resources.xmp_metadata = Some(String::from_utf8_lossy(&data).to_string());
         Ok(())
@@ -434,23 +572,25 @@ impl<R: Read + Seek> PsdReader<R> {
 
     /// Read print flags (resource 1011)
     pub fn read_print_flags(&mut self, resources: &mut ImageResources) -> Result<()> {
+        let record: PrintFlagsRecord = decode_be(&self.read_bytes(9)?, "print flags")?;
         resources.print_flags = Some(PrintFlags {
-            labels: self.read_u8()? != 0,
-            crop_marks: self.read_u8()? != 0,
-            color_bars: self.read_u8()? != 0,
-            registration_marks: self.read_u8()? != 0,
-            negative: self.read_u8()? != 0,
-            flip: self.read_u8()? != 0,
-            interpolate: self.read_u8()? != 0,
-            caption: self.read_u8()? != 0,
-            print_flags: self.read_u8()? != 0,
+            labels: record.labels != 0,
+            crop_marks: record.crop_marks != 0,
+            color_bars: record.color_bars != 0,
+            registration_marks: record.registration_marks != 0,
+            negative: record.negative != 0,
+            flip: record.flip != 0,
+            interpolate: record.interpolate != 0,
+            caption: record.caption != 0,
+            print_flags: record.print_flags != 0,
         });
         Ok(())
     }
 
     /// Read copyright flag (resource 1034)
     pub fn read_copyright_flag(&mut self, resources: &mut ImageResources) -> Result<()> {
-        resources.copyrighted = Some(self.read_u8()? != 0);
+        let record: U8BoolRecord = decode_be(&self.read_bytes(1)?, "copyright flag")?;
+        resources.copyrighted = Some(record.value != 0);
         Ok(())
     }
 
@@ -462,79 +602,97 @@ impl<R: Read + Seek> PsdReader<R> {
 
     /// Read grid and guides (resource 1032)
     pub fn read_grid_and_guides(&mut self, resources: &mut ImageResources) -> Result<()> {
-        let version = self.read_u32()?;
-        if version != 1 {
-            return Err(PsdError::InvalidFormat(format!("Invalid grid/guides version: {}", version)));
+        let header: GridAndGuidesHeaderRecord =
+            decode_be(&self.read_bytes(16)?, "grid and guides header")?;
+        if header.version != 1 {
+            return Err(PsdError::InvalidFormat(format!(
+                "Invalid grid/guides version: {}",
+                header.version
+            )));
         }
-        
-        let grid_h = self.read_u32()?;
-        let grid_v = self.read_u32()?;
-        let guide_count = self.read_u32()?;
-        
-        let mut guides = Vec::new();
-        for _ in 0..guide_count {
-            let location = self.read_u32()? as f64 / 32.0;
-            let direction = if self.read_u8()? == 1 {
+
+        let mut guides = Vec::with_capacity(header.guide_count as usize);
+        for _ in 0..header.guide_count {
+            let guide: GuideRecord = decode_be(&self.read_bytes(5)?, "guide record")?;
+            let direction = if guide.direction == 1 {
                 GuideDirection::Horizontal
             } else {
                 GuideDirection::Vertical
             };
-            guides.push(Guide { location, direction });
+            guides.push(Guide {
+                location: guide.location_times_32 as f64 / 32.0,
+                direction,
+            });
         }
-        
+
         resources.grid_and_guides = Some(GridAndGuides {
-            grid: Grid { horizontal: grid_h, vertical: grid_v },
+            grid: Grid {
+                horizontal: header.grid_horizontal,
+                vertical: header.grid_vertical,
+            },
             guides,
         });
-        
+
         Ok(())
     }
 
     /// Read global angle (resource 1037)
     pub fn read_global_angle(&mut self, resources: &mut ImageResources) -> Result<()> {
-        resources.global_angle = Some(self.read_i32()?);
+        let record: SignedI32Record = decode_be(&self.read_bytes(4)?, "global angle")?;
+        resources.global_angle = Some(record.value);
         Ok(())
     }
 
     /// Read global altitude (resource 1049)
     pub fn read_global_altitude(&mut self, resources: &mut ImageResources) -> Result<()> {
-        resources.global_altitude = Some(self.read_i32()?);
+        let record: SignedI32Record = decode_be(&self.read_bytes(4)?, "global altitude")?;
+        resources.global_altitude = Some(record.value);
         Ok(())
     }
 
     /// Read layer state (resource 1024)
     pub fn read_layer_state(&mut self, resources: &mut ImageResources) -> Result<()> {
-        resources.layer_state = Some(self.read_u16()?);
+        let record: LayerStateRecord = decode_be(&self.read_bytes(2)?, "layer state")?;
+        resources.layer_state = Some(record.state);
         Ok(())
     }
 
     /// Read layers group (resource 1026)
-    pub fn read_layers_group(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
+    pub fn read_clipping(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
         let mut groups = Vec::new();
         let count = length / 2;
         for _ in 0..count {
-            groups.push(self.read_u16()?);
+            groups.push(
+                decode_be::<LayerStateRecord>(&self.read_bytes(2)?, "layer group entry")?.state,
+            );
         }
-        resources.layers_group = Some(groups);
+        resources.clipping = Some(groups);
         Ok(())
     }
 
     /// Read layer selection IDs (resource 1069)
     pub fn read_layer_selection_ids(&mut self, resources: &mut ImageResources) -> Result<()> {
-        let count = self.read_u16()? as usize;
+        let count = decode_be::<U16ListCountRecord>(&self.read_bytes(2)?, "layer selection count")?
+            .count as usize;
         let mut ids = Vec::new();
         for _ in 0..count {
-            ids.push(self.read_u32()?);
+            ids.push(
+                decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "layer selection id")?.value,
+            );
         }
         resources.layer_selection_ids = Some(ids);
         Ok(())
     }
 
     /// Read alpha names (resource 1006)
-    pub fn read_alpha_names(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
+    pub fn read_alpha_names(
+        &mut self,
+        resources: &mut ImageResources,
+        length: usize,
+    ) -> Result<()> {
         let mut names = Vec::new();
         let mut remaining = length;
-        
+
         while remaining > 0 {
             let name_len = self.read_u8()? as usize;
             remaining -= 1;
@@ -542,71 +700,102 @@ impl<R: Read + Seek> PsdReader<R> {
             remaining -= name_len;
             names.push(String::from_utf8_lossy(&name).to_string());
         }
-        
+
         resources.alpha_names = Some(names);
         Ok(())
     }
 
     /// Read alpha unicode names (resource 1045)
-    pub fn read_alpha_unicode_names(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
+    pub fn read_alpha_unicode_names(
+        &mut self,
+        resources: &mut ImageResources,
+        length: usize,
+    ) -> Result<()> {
         let mut names = Vec::new();
         let mut remaining = length;
-        
+
         while remaining > 0 {
             let name = self.read_unicode_string()?;
             remaining -= name.len() * 2 + 4;
             names.push(name);
         }
-        
+
         resources.alpha_unicode_names = Some(names);
         Ok(())
     }
 
     /// Read alpha identifiers (resource 1053)
-    pub fn read_alpha_identifiers(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
+    pub fn read_alpha_identifiers(
+        &mut self,
+        resources: &mut ImageResources,
+        length: usize,
+    ) -> Result<()> {
         let count = length / 4;
         let mut ids = Vec::new();
         for _ in 0..count {
-            ids.push(self.read_u32()?);
+            ids.push(decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "alpha identifier")?.value);
         }
         resources.alpha_identifiers = Some(ids);
         Ok(())
     }
 
     /// Read ICC profile (resource 1039)
-    pub fn read_icc_profile(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
+    pub fn read_icc_profile(
+        &mut self,
+        resources: &mut ImageResources,
+        length: usize,
+    ) -> Result<()> {
         resources.icc_profile = Some(self.read_bytes(length)?);
         Ok(())
     }
 
     /// Read print scale (resource 1062)
     pub fn read_print_scale(&mut self, resources: &mut ImageResources) -> Result<()> {
-        let style = match self.read_i16()? {
+        let record: PrintScaleRecord = decode_be(&self.read_bytes(14)?, "print scale")?;
+        let style = match record.style {
             0 => PrintScaleStyle::Centered,
             1 => PrintScaleStyle::SizeToFit,
             2 => PrintScaleStyle::UserDefined,
-            v => return Err(PsdError::InvalidFormat(format!("Invalid print scale style: {}", v))),
+            v => {
+                return Err(PsdError::InvalidFormat(format!(
+                    "Invalid print scale style: {}",
+                    v
+                )))
+            }
         };
-        
-        let x = self.read_f32()?;
-        let y = self.read_f32()?;
-        let scale = self.read_f32()?;
-        
-        resources.print_scale = Some(PrintScale { style, x, y, scale });
+
+        resources.print_scale = Some(PrintScale {
+            style,
+            x: record.x,
+            y: record.y,
+            scale: record.scale,
+        });
         Ok(())
     }
 }
 
 impl PsdWriter {
+    fn write_slice_string(&mut self, value: &str) -> Result<()> {
+        self.write_bytes(&encode_be(
+            &U32ValueRecord {
+                value: value.len() as u32,
+            },
+            "slice string length",
+        )?)?;
+        self.write_bytes(value.as_bytes())
+    }
+
     /// Write resolution info
     pub fn write_resolution_info(&mut self, info: &ResolutionInfo) -> Result<()> {
-        self.write_fixed_point_32(info.horizontal_res)?;
-        self.write_u16(info.horizontal_res_unit as u16)?;
-        self.write_u16(info.width_unit as u16)?;
-        self.write_fixed_point_32(info.vertical_res)?;
-        self.write_u16(info.vertical_res_unit as u16)?;
-        self.write_u16(info.height_unit as u16)?;
-        Ok(())
+        let record = ResolutionInfoRecord {
+            horizontal_res_fixed: (info.horizontal_res * 65536.0) as i32,
+            horizontal_res_unit: info.horizontal_res_unit as u16,
+            width_unit: info.width_unit as u16,
+            vertical_res_fixed: (info.vertical_res * 65536.0) as i32,
+            vertical_res_unit: info.vertical_res_unit as u16,
+            height_unit: info.height_unit as u16,
+        };
+        self.write_bytes(&encode_be(&record, "resolution info")?)
     }
 
     /// Write XMP metadata
@@ -618,7 +807,7 @@ impl PsdWriter {
     /// Write caption digest
     pub fn write_caption_digest(&mut self, digest: &str) -> Result<()> {
         for i in 0..16 {
-            let byte = u8::from_str_radix(&digest[i*2..i*2+2], 16)
+            let byte = u8::from_str_radix(&digest[i * 2..i * 2 + 2], 16)
                 .map_err(|_| PsdError::InvalidFormat("Invalid hex digest".to_string()))?;
             self.write_u8(byte)?;
         }
@@ -633,22 +822,28 @@ impl PsdWriter {
 
     /// Write print flags
     pub fn write_print_flags(&mut self, flags: &PrintFlags) -> Result<()> {
-        self.write_u8(if flags.labels { 1 } else { 0 })?;
-        self.write_u8(if flags.crop_marks { 1 } else { 0 })?;
-        self.write_u8(if flags.color_bars { 1 } else { 0 })?;
-        self.write_u8(if flags.registration_marks { 1 } else { 0 })?;
-        self.write_u8(if flags.negative { 1 } else { 0 })?;
-        self.write_u8(if flags.flip { 1 } else { 0 })?;
-        self.write_u8(if flags.interpolate { 1 } else { 0 })?;
-        self.write_u8(if flags.caption { 1 } else { 0 })?;
-        self.write_u8(if flags.print_flags { 1 } else { 0 })?;
-        Ok(())
+        let record = PrintFlagsRecord {
+            labels: u8::from(flags.labels),
+            crop_marks: u8::from(flags.crop_marks),
+            color_bars: u8::from(flags.color_bars),
+            registration_marks: u8::from(flags.registration_marks),
+            negative: u8::from(flags.negative),
+            flip: u8::from(flags.flip),
+            interpolate: u8::from(flags.interpolate),
+            caption: u8::from(flags.caption),
+            print_flags: u8::from(flags.print_flags),
+        };
+        self.write_bytes(&encode_be(&record, "print flags")?)
     }
 
     /// Write copyright flag
     pub fn write_copyright_flag(&mut self, copyrighted: bool) -> Result<()> {
-        self.write_u8(if copyrighted { 1 } else { 0 })?;
-        Ok(())
+        self.write_bytes(&encode_be(
+            &U8BoolRecord {
+                value: u8::from(copyrighted),
+            },
+            "copyright flag",
+        )?)
     }
 
     /// Write URL
@@ -659,61 +854,89 @@ impl PsdWriter {
 
     /// Write grid and guides
     pub fn write_grid_and_guides(&mut self, grid_guides: &GridAndGuides) -> Result<()> {
-        self.write_u32(1)?; // version
-        self.write_u32(grid_guides.grid.horizontal)?;
-        self.write_u32(grid_guides.grid.vertical)?;
-        self.write_u32(grid_guides.guides.len() as u32)?;
-        
+        let header = GridAndGuidesHeaderRecord {
+            version: 1,
+            grid_horizontal: grid_guides.grid.horizontal,
+            grid_vertical: grid_guides.grid.vertical,
+            guide_count: grid_guides.guides.len() as u32,
+        };
+        self.write_bytes(&encode_be(&header, "grid and guides header")?)?;
+
         for guide in &grid_guides.guides {
-            self.write_u32((guide.location * 32.0) as u32)?;
-            self.write_u8(if guide.direction == GuideDirection::Horizontal { 1 } else { 0 })?;
+            let record = GuideRecord {
+                location_times_32: (guide.location * 32.0) as u32,
+                direction: if guide.direction == GuideDirection::Horizontal {
+                    1
+                } else {
+                    0
+                },
+            };
+            self.write_bytes(&encode_be(&record, "guide record")?)?;
         }
-        
+
         Ok(())
     }
 
     /// Write global angle
     pub fn write_global_angle(&mut self, angle: i32) -> Result<()> {
-        self.write_i32(angle)?;
-        Ok(())
+        self.write_bytes(&encode_be(
+            &SignedI32Record { value: angle },
+            "global angle",
+        )?)
     }
 
     /// Write global altitude
     pub fn write_global_altitude(&mut self, altitude: i32) -> Result<()> {
-        self.write_i32(altitude)?;
-        Ok(())
+        self.write_bytes(&encode_be(
+            &SignedI32Record { value: altitude },
+            "global altitude",
+        )?)
     }
 
     /// Write layer state
     pub fn write_layer_state(&mut self, state: u16) -> Result<()> {
-        self.write_u16(state)?;
-        Ok(())
+        self.write_bytes(&encode_be(&LayerStateRecord { state }, "layer state")?)
     }
 
     /// Write layers group
-    pub fn write_layers_group(&mut self, groups: &[u16]) -> Result<()> {
-        for group in groups {
-            self.write_u16(*group)?;
+    pub fn write_clipping(&mut self, clipping: &[u16]) -> Result<()> {
+        for value in clipping {
+            self.write_bytes(&encode_be(
+                &LayerStateRecord { state: *value },
+                "layer group entry",
+            )?)?;
         }
         Ok(())
     }
 
     /// Write layer selection IDs
     pub fn write_layer_selection_ids(&mut self, ids: &[u32]) -> Result<()> {
-        self.write_u16(ids.len() as u16)?;
+        self.write_bytes(&encode_be(
+            &U16ListCountRecord {
+                count: ids.len() as u16,
+            },
+            "layer selection count",
+        )?)?;
         for id in ids {
-            self.write_u32(*id)?;
+            self.write_bytes(&encode_be(
+                &U32ValueRecord { value: *id },
+                "layer selection id",
+            )?)?;
         }
         Ok(())
     }
 
     /// Write print scale
     pub fn write_print_scale(&mut self, scale: &PrintScale) -> Result<()> {
-        self.write_i16(scale.style as i16)?;
-        self.write_f32(scale.x)?;
-        self.write_f32(scale.y)?;
-        self.write_f32(scale.scale)?;
-        Ok(())
+        self.write_bytes(&encode_be(
+            &PrintScaleRecord {
+                style: scale.style as i16,
+                x: scale.x,
+                y: scale.y,
+                scale: scale.scale,
+            },
+            "print scale",
+        )?)
     }
 }
 
@@ -724,33 +947,43 @@ pub fn read_image_resources<R: Read + Seek>(
 ) -> Result<ImageResources> {
     let mut resources = ImageResources::default();
     let start_offset = reader.offset;
-    
+
     while (reader.offset - start_offset) < length as u64 {
-        let signature = reader.read_signature()?;
-        if signature != "8BIM" {
-            return Err(PsdError::InvalidFormat(format!("Invalid resource signature: {}", signature)));
+        let header: ImageResourceHeaderRecord =
+            decode_be(&reader.read_bytes(7)?, "image resource header")?;
+        if &header.signature != b"8BIM" && &header.signature != b"MeSa" {
+            return Err(PsdError::InvalidFormat(format!(
+                "Invalid resource signature: {}",
+                String::from_utf8_lossy(&header.signature),
+            )));
         }
-        
-        let resource_id = reader.read_u16()?;
-        
+        let resource_id = header.resource_id;
+
         // Read pascal string (name)
-        let name_length = reader.read_u8()? as usize;
+        let name_length = header.name_length as usize;
         reader.skip_bytes(name_length)?;
         if (name_length + 1) % 2 != 0 {
             reader.skip_bytes(1)?; // Padding
         }
-        
-        let data_length = reader.read_u32()? as usize;
+
+        let data_length = decode_be::<ImageResourceLengthRecord>(
+            &reader.read_bytes(4)?,
+            "image resource length",
+        )?
+        .data_length as usize;
         let resource_start = reader.offset;
-        
+
         // Dispatch to appropriate handler
         match resource_id {
             1005 => reader.read_resolution_info(&mut resources)?,
             1010 => reader.read_background_color(&mut resources)?,
             1011 => reader.read_print_flags(&mut resources)?,
             1024 => reader.read_layer_state(&mut resources)?,
-            1026 => reader.read_layers_group(&mut resources, data_length)?,
+            1026 => reader.read_clipping(&mut resources, data_length)?,
             1032 => reader.read_grid_and_guides(&mut resources)?,
+            1036 => {
+                resources.display_info = Some(reader.read_bytes(data_length)?);
+            }
             1034 => reader.read_copyright_flag(&mut resources)?,
             1035 => reader.read_url(&mut resources, data_length)?,
             1037 => reader.read_global_angle(&mut resources)?,
@@ -763,23 +996,24 @@ pub fn read_image_resources<R: Read + Seek>(
             1045 => reader.read_alpha_unicode_names(&mut resources, data_length)?,
             1053 => reader.read_alpha_identifiers(&mut resources, data_length)?,
             1039 => reader.read_icc_profile(&mut resources, data_length)?,
-            1050 => {
-                // Slices — store raw; full descriptor parsing is complex
-                let data = reader.read_bytes(data_length)?;
-                resources.unknown.insert(resource_id, data);
+            1050 => reader.read_slices(&mut resources, data_length)?,
+            1072 => {
+                resources.resource_visibility = Some(reader.read_bytes(data_length)?);
             }
-            1065 | 1074 | 1075 => {
-                let _version = reader.read_u32()?;
+            1073 => {
+                resources.custom_points = Some(reader.read_bytes(data_length)?);
+            }
+            1065 | 1074 | 1075 | 2999 | 3000 => {
+                let _version = decode_be::<U32ValueRecord>(
+                    &reader.read_bytes(4)?,
+                    "descriptor resource version",
+                )?
+                .value;
                 let desc = reader.read_descriptor_structure()?;
                 resources.descriptor_resources.insert(resource_id, desc);
             }
             2000..=2998 => {
-                let data = reader.read_bytes(data_length)?;
-                resources.path_resources.insert(resource_id, data);
-            }
-            2999 | 3000 => {
-                let data = reader.read_bytes(data_length)?;
-                resources.unknown.insert(resource_id, data);
+                reader.read_path_resource_records(&mut resources, resource_id, data_length)?
             }
             7000 => {
                 let bytes = reader.read_bytes(data_length)?;
@@ -789,113 +1023,175 @@ pub fn read_image_resources<R: Read + Seek>(
                 let bytes = reader.read_bytes(data_length)?;
                 resources.data_sets = Some(String::from_utf8_lossy(&bytes).to_string());
             }
-            _ => {
-                // Store unknown resources
-                let data = reader.read_bytes(data_length)?;
-                resources.unknown.insert(resource_id, data);
-            }
+            _ => reader.skip_bytes(data_length)?,
         }
-        
+
         // Ensure we consumed exactly the right amount
         let consumed = (reader.offset - resource_start) as usize;
         if consumed < data_length {
             reader.skip_bytes(data_length - consumed)?;
         }
-        
+
         // Align to even boundary
         if data_length % 2 != 0 {
             reader.skip_bytes(1)?;
         }
     }
-    
+
     Ok(resources)
 }
 
 /// Write all image resources
-pub fn write_image_resources(
-    writer: &mut PsdWriter,
-    resources: &ImageResources,
-) -> Result<()> {
+pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources) -> Result<()> {
     // Helper to write a resource block
-    let write_resource = |writer: &mut PsdWriter, id: u16, write_fn: &dyn Fn(&mut PsdWriter) -> Result<()>| -> Result<()> {
-        writer.write_signature("8BIM")?;
-        writer.write_u16(id)?;
-        writer.write_u8(0)?; // Empty name
+    let write_resource = |writer: &mut PsdWriter,
+                          id: u16,
+                          write_fn: &dyn Fn(&mut PsdWriter) -> Result<()>|
+     -> Result<()> {
+        writer.write_bytes(&encode_be(
+            &ImageResourceHeaderRecord {
+                signature: *b"8BIM",
+                resource_id: id,
+                name_length: 0,
+            },
+            "image resource header",
+        )?)?;
         writer.write_u8(0)?; // Name padding
-        
+
         // Write to temp buffer to get length
         let mut temp_writer = PsdWriter::new(1024);
         write_fn(&mut temp_writer)?;
         let data = temp_writer.get_buffer();
-        
-        writer.write_u32(data.len() as u32)?;
+
+        writer.write_bytes(&encode_be(
+            &ImageResourceLengthRecord {
+                data_length: data.len() as u32,
+            },
+            "image resource length",
+        )?)?;
         writer.write_bytes(data)?;
-        
+
         // Pad to even boundary
         if data.len() % 2 != 0 {
             writer.write_u8(0)?;
         }
-        
+
         Ok(())
     };
-    
+
     // Write each resource type
     if let Some(ref info) = resources.resolution_info {
         write_resource(writer, 1005, &|w| w.write_resolution_info(info))?;
     }
-    
+
     if let Some(ref color) = resources.background_color {
         write_resource(writer, 1010, &|w| w.write_background_color(color))?;
     }
-    
+
     if let Some(ref flags) = resources.print_flags {
         write_resource(writer, 1011, &|w| w.write_print_flags(flags))?;
     }
-    
+
     if let Some(state) = resources.layer_state {
         write_resource(writer, 1024, &|w| w.write_layer_state(state))?;
     }
-    
-    if let Some(ref groups) = resources.layers_group {
-        write_resource(writer, 1026, &|w| w.write_layers_group(groups))?;
+
+    if let Some(ref clipping) = resources.clipping {
+        write_resource(writer, 1026, &|w| w.write_clipping(clipping))?;
     }
-    
+
     if let Some(ref grid_guides) = resources.grid_and_guides {
         write_resource(writer, 1032, &|w| w.write_grid_and_guides(grid_guides))?;
     }
-    
+
     if let Some(copyrighted) = resources.copyrighted {
         write_resource(writer, 1034, &|w| w.write_copyright_flag(copyrighted))?;
     }
-    
+
     if let Some(ref url) = resources.url {
         write_resource(writer, 1035, &|w| w.write_url(url))?;
     }
-    
+
     if let Some(angle) = resources.global_angle {
         write_resource(writer, 1037, &|w| w.write_global_angle(angle))?;
     }
-    
+
     if let Some(altitude) = resources.global_altitude {
         write_resource(writer, 1049, &|w| w.write_global_altitude(altitude))?;
     }
-    
+
     if let Some(ref xmp) = resources.xmp_metadata {
         write_resource(writer, 1060, &|w| w.write_xmp_metadata(xmp))?;
     }
-    
+
     if let Some(ref digest) = resources.caption_digest {
         write_resource(writer, 1061, &|w| w.write_caption_digest(digest))?;
     }
-    
+
     if let Some(ref scale) = resources.print_scale {
         write_resource(writer, 1062, &|w| w.write_print_scale(scale))?;
     }
-    
+
     if let Some(ref ids) = resources.layer_selection_ids {
         write_resource(writer, 1069, &|w| w.write_layer_selection_ids(ids))?;
     }
-    
+
+    if let Some(ref bytes) = resources.display_info {
+        write_resource(writer, 1036, &|w| w.write_bytes(bytes))?;
+    }
+
+    if let Some(ref bytes) = resources.resource_visibility {
+        write_resource(writer, 1072, &|w| w.write_bytes(bytes))?;
+    }
+
+    if let Some(ref bytes) = resources.custom_points {
+        write_resource(writer, 1073, &|w| w.write_bytes(bytes))?;
+    }
+
+    if let Some(ref slices) = resources.slices {
+        write_resource(writer, 1050, &|w| {
+            w.write_bytes(&encode_be(
+                &U32ValueRecord {
+                    value: slices.version,
+                },
+                "slices version",
+            )?)?;
+            w.write_bytes(&encode_be(
+                &U32ValueRecord {
+                    value: slices.slices.len() as u32,
+                },
+                "slices count",
+            )?)?;
+            for slice in &slices.slices {
+                w.write_i32(slice.id as i32)?;
+                w.write_i32(slice.group_id as i32)?;
+                w.write_i32(slice.origin as i32)?;
+                w.write_i32(slice.associated_layer_id as i32)?;
+                w.write_slice_string(&slice.name)?;
+                w.write_i32(slice.slice_type as i32)?;
+                w.write_i32(slice.bounds.top)?;
+                w.write_i32(slice.bounds.left)?;
+                w.write_i32(slice.bounds.bottom)?;
+                w.write_i32(slice.bounds.right)?;
+                w.write_slice_string(&slice.url)?;
+                w.write_slice_string(&slice.target)?;
+                w.write_slice_string(&slice.message)?;
+                w.write_slice_string(&slice.alt_tag)?;
+                w.write_slice_string(&slice.cell_text)?;
+                w.write_i32(slice.horizontal_align)?;
+                w.write_i32(slice.vertical_align)?;
+                w.write_u8(slice.alpha)?;
+                w.write_bytes(&slice.bg_color)?;
+                w.write_i32(slice.cell_is_html)?;
+                if slices.version >= 7 {
+                    w.write_u32(slice.source_id.unwrap_or(0))?;
+                    w.write_u32(slice.source_type.unwrap_or(0))?;
+                }
+            }
+            Ok(())
+        })?;
+    }
+
     // Write alpha names (1006)
     if let Some(ref names) = resources.alpha_names {
         write_resource(writer, 1006, &|w| {
@@ -935,22 +1231,30 @@ pub fn write_image_resources(
     // Write descriptor resources (1065, 1074, 1075)
     for (&id, desc) in &resources.descriptor_resources {
         write_resource(writer, id, &|w| {
-            w.write_u32(16)?; // version
+            w.write_bytes(&encode_be(
+                &U32ValueRecord { value: 16 },
+                "descriptor resource version",
+            )?)?;
             w.write_descriptor_structure(desc)
         })?;
     }
 
-    // Write path resources (2000–2998)
-    for (&id, data) in &resources.path_resources {
-        writer.write_signature("8BIM")?;
-        writer.write_u16(id)?;
-        writer.write_u8(0)?;
-        writer.write_u8(0)?;
-        writer.write_u32(data.len() as u32)?;
-        writer.write_bytes(data)?;
-        if data.len() % 2 != 0 {
-            writer.write_u8(0)?;
-        }
+    for (&id, records) in &resources.path_resources {
+        write_resource(writer, id, &|w| {
+            for record in records {
+                w.write_u16(record.record_type)?;
+                for point in record.points.iter().take(4) {
+                    w.write_i32((point.x * 65536.0).round() as i32)?;
+                    w.write_i32((point.y * 65536.0).round() as i32)?;
+                }
+                for _ in record.points.len()..4 {
+                    w.write_i32(0)?;
+                    w.write_i32(0)?;
+                }
+                w.write_u16(0)?;
+            }
+            Ok(())
+        })?;
     }
 
     if let Some(ref xml) = resources.variables {
@@ -960,19 +1264,6 @@ pub fn write_image_resources(
         write_resource(writer, 7001, &|w| w.write_bytes(xml.as_bytes()))?;
     }
 
-    // Write unknown resources
-    for (id, data) in &resources.unknown {
-        writer.write_signature("8BIM")?;
-        writer.write_u16(*id)?;
-        writer.write_u8(0)?;
-        writer.write_u8(0)?;
-        writer.write_u32(data.len() as u32)?;
-        writer.write_bytes(data)?;
-        if data.len() % 2 != 0 {
-            writer.write_u8(0)?;
-        }
-    }
-    
     Ok(())
 }
 
@@ -990,17 +1281,17 @@ mod tests {
             vertical_res_unit: ResolutionUnit::PixelsPerInch,
             height_unit: MeasurementUnit::Inches,
         };
-        
+
         let mut writer = PsdWriter::new(128);
         writer.write_resolution_info(&info).unwrap();
-        
+
         let buffer = writer.into_buffer();
         let cursor = std::io::Cursor::new(buffer);
         let mut reader = PsdReader::new(cursor, Default::default());
-        
+
         let mut resources = ImageResources::default();
         reader.read_resolution_info(&mut resources).unwrap();
-        
+
         let read_info = resources.resolution_info.unwrap();
         assert_eq!(read_info.horizontal_res, info.horizontal_res);
         assert_eq!(read_info.vertical_res, info.vertical_res);
@@ -1009,26 +1300,197 @@ mod tests {
     #[test]
     fn test_grid_and_guides_roundtrip() {
         let grid_guides = GridAndGuides {
-            grid: Grid { horizontal: 576, vertical: 576 },
+            grid: Grid {
+                horizontal: 576,
+                vertical: 576,
+            },
             guides: vec![
-                Guide { location: 100.0, direction: GuideDirection::Vertical },
-                Guide { location: 200.0, direction: GuideDirection::Horizontal },
+                Guide {
+                    location: 100.0,
+                    direction: GuideDirection::Vertical,
+                },
+                Guide {
+                    location: 200.0,
+                    direction: GuideDirection::Horizontal,
+                },
             ],
         };
-        
+
         let mut writer = PsdWriter::new(256);
         writer.write_grid_and_guides(&grid_guides).unwrap();
-        
+
         let buffer = writer.into_buffer();
         let cursor = std::io::Cursor::new(buffer);
         let mut reader = PsdReader::new(cursor, Default::default());
-        
+
         let mut resources = ImageResources::default();
         reader.read_grid_and_guides(&mut resources).unwrap();
-        
+
         let read_grid_guides = resources.grid_and_guides.unwrap();
-        assert_eq!(read_grid_guides.grid.horizontal, grid_guides.grid.horizontal);
-        assert_eq!(read_grid_guides.guides.len(), grid_guides.guides.len());
+        assert_eq!(read_grid_guides, grid_guides);
+    }
+
+    #[test]
+    fn test_print_flags_roundtrip() {
+        let flags = PrintFlags {
+            labels: true,
+            crop_marks: false,
+            color_bars: true,
+            registration_marks: false,
+            negative: true,
+            flip: false,
+            interpolate: true,
+            caption: false,
+            print_flags: true,
+        };
+
+        let mut writer = PsdWriter::new(64);
+        writer.write_print_flags(&flags).unwrap();
+
+        let buffer = writer.into_buffer();
+        let cursor = std::io::Cursor::new(buffer);
+        let mut reader = PsdReader::new(cursor, Default::default());
+
+        let mut resources = ImageResources::default();
+        reader.read_print_flags(&mut resources).unwrap();
+
+        assert_eq!(resources.print_flags, Some(flags));
+    }
+
+    #[test]
+    fn test_print_scale_roundtrip() {
+        let scale = PrintScale {
+            style: PrintScaleStyle::UserDefined,
+            x: 12.5,
+            y: 42.0,
+            scale: 66.0,
+        };
+
+        let mut writer = PsdWriter::new(64);
+        writer.write_print_scale(&scale).unwrap();
+
+        let buffer = writer.into_buffer();
+        let cursor = std::io::Cursor::new(buffer);
+        let mut reader = PsdReader::new(cursor, Default::default());
+
+        let mut resources = ImageResources::default();
+        reader.read_print_scale(&mut resources).unwrap();
+
+        assert_eq!(resources.print_scale, Some(scale));
+    }
+
+    #[test]
+    fn test_layer_selection_ids_roundtrip() {
+        let ids = vec![11, 22, 33];
+
+        let mut writer = PsdWriter::new(64);
+        writer.write_layer_selection_ids(&ids).unwrap();
+
+        let buffer = writer.into_buffer();
+        let cursor = std::io::Cursor::new(buffer);
+        let mut reader = PsdReader::new(cursor, Default::default());
+
+        let mut resources = ImageResources::default();
+        reader.read_layer_selection_ids(&mut resources).unwrap();
+
+        assert_eq!(resources.layer_selection_ids, Some(ids));
+    }
+
+    #[test]
+    fn path_selection_descriptor_roundtrip() {
+        let mut resources = ImageResources::default();
+        let mut desc = Descriptor {
+            name: String::new(),
+            class_id: "null".to_string(),
+            items: HashMap::new(),
+        };
+        desc.items.insert(
+            "path".to_string(),
+            crate::descriptor::DescriptorValue::Text("selection".to_string()),
+        );
+        resources.descriptor_resources.insert(3000, desc.clone());
+
+        let mut w = PsdWriter::new(256);
+        write_image_resources(&mut w, &resources).unwrap();
+        let buf = w.into_buffer();
+        let len = buf.len();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let reparsed = read_image_resources(&mut reader, len).unwrap();
+
+        assert_eq!(reparsed.descriptor_resources.get(&3000), Some(&desc));
+    }
+
+    #[test]
+    fn path_resource_roundtrip() {
+        let mut resources = ImageResources::default();
+        resources.path_resources.insert(
+            2000,
+            vec![PathResourceRecord {
+                record_type: 1,
+                closed: true,
+                points: vec![
+                    Point { x: 1.0, y: 2.0 },
+                    Point { x: 3.0, y: 4.0 },
+                    Point { x: 5.0, y: 6.0 },
+                    Point { x: 7.0, y: 8.0 },
+                ],
+            }],
+        );
+
+        let mut w = PsdWriter::new(256);
+        write_image_resources(&mut w, &resources).unwrap();
+        let buf = w.into_buffer();
+        let len = buf.len();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let reparsed = read_image_resources(&mut reader, len).unwrap();
+
+        assert_eq!(
+            reparsed.path_resources.get(&2000),
+            resources.path_resources.get(&2000)
+        );
+    }
+
+    #[test]
+    fn slices_roundtrip() {
+        let mut resources = ImageResources::default();
+        resources.slices = Some(Slices {
+            version: 7,
+            slices: vec![Slice {
+                id: 1,
+                group_id: 2,
+                origin: 1,
+                associated_layer_id: 3,
+                name: "slice".to_string(),
+                slice_type: 1,
+                bounds: Bounds {
+                    top: 10,
+                    left: 20,
+                    bottom: 30,
+                    right: 40,
+                },
+                url: "https://example.com".to_string(),
+                target: "_blank".to_string(),
+                message: "msg".to_string(),
+                alt_tag: "alt".to_string(),
+                cell_text: "cell".to_string(),
+                horizontal_align: 3,
+                vertical_align: 5,
+                alpha: 255,
+                bg_color: [1, 2, 3, 4],
+                cell_is_html: 1,
+                source_id: Some(9),
+                source_type: Some(10),
+            }],
+        });
+
+        let mut w = PsdWriter::new(512);
+        write_image_resources(&mut w, &resources).unwrap();
+        let buf = w.into_buffer();
+        let len = buf.len();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let reparsed = read_image_resources(&mut reader, len).unwrap();
+
+        assert_eq!(reparsed.slices, resources.slices);
     }
 
     #[test]
@@ -1046,20 +1508,6 @@ mod tests {
     }
 
     #[test]
-    fn path_resource_roundtrip() {
-        let mut res = ImageResources::default();
-        res.path_resources.insert(2000, vec![0xAA, 0xBB, 0xCC, 0xDD]);
-        let mut w = PsdWriter::new(256);
-        write_image_resources(&mut w, &res).unwrap();
-        let buf = w.into_buffer();
-        let buf_len = buf.len();
-        let cursor = std::io::Cursor::new(buf);
-        let mut reader = PsdReader::new(cursor, Default::default());
-        let read_res = read_image_resources(&mut reader, buf_len).unwrap();
-        assert_eq!(read_res.path_resources.get(&2000), Some(&vec![0xAA, 0xBB, 0xCC, 0xDD]));
-    }
-
-    #[test]
     fn variables_xml_roundtrip() {
         let mut res = ImageResources::default();
         res.variables = Some("<variables/>".to_string());
@@ -1071,5 +1519,21 @@ mod tests {
         let mut reader = PsdReader::new(cursor, Default::default());
         let read_res = read_image_resources(&mut reader, buf_len).unwrap();
         assert_eq!(read_res.variables.as_deref(), Some("<variables/>"));
+    }
+
+    #[test]
+    fn accepts_mesa_resource_signature() {
+        let mut writer = PsdWriter::new(64);
+        writer.write_bytes(b"MeSa").unwrap();
+        writer.write_u16(1039).unwrap();
+        writer.write_u8(0).unwrap();
+        writer.write_u8(0).unwrap();
+        writer.write_u32(4).unwrap();
+        writer.write_bytes(&[1, 2, 3, 4]).unwrap();
+        let buf = writer.into_buffer();
+        let len = buf.len();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let resources = read_image_resources(&mut reader, len).unwrap();
+        assert_eq!(resources.icc_profile, Some(vec![1, 2, 3, 4]));
     }
 }

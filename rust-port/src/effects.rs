@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::types::*;
+use serde::{Deserialize, Serialize};
 
 /// Effect contour definition
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

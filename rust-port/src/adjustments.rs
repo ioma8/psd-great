@@ -196,7 +196,10 @@ pub enum AdjustmentLayer {
     Curves(Curves),
     GradientMap(GradientMap),
     /// Fallback for adjustment keys with formats not yet decoded (e.g. blwh)
-    Raw { key: String, data: Vec<u8> },
+    Raw {
+        key: String,
+        data: Vec<u8>,
+    },
 }
 
 impl AdjustmentLayer {
@@ -221,7 +224,9 @@ impl AdjustmentLayer {
 
     pub fn from_key_and_bytes(key: &str, bytes: &[u8]) -> Result<Self> {
         match key {
-            "brit" => Ok(AdjustmentLayer::BrightnessContrast(read_brightness_contrast(bytes)?)),
+            "brit" => Ok(AdjustmentLayer::BrightnessContrast(
+                read_brightness_contrast(bytes)?,
+            )),
             "nvrt" => Ok(AdjustmentLayer::Invert),
             "post" => Ok(AdjustmentLayer::Posterize(read_posterize(bytes)?)),
             "thrs" => Ok(AdjustmentLayer::Threshold(read_threshold(bytes)?)),
@@ -230,11 +235,16 @@ impl AdjustmentLayer {
             "phfl" => Ok(AdjustmentLayer::PhotoFilter(read_photo_filter(bytes)?)),
             "levl" => Ok(AdjustmentLayer::Levels(read_levels(bytes)?)),
             "hue2" => Ok(AdjustmentLayer::HueSaturation(read_hue_saturation(bytes)?)),
-            "selc" => Ok(AdjustmentLayer::SelectiveColor(read_selective_color(bytes)?)),
+            "selc" => Ok(AdjustmentLayer::SelectiveColor(read_selective_color(
+                bytes,
+            )?)),
             "mixr" => Ok(AdjustmentLayer::ChannelMixer(read_channel_mixer(bytes)?)),
             "curv" => Ok(AdjustmentLayer::Curves(read_curves(bytes)?)),
             "grdm" => Ok(AdjustmentLayer::GradientMap(read_gradient_map(bytes)?)),
-            _ => Ok(AdjustmentLayer::Raw { key: key.to_string(), data: bytes.to_vec() }),
+            _ => Ok(AdjustmentLayer::Raw {
+                key: key.to_string(),
+                data: bytes.to_vec(),
+            }),
         }
     }
 
@@ -272,7 +282,9 @@ impl<'a> Cursor<'a> {
 
     fn read_u8(&mut self) -> Result<u8> {
         if self.pos >= self.data.len() {
-            return Err(PsdError::InvalidFormat("unexpected EOF in adjustment".into()));
+            return Err(PsdError::InvalidFormat(
+                "unexpected EOF in adjustment".into(),
+            ));
         }
         let v = self.data[self.pos];
         self.pos += 1;
@@ -281,7 +293,9 @@ impl<'a> Cursor<'a> {
 
     fn read_u16(&mut self) -> Result<u16> {
         if self.pos + 2 > self.data.len() {
-            return Err(PsdError::InvalidFormat("unexpected EOF in adjustment".into()));
+            return Err(PsdError::InvalidFormat(
+                "unexpected EOF in adjustment".into(),
+            ));
         }
         let v = u16::from_be_bytes([self.data[self.pos], self.data[self.pos + 1]]);
         self.pos += 2;
@@ -294,7 +308,9 @@ impl<'a> Cursor<'a> {
 
     fn read_u32(&mut self) -> Result<u32> {
         if self.pos + 4 > self.data.len() {
-            return Err(PsdError::InvalidFormat("unexpected EOF in adjustment".into()));
+            return Err(PsdError::InvalidFormat(
+                "unexpected EOF in adjustment".into(),
+            ));
         }
         let v = u32::from_be_bytes([
             self.data[self.pos],
@@ -312,7 +328,9 @@ impl<'a> Cursor<'a> {
 
     fn read_ascii(&mut self, len: usize) -> Result<String> {
         if self.pos + len > self.data.len() {
-            return Err(PsdError::InvalidFormat("unexpected EOF in adjustment".into()));
+            return Err(PsdError::InvalidFormat(
+                "unexpected EOF in adjustment".into(),
+            ));
         }
         let s = String::from_utf8_lossy(&self.data[self.pos..self.pos + len]).to_string();
         self.pos += len;
@@ -389,17 +407,25 @@ fn read_brightness_contrast(bytes: &[u8]) -> Result<BrightnessContrast> {
     let mut c = Cursor::new(bytes);
     let brightness = c.read_i16()?;
     let contrast = c.read_i16()?;
-    Ok(BrightnessContrast { brightness, contrast, use_legacy: true })
+    Ok(BrightnessContrast {
+        brightness,
+        contrast,
+        use_legacy: true,
+    })
 }
 
 fn read_posterize(bytes: &[u8]) -> Result<Posterize> {
     let mut c = Cursor::new(bytes);
-    Ok(Posterize { levels: c.read_u16()? })
+    Ok(Posterize {
+        levels: c.read_u16()?,
+    })
 }
 
 fn read_threshold(bytes: &[u8]) -> Result<Threshold> {
     let mut c = Cursor::new(bytes);
-    Ok(Threshold { level: c.read_u16()? })
+    Ok(Threshold {
+        level: c.read_u16()?,
+    })
 }
 
 fn read_exposure(bytes: &[u8]) -> Result<Exposure> {
@@ -408,7 +434,11 @@ fn read_exposure(bytes: &[u8]) -> Result<Exposure> {
     let exposure = c.read_f32()?;
     let offset = c.read_f32()?;
     let gamma_correction = c.read_f32()?;
-    Ok(Exposure { exposure, offset, gamma_correction })
+    Ok(Exposure {
+        exposure,
+        offset,
+        gamma_correction,
+    })
 }
 
 fn read_color_balance(bytes: &[u8]) -> Result<ColorBalance> {
@@ -417,7 +447,12 @@ fn read_color_balance(bytes: &[u8]) -> Result<ColorBalance> {
     let midtones = [c.read_i16()?, c.read_i16()?, c.read_i16()?];
     let highlights = [c.read_i16()?, c.read_i16()?, c.read_i16()?];
     let preserve_luminosity = c.read_u8()? == 1;
-    Ok(ColorBalance { shadows, midtones, highlights, preserve_luminosity })
+    Ok(ColorBalance {
+        shadows,
+        midtones,
+        highlights,
+        preserve_luminosity,
+    })
 }
 
 fn read_photo_filter(bytes: &[u8]) -> Result<PhotoFilter> {
@@ -437,11 +472,19 @@ fn read_photo_filter(bytes: &[u8]) -> Result<PhotoFilter> {
         let _ = c.read_u16()?;
         LabColor { lmnc, a, b }
     } else {
-        LabColor { lmnc: 0.0, a: 0.0, b: 0.0 }
+        LabColor {
+            lmnc: 0.0,
+            a: 0.0,
+            b: 0.0,
+        }
     };
     let density = c.read_u32()?;
     let preserve_luminosity = c.read_u8()? == 1;
-    Ok(PhotoFilter { color, density, preserve_luminosity })
+    Ok(PhotoFilter {
+        color,
+        density,
+        preserve_luminosity,
+    })
 }
 
 fn read_levels(bytes: &[u8]) -> Result<Levels> {
@@ -461,7 +504,7 @@ fn read_levels(bytes: &[u8]) -> Result<Levels> {
 
     if c.remaining() > 0 {
         let _ = c.read_ascii(4)?; // "Lvls"
-        let _ = c.read_u16()?;    // version 3
+        let _ = c.read_u16()?; // version 3
         let count = c.read_u16()? as usize;
         for _ in 29..count {
             channels.push(LevelsChannel {
@@ -494,7 +537,12 @@ fn read_hue_saturation(bytes: &[u8]) -> Result<HueSaturation> {
         ranges.push(HueSatRange { range, adjust });
     }
 
-    Ok(HueSaturation { colorize, colorized_master, master, ranges })
+    Ok(HueSaturation {
+        colorize,
+        colorized_master,
+        master,
+        ranges,
+    })
 }
 
 fn read_selective_color(bytes: &[u8]) -> Result<SelectiveColor> {
@@ -512,7 +560,10 @@ fn read_selective_color(bytes: &[u8]) -> Result<SelectiveColor> {
         adjustments.push([c.read_i16()?, c.read_i16()?, c.read_i16()?, c.read_i16()?]);
     }
 
-    Ok(SelectiveColor { absolute, adjustments })
+    Ok(SelectiveColor {
+        absolute,
+        adjustments,
+    })
 }
 
 fn read_channel_mixer(bytes: &[u8]) -> Result<ChannelMixer> {
@@ -579,7 +630,11 @@ fn read_gradient_definition(c: &mut Cursor) -> Result<GradientDefinition> {
         let g = ((c.read_u16()? as u32 * 255 + 32767) / 65535) as u8;
         let b = ((c.read_u16()? as u32 * 255 + 32767) / 65535) as u8;
         let _ = c.read_u16()?; // padding
-        color_stops.push(GradientColorStop { location, midpoint, color: [r, g, b] });
+        color_stops.push(GradientColorStop {
+            location,
+            midpoint,
+            color: [r, g, b],
+        });
     }
 
     let trans_count = c.read_u16()? as usize;
@@ -587,15 +642,25 @@ fn read_gradient_definition(c: &mut Cursor) -> Result<GradientDefinition> {
     for _ in 0..trans_count {
         let location = c.read_u32()?;
         let midpoint = c.read_u32()?;
-        let opacity = c.read_u16()?;
-        transparency_stops.push(GradientTransparencyStop { location, midpoint, opacity });
+        let raw_opacity = c.read_u16()?;
+        let opacity = ((raw_opacity as u32 * 100 + 127) / 255) as u16;
+        transparency_stops.push(GradientTransparencyStop {
+            location,
+            midpoint,
+            opacity,
+        });
     }
 
     let _ = c.read_u16()?; // pad
     let interpolation = c.read_u16()?;
     let _ = c.read_u16()?; // pad
 
-    Ok(GradientDefinition { name: String::new(), interpolation, color_stops, transparency_stops })
+    Ok(GradientDefinition {
+        name: String::new(),
+        interpolation,
+        color_stops,
+        transparency_stops,
+    })
 }
 
 fn read_gradient_map(bytes: &[u8]) -> Result<GradientMap> {
@@ -611,7 +676,11 @@ fn read_gradient_map(bytes: &[u8]) -> Result<GradientMap> {
         "stripes".to_string()
     } else {
         let t = method_raw.trim().to_string();
-        if t.is_empty() { "Gcls".to_string() } else { t }
+        if t.is_empty() {
+            "Gcls".to_string()
+        } else {
+            t
+        }
     };
 
     let name = c.read_unicode_string()?;
@@ -631,7 +700,12 @@ fn read_gradient_map(bytes: &[u8]) -> Result<GradientMap> {
     }
     let _ = c.read_u16()?;
 
-    Ok(GradientMap { reverse, dither, interpolation_method_type, gradient })
+    Ok(GradientMap {
+        reverse,
+        dither,
+        interpolation_method_type,
+        gradient,
+    })
 }
 
 // ── Writers ───────────────────────────────────────────────────────────────────
@@ -664,9 +738,15 @@ fn write_exposure(v: &Exposure) -> Result<Vec<u8>> {
 
 fn write_color_balance(v: &ColorBalance) -> Result<Vec<u8>> {
     let mut w = Writer::new();
-    for &x in &v.shadows    { w.write_i16(x); }
-    for &x in &v.midtones   { w.write_i16(x); }
-    for &x in &v.highlights  { w.write_i16(x); }
+    for &x in &v.shadows {
+        w.write_i16(x);
+    }
+    for &x in &v.midtones {
+        w.write_i16(x);
+    }
+    for &x in &v.highlights {
+        w.write_i16(x);
+    }
     w.write_u8(if v.preserve_luminosity { 1 } else { 0 });
     Ok(w.into_vec())
 }
@@ -677,8 +757,8 @@ fn write_photo_filter(v: &PhotoFilter) -> Result<Vec<u8>> {
     w.write_u16(2);
     w.write_u16(7); // Lab colour space
     w.write_i16((v.color.lmnc * 100.0).round() as i16);
-    w.write_i16((v.color.a   * 100.0).round() as i16);
-    w.write_i16((v.color.b   * 100.0).round() as i16);
+    w.write_i16((v.color.a * 100.0).round() as i16);
+    w.write_i16((v.color.b * 100.0).round() as i16);
     w.write_u16(0);
     w.write_u32(v.density);
     w.write_u8(if v.preserve_luminosity { 1 } else { 0 });
@@ -723,11 +803,19 @@ fn write_hue_saturation(v: &HueSaturation) -> Result<Vec<u8>> {
     w.write_u16(2);
     w.write_u8(if v.colorize { 1 } else { 0 });
     w.write_u8(0);
-    for &x in &v.colorized_master { w.write_i16(x); }
-    for &x in &v.master            { w.write_i16(x); }
+    for &x in &v.colorized_master {
+        w.write_i16(x);
+    }
+    for &x in &v.master {
+        w.write_i16(x);
+    }
     for r in &v.ranges {
-        for &x in &r.range  { w.write_i16(x); }
-        for &x in &r.adjust { w.write_i16(x); }
+        for &x in &r.range {
+            w.write_i16(x);
+        }
+        for &x in &r.adjust {
+            w.write_i16(x);
+        }
     }
     Ok(w.into_vec())
 }
@@ -736,9 +824,13 @@ fn write_selective_color(v: &SelectiveColor) -> Result<Vec<u8>> {
     let mut w = Writer::new();
     w.write_u16(1);
     w.write_u16(if v.absolute { 1 } else { 0 });
-    for _ in 0..4 { w.write_i16(0); }
+    for _ in 0..4 {
+        w.write_i16(0);
+    }
     for adj in &v.adjustments {
-        for &x in adj { w.write_i16(x); }
+        for &x in adj {
+            w.write_i16(x);
+        }
     }
     Ok(w.into_vec())
 }
@@ -769,7 +861,7 @@ fn write_curves(v: &Curves) -> Result<Vec<u8>> {
             w.write_u16((points.len() / 2) as u16);
             for i in (0..points.len()).step_by(2) {
                 w.write_u16(points[i + 1]); // y
-                w.write_u16(points[i]);     // x
+                w.write_u16(points[i]); // x
             }
         } else {
             let mapping: Vec<u8> = match ch {
@@ -799,7 +891,7 @@ fn write_gradient_definition(w: &mut Writer, g: &GradientDefinition) {
     for stop in &g.transparency_stops {
         w.write_u32(stop.location);
         w.write_u32(stop.midpoint);
-        w.write_u16(stop.opacity);
+        w.write_u16(((stop.opacity as u32 * 255 + 50) / 100) as u16);
     }
     w.write_u16(2);
     w.write_u16(g.interpolation);
@@ -830,7 +922,9 @@ fn write_gradient_map(v: &GradientMap) -> Result<Vec<u8>> {
     w.write_u32(0);
     w.write_u16(3);
     w.write_zeros(8);
-    for _ in 0..4 { w.write_u16(32768); }
+    for _ in 0..4 {
+        w.write_u16(32768);
+    }
     w.write_u16(0);
 
     Ok(w.into_vec())
@@ -845,8 +939,8 @@ mod tests {
     fn roundtrip(adj: AdjustmentLayer) {
         let bytes = adj.to_bytes().expect("to_bytes failed");
         let key = adj.key();
-        let recovered = AdjustmentLayer::from_key_and_bytes(key, &bytes)
-            .expect("from_key_and_bytes failed");
+        let recovered =
+            AdjustmentLayer::from_key_and_bytes(key, &bytes).expect("from_key_and_bytes failed");
         assert_eq!(adj, recovered, "roundtrip failed for key={}", key);
     }
 
@@ -887,7 +981,11 @@ mod tests {
     #[test]
     fn test_photo_filter_roundtrip() {
         roundtrip(AdjustmentLayer::PhotoFilter(PhotoFilter {
-            color: LabColor { lmnc: 50.0, a: 10.0, b: -5.0 },
+            color: LabColor {
+                lmnc: 50.0,
+                a: 10.0,
+                b: -5.0,
+            },
             density: 25,
             preserve_luminosity: true,
         }));
@@ -896,7 +994,13 @@ mod tests {
     #[test]
     fn test_levels_roundtrip() {
         // Format always stores 29 channels and reader truncates to 4; supply 4 for a clean roundtrip
-        let ch = |ib: u16, iw: u16| LevelsChannel { input_black: ib, input_white: iw, output_black: 0, output_white: 255, gamma: 100 };
+        let ch = |ib: u16, iw: u16| LevelsChannel {
+            input_black: ib,
+            input_white: iw,
+            output_black: 0,
+            output_white: 255,
+            gamma: 100,
+        };
         roundtrip(AdjustmentLayer::Levels(Levels {
             channels: vec![ch(10, 240), ch(0, 255), ch(0, 255), ch(0, 255)],
         }));
@@ -908,7 +1012,12 @@ mod tests {
             colorize: false,
             colorized_master: [0, 0, 0],
             master: [10, -5, 0],
-            ranges: (0..6).map(|_| HueSatRange { range: [0, 0, 0, 0], adjust: [0, 0, 0] }).collect(),
+            ranges: (0..6)
+                .map(|_| HueSatRange {
+                    range: [0, 0, 0, 0],
+                    adjust: [0, 0, 0],
+                })
+                .collect(),
         }));
     }
 
@@ -924,7 +1033,9 @@ mod tests {
     fn test_channel_mixer_roundtrip() {
         roundtrip(AdjustmentLayer::ChannelMixer(ChannelMixer {
             monochrome: false,
-            values: vec![100, 0, 0, 0, 100, 0, 0, 0, 100, 0, 0, 0, 100, 0, 0, 0, 100, 0, 0, 0],
+            values: vec![
+                100, 0, 0, 0, 100, 0, 0, 0, 100, 0, 0, 0, 100, 0, 0, 0, 100, 0, 0, 0,
+            ],
         }));
     }
 
@@ -951,12 +1062,22 @@ mod tests {
                 name: "Test".to_string(),
                 interpolation: 0,
                 color_stops: vec![
-                    GradientColorStop { location: 0, midpoint: 50, color: [0, 0, 0] },
-                    GradientColorStop { location: 4096, midpoint: 50, color: [255, 255, 255] },
+                    GradientColorStop {
+                        location: 0,
+                        midpoint: 50,
+                        color: [0, 0, 0],
+                    },
+                    GradientColorStop {
+                        location: 4096,
+                        midpoint: 50,
+                        color: [255, 255, 255],
+                    },
                 ],
-                transparency_stops: vec![
-                    GradientTransparencyStop { location: 0, midpoint: 50, opacity: 255 },
-                ],
+                transparency_stops: vec![GradientTransparencyStop {
+                    location: 0,
+                    midpoint: 50,
+                    opacity: 100,
+                }],
             },
         }));
     }

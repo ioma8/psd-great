@@ -2,16 +2,24 @@
 //!
 //! Provides utilities for reading and writing layer effects from PSD files.
 
-use crate::error::{PsdError, Result};
+use crate::binrw_support::{
+    decode_be, encode_be, EffectBlockHeaderRecord, EffectsCommonStateRecord, EffectsHeaderRecord,
+};
 use crate::effects::*;
+use crate::error::{PsdError, Result};
 use crate::helpers::{from_blend_mode, to_blend_mode};
 use crate::reader::PsdReader;
-use crate::types::{BlendMode, Color, RGBA, UnitsValue, Units, BevelStyle, BevelDirection};
+use crate::types::{BevelDirection, BevelStyle, BlendMode, Color, Units, UnitsValue, RGBA};
 use crate::writer::PsdWriter;
 use std::io::{Read, Seek};
 
 /// Default black color used when no color is specified
-const DEFAULT_COLOR: Color = Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 });
+const DEFAULT_COLOR: Color = Color::RGBA(RGBA {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 255,
+});
 
 const BEVEL_STYLES_MAP: &[BevelStyle] = &[
     BevelStyle::InnerBevel, // placeholder for index 0
@@ -52,7 +60,8 @@ fn write_fixed_point8(writer: &mut PsdWriter, value: f64) -> Result<()> {
 
 /// Read layer effects from a PSD reader
 pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEffectsInfo> {
-    let version = reader.read_u16()?;
+    let header: EffectsHeaderRecord = decode_be(&reader.read_bytes(4)?, "effects header")?;
+    let version = header.version;
     if version != 0 {
         return Err(PsdError::InvalidFormat(format!(
             "Invalid effects layer version: {}",
@@ -60,7 +69,7 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
         )));
     }
 
-    let effects_count = reader.read_u16()?;
+    let effects_count = header.effects_count;
     let mut effects = LayerEffectsInfo {
         disabled: None,
         scale: None,
@@ -83,12 +92,10 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
         match effect_type.as_str() {
             "cmnS" => {
                 // Common state
-                let size = reader.read_u32()?;
-                let version = reader.read_u32()?;
-                let visible = reader.read_u8()? != 0;
-                reader.skip_bytes(2)?;
+                let common: EffectsCommonStateRecord =
+                    decode_be(&reader.read_bytes(11)?, "effects common state")?;
 
-                if size != 7 || version != 0 || !visible {
+                if common.size != 7 || common.version != 0 || common.visible == 0 {
                     return Err(PsdError::InvalidFormat(
                         "Invalid effects common state".to_string(),
                     ));
@@ -96,8 +103,10 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
             }
             "dsdw" | "isdw" => {
                 // Drop shadow / Inner shadow
-                let block_size = reader.read_u32()?;
-                let version = reader.read_u32()?;
+                let block: EffectBlockHeaderRecord =
+                    decode_be(&reader.read_bytes(8)?, "shadow header")?;
+                let block_size = block.block_size;
+                let version = block.version;
 
                 if block_size != 41 && block_size != 51 {
                     return Err(PsdError::InvalidFormat(format!(
@@ -157,8 +166,10 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
             }
             "oglw" => {
                 // Outer glow
-                let block_size = reader.read_u32()?;
-                let version = reader.read_u32()?;
+                let block: EffectBlockHeaderRecord =
+                    decode_be(&reader.read_bytes(8)?, "outer glow header")?;
+                let block_size = block.block_size;
+                let version = block.version;
 
                 if block_size != 32 && block_size != 42 {
                     return Err(PsdError::InvalidFormat(format!(
@@ -206,8 +217,10 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
             }
             "iglw" => {
                 // Inner glow
-                let block_size = reader.read_u32()?;
-                let version = reader.read_u32()?;
+                let block: EffectBlockHeaderRecord =
+                    decode_be(&reader.read_bytes(8)?, "inner glow header")?;
+                let block_size = block.block_size;
+                let version = block.version;
 
                 if block_size != 32 && block_size != 43 {
                     return Err(PsdError::InvalidFormat(format!(
@@ -376,16 +389,29 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
 
 /// Write shadow info to a PSD writer
 fn write_shadow_info(writer: &mut PsdWriter, shadow: &LayerEffectShadow) -> Result<()> {
-    writer.write_u32(51)?;
-    writer.write_u32(2)?;
+    writer.write_bytes(&encode_be(
+        &EffectBlockHeaderRecord {
+            block_size: 51,
+            version: 2,
+        },
+        "shadow header",
+    )?)?;
     writer.write_fixed_point_32(shadow.size.as_ref().map(|s| s.value).unwrap_or(0.0))?;
     writer.write_fixed_point_32(0.0)?; // intensity
     writer.write_fixed_point_32(shadow.angle.unwrap_or(0.0))?;
     writer.write_fixed_point_32(shadow.distance.as_ref().map(|d| d.value).unwrap_or(0.0))?;
     writer.write_color(Some(shadow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
     write_blend_mode(writer, shadow.blend_mode.unwrap_or(BlendMode::Normal))?;
-    writer.write_u8(if shadow.enabled.unwrap_or(false) { 1 } else { 0 })?;
-    writer.write_u8(if shadow.use_global_light.unwrap_or(false) { 1 } else { 0 })?;
+    writer.write_u8(if shadow.enabled.unwrap_or(false) {
+        1
+    } else {
+        0
+    })?;
+    writer.write_u8(if shadow.use_global_light.unwrap_or(false) {
+        1
+    } else {
+        0
+    })?;
     write_fixed_point8(writer, shadow.opacity.unwrap_or(1.0))?;
     writer.write_color(Some(shadow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?; // native color
     Ok(())
@@ -420,16 +446,26 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
         count += 1;
     }
 
-    writer.write_u16(0)?; // version
-    writer.write_u16(count)?;
+    writer.write_bytes(&encode_be(
+        &EffectsHeaderRecord {
+            version: 0,
+            effects_count: count,
+        },
+        "effects header",
+    )?)?;
 
     // Common state
     writer.write_signature("8BIM")?;
     writer.write_signature("cmnS")?;
-    writer.write_u32(7)?; // size
-    writer.write_u32(0)?; // version
-    writer.write_u8(1)?; // visible
-    writer.write_zeros(2)?;
+    writer.write_bytes(&encode_be(
+        &EffectsCommonStateRecord {
+            size: 7,
+            version: 0,
+            visible: 1,
+            padding: [0; 2],
+        },
+        "effects common state",
+    )?)?;
 
     if let Some(shadow) = drop_shadow {
         writer.write_signature("8BIM")?;
@@ -446,8 +482,13 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
     if let Some(glow) = outer_glow {
         writer.write_signature("8BIM")?;
         writer.write_signature("oglw")?;
-        writer.write_u32(42)?;
-        writer.write_u32(2)?;
+        writer.write_bytes(&encode_be(
+            &EffectBlockHeaderRecord {
+                block_size: 42,
+                version: 2,
+            },
+            "outer glow header",
+        )?)?;
         writer.write_fixed_point_32(glow.size.as_ref().map(|s| s.value).unwrap_or(0.0))?;
         writer.write_fixed_point_32(0.0)?; // intensity
         writer.write_color(Some(glow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
@@ -460,8 +501,13 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
     if let Some(glow) = inner_glow {
         writer.write_signature("8BIM")?;
         writer.write_signature("iglw")?;
-        writer.write_u32(43)?;
-        writer.write_u32(2)?;
+        writer.write_bytes(&encode_be(
+            &EffectBlockHeaderRecord {
+                block_size: 43,
+                version: 2,
+            },
+            "inner glow header",
+        )?)?;
         writer.write_fixed_point_32(glow.size.as_ref().map(|s| s.value).unwrap_or(0.0))?;
         writer.write_fixed_point_32(0.0)?; // intensity
         writer.write_color(Some(glow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
@@ -475,39 +521,84 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
     if let Some(bevel_effect) = bevel {
         writer.write_signature("8BIM")?;
         writer.write_signature("bevl")?;
-        writer.write_u32(78)?;
-        writer.write_u32(2)?;
+        writer.write_bytes(&encode_be(
+            &EffectBlockHeaderRecord {
+                block_size: 78,
+                version: 2,
+            },
+            "bevel header",
+        )?)?;
         writer.write_fixed_point_32(bevel_effect.angle.unwrap_or(0.0))?;
         writer.write_fixed_point_32(bevel_effect.strength.unwrap_or(0.0))?;
         writer.write_fixed_point_32(bevel_effect.size.as_ref().map(|s| s.value).unwrap_or(0.0))?;
-        write_blend_mode(writer, bevel_effect.highlight_blend_mode.unwrap_or(BlendMode::Normal))?;
-        write_blend_mode(writer, bevel_effect.shadow_blend_mode.unwrap_or(BlendMode::Normal))?;
-        writer.write_color(Some(bevel_effect.highlight_color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
-        writer.write_color(Some(bevel_effect.shadow_color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
-        
+        write_blend_mode(
+            writer,
+            bevel_effect
+                .highlight_blend_mode
+                .unwrap_or(BlendMode::Normal),
+        )?;
+        write_blend_mode(
+            writer,
+            bevel_effect.shadow_blend_mode.unwrap_or(BlendMode::Normal),
+        )?;
+        writer.write_color(Some(
+            bevel_effect
+                .highlight_color
+                .as_ref()
+                .unwrap_or(&DEFAULT_COLOR),
+        ))?;
+        writer.write_color(Some(
+            bevel_effect.shadow_color.as_ref().unwrap_or(&DEFAULT_COLOR),
+        ))?;
+
         let style = bevel_effect.style.unwrap_or(BevelStyle::InnerBevel);
-        let style_index = BEVEL_STYLES_MAP.iter()
+        let style_index = BEVEL_STYLES_MAP
+            .iter()
             .position(|&s| s == style)
             .unwrap_or(2);
         writer.write_u8(style_index as u8)?;
-        
+
         write_fixed_point8(writer, bevel_effect.highlight_opacity.unwrap_or(0.0))?;
         write_fixed_point8(writer, bevel_effect.shadow_opacity.unwrap_or(0.0))?;
-        writer.write_u8(if bevel_effect.enabled.unwrap_or(false) { 1 } else { 0 })?;
-        writer.write_u8(if bevel_effect.use_global_light.unwrap_or(false) { 1 } else { 0 })?;
-        
+        writer.write_u8(if bevel_effect.enabled.unwrap_or(false) {
+            1
+        } else {
+            0
+        })?;
+        writer.write_u8(if bevel_effect.use_global_light.unwrap_or(false) {
+            1
+        } else {
+            0
+        })?;
+
         let direction = bevel_effect.direction.unwrap_or(BevelDirection::Up);
-        writer.write_u8(if direction == BevelDirection::Down { 1 } else { 0 })?;
-        
-        writer.write_color(Some(bevel_effect.highlight_color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
-        writer.write_color(Some(bevel_effect.shadow_color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
+        writer.write_u8(if direction == BevelDirection::Down {
+            1
+        } else {
+            0
+        })?;
+
+        writer.write_color(Some(
+            bevel_effect
+                .highlight_color
+                .as_ref()
+                .unwrap_or(&DEFAULT_COLOR),
+        ))?;
+        writer.write_color(Some(
+            bevel_effect.shadow_color.as_ref().unwrap_or(&DEFAULT_COLOR),
+        ))?;
     }
 
     if let Some(fill) = solid_fill {
         writer.write_signature("8BIM")?;
         writer.write_signature("sofi")?;
-        writer.write_u32(34)?;
-        writer.write_u32(2)?;
+        writer.write_bytes(&encode_be(
+            &EffectBlockHeaderRecord {
+                block_size: 34,
+                version: 2,
+            },
+            "solid fill header",
+        )?)?;
         write_blend_mode(writer, fill.blend_mode.unwrap_or(BlendMode::Normal))?;
         writer.write_color(Some(fill.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
         write_fixed_point8(writer, fill.opacity.unwrap_or(0.0))?;

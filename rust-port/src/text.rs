@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::types::*;
+use serde::{Deserialize, Serialize};
 
 /// Font information
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

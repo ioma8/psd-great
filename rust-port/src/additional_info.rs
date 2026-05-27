@@ -4,16 +4,24 @@
 //! vector masks, layer effects, smart objects, and other layer properties.
 
 use crate::adjustments::AdjustmentLayer;
-use crate::error::{PsdError, Result};
-use crate::reader::PsdReader;
-use crate::writer::PsdWriter;
+use crate::binrw_support::{
+    decode_be, encode_be, LayerColorRecord, NameSourceRecord, ProtectedFlagsRecord,
+    SectionDividerBaseRecord, SectionDividerExtendedRecord, U32ValueRecord, U8BoolRecord,
+};
+use crate::compression;
 use crate::descriptor::{Descriptor, DescriptorValue};
+use crate::error::{PsdError, Result};
+use crate::layer::{KeyDescriptorItem, Layer, LinkedFile, RRectRadii, VectorOrigination};
+use crate::reader::PsdReader;
+use crate::text::UnitsBounds;
 use crate::types::Color;
+use crate::types::{Units, UnitsValue};
+use crate::writer::PsdWriter;
 use std::collections::HashMap;
 use std::io::{Read, Seek};
 
 /// Layer additional information
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct LayerAdditionalInfo {
     /// Unicode layer name
     pub unicode_name: Option<String>,
@@ -53,18 +61,157 @@ pub struct LayerAdditionalInfo {
     pub metadata: Option<Metadata>,
     /// Adjustment layer data (brit/levl/curv/expA/blnc/phfl/hue2/selc/mixr/post/thrs/nvrt/grdm/blwh)
     pub adjustment: Option<AdjustmentLayer>,
-    /// Raw bytes of Lr16 or Lr32 nested high-bit-depth layer section
-    pub high_depth_layer_data: Option<(String, Vec<u8>)>,
-    /// Raw bytes of lnk2/lnkD/lnk3 linked layer (smart object) block
-    pub linked_layer_data: Option<Vec<u8>>,
+    /// Fill opacity (iOpa)
+    pub fill_opacity: Option<u8>,
+    /// Layer mask as global mask (lmgm)
+    pub lmgm: Option<u8>,
+    /// Vector mask as global mask (vmgm)
+    pub vmgm: Option<u8>,
+    /// Filter CMYK flag (fcmy)
+    pub fcmy: Option<u8>,
+    /// Layer version (lyvr)
+    pub layer_version: Option<u32>,
+    /// Channel blending restrictions (brst)
+    pub blending_restrictions: Option<[u8; 3]>,
+    /// Reference point (fxrp)
+    pub reference_point: Option<Point>,
+    /// Filter mask payload (FMsk)
+    pub filter_mask: Option<Vec<u8>>,
+    /// Shape pattern status (shpa)
+    pub shape_pattern: Option<ShapePatternStatus>,
+    /// Typed Lr16 or Lr32 nested high-bit-depth layer section
+    pub high_depth_layer_data: Option<HighDepthLayerInfo>,
+    /// Linked smart object file block
+    pub linked_files: Option<LinkedFilesBlock>,
     /// Vector origination data
-    pub vector_origination: Option<Vec<u8>>,
+    pub vector_origination: Option<VectorOrigination>,
     /// Layer effects descriptor (lmfx/lfxs blocks)
     pub layer_effects_descriptor: Option<Descriptor>,
-    /// Pattern block raw bytes (Patt/Pat2/Pat3)
-    pub pattern_data: Option<(String, Vec<u8>)>,
-    /// Unknown sections (for preservation)
-    pub unknown: HashMap<String, Vec<u8>>,
+    /// Additional descriptor-backed blocks keyed by tagged-block name.
+    pub descriptor_blocks: HashMap<String, Descriptor>,
+    /// Pattern block data (Patt/Pat2/Pat3)
+    pub pattern_data: Option<PatternBlock>,
+    /// Text engine data (Txt2) - engine_data payload
+    pub text_engine: Option<TextEngineBlock>,
+    /// Annotation items (Anno)
+    pub annotations: Option<Vec<AnnotationItem>>,
+    /// Filter effects (FEid)
+    pub filter_effects: Option<FilterEffectsBlock>,
+    /// Pixel source data (PxSD)
+    pub pixel_source_data: Option<PixelSourceDataBlock>,
+}
+
+/// Text engine block (Txt2) containing engine data
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextEngineBlock {
+    pub data: crate::engine_data::EngineValue,
+}
+
+/// Annotation item (Anno)
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnnotationItem {
+    pub x: i32,
+    pub y: i32,
+    pub color_l: u16,
+    pub color_o: u16,
+    pub color_c: u16,
+    pub author: String,
+    pub text: String,
+}
+
+/// Filter effects block (FEid)
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterEffectsBlock {
+    pub version: u32,
+    pub items: Vec<FilterEffectsItem>,
+}
+
+/// Filter effects item
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterEffectsItem {
+    pub id: String,
+    pub version: Option<u32>,
+    pub rect: Option<FilterEffectsRect>,
+    pub depth: Option<u32>,
+    pub channel_count: Option<u32>,
+    pub slots: Option<Vec<FilterEffectsSlot>>,
+    pub preview: Option<FilterEffectsPreview>,
+    pub buffer: Option<Vec<u8>>,
+}
+
+/// Filter effects rectangle
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FilterEffectsRect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+/// Filter effects slot
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterEffectsSlot {
+    pub slot: u32,
+    pub raw: Vec<u8>,
+}
+
+/// Filter effects preview
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterEffectsPreview {
+    pub rect: FilterEffectsRect,
+    pub raw: Vec<u8>,
+    pub buffer: Option<Vec<u8>>,
+}
+
+/// Pixel source data block (PxSD)
+#[derive(Debug, Clone, PartialEq)]
+pub struct PixelSourceDataBlock {
+    pub items: Vec<PixelSourceDataItem>,
+}
+
+/// Pixel source data item
+#[derive(Debug, Clone, PartialEq)]
+pub struct PixelSourceDataItem {
+    pub key: u32,
+    pub images: Option<Vec<PixelSourceDataImage>>,
+}
+
+/// Pixel source data image
+#[derive(Debug, Clone, PartialEq)]
+pub struct PixelSourceDataImage {
+    pub index: u32,
+    pub rect: Option<FilterEffectsRect>,
+    pub buffer: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapePatternStatus {
+    pub version: u32,
+    pub present_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternBlock {
+    pub key: String,
+    pub patterns: Vec<PatternBlockEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternBlockEntry {
+    pub name: String,
+    pub id: String,
+    pub version: u32,
+    pub mode: u32,
+    pub width: u16,
+    pub height: u16,
+    pub palette: Option<Vec<u8>>,
+    pub buffer: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HighDepthLayerInfo {
+    pub key: String,
+    pub layers: Vec<Layer>,
 }
 
 /// Layer color label
@@ -91,7 +238,10 @@ impl LayerColor {
             5 => Ok(LayerColor::Blue),
             6 => Ok(LayerColor::Violet),
             7 => Ok(LayerColor::Gray),
-            _ => Err(PsdError::InvalidFormat(format!("Invalid layer color: {}", value))),
+            _ => Err(PsdError::InvalidFormat(format!(
+                "Invalid layer color: {}",
+                value
+            ))),
         }
     }
 }
@@ -231,27 +381,337 @@ pub struct MetadataEntry {
     pub data: Vec<u8>,
 }
 
-/// Metadata (shmd block — zero or more tagged entries)
+/// Metadata (shmd block - zero or more tagged entries)
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Metadata {
     pub entries: Vec<MetadataEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkedFilesBlock {
+    pub key: String,
+    pub items: Vec<LinkedFile>,
+}
+
 impl<R: Read + Seek> PsdReader<R> {
+    fn descriptor_bool(desc: &Descriptor, key: &str) -> Option<bool> {
+        match desc.items.get(key) {
+            Some(DescriptorValue::Boolean(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    fn descriptor_int(desc: &Descriptor, key: &str) -> Option<i32> {
+        match desc.items.get(key) {
+            Some(DescriptorValue::Integer(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    fn descriptor_number(desc: &Descriptor, key: &str) -> Option<f64> {
+        match desc.items.get(key) {
+            Some(DescriptorValue::Double(v)) => Some(*v),
+            Some(DescriptorValue::Float(v)) => Some(*v as f64),
+            Some(DescriptorValue::Integer(v)) => Some(*v as f64),
+            Some(DescriptorValue::UnitDouble { value, .. }) => Some(*value),
+            Some(DescriptorValue::UnitFloat { value, .. }) => Some(*value),
+            _ => None,
+        }
+    }
+
+    fn descriptor_units_value(desc: &Descriptor, key: &str) -> Option<UnitsValue> {
+        match desc.items.get(key) {
+            Some(DescriptorValue::UnitDouble { units, value })
+            | Some(DescriptorValue::UnitFloat { units, value }) => Some(UnitsValue {
+                units: match units.as_str() {
+                    "Pixels" => Units::Pixels,
+                    "Points" => Units::Points,
+                    "Millimeters" => Units::Millimeters,
+                    "Centimeters" => Units::Centimeters,
+                    "Inches" => Units::Inches,
+                    "Density" => Units::Density,
+                    _ => Units::None,
+                },
+                value: *value,
+            }),
+            _ => None,
+        }
+    }
+
+    fn descriptor_points(desc: &Descriptor, key: &str) -> Option<Vec<crate::types::Point>> {
+        match desc.items.get(key) {
+            Some(DescriptorValue::Descriptor(inner)) => match inner.items.get("points") {
+                Some(DescriptorValue::List(items)) => {
+                    let mut points = Vec::new();
+                    let mut iter = items.iter();
+                    while let (Some(x), Some(y)) = (iter.next(), iter.next()) {
+                        let x = match x {
+                            DescriptorValue::Double(v) => *v,
+                            DescriptorValue::Float(v) => *v as f64,
+                            DescriptorValue::Integer(v) => *v as f64,
+                            _ => 0.0,
+                        };
+                        let y = match y {
+                            DescriptorValue::Double(v) => *v,
+                            DescriptorValue::Float(v) => *v as f64,
+                            DescriptorValue::Integer(v) => *v as f64,
+                            _ => 0.0,
+                        };
+                        points.push(crate::types::Point { x, y });
+                    }
+                    Some(points)
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn descriptor_bounds(desc: &Descriptor, key: &str) -> Option<UnitsBounds> {
+        let inner = match desc.items.get(key) {
+            Some(DescriptorValue::Descriptor(inner)) => inner,
+            _ => return None,
+        };
+        Some(UnitsBounds {
+            top: Self::descriptor_units_value(inner, "Top")?,
+            left: Self::descriptor_units_value(inner, "Left")?,
+            right: Self::descriptor_units_value(inner, "Rght")?,
+            bottom: Self::descriptor_units_value(inner, "Btom")?,
+        })
+    }
+
+    fn descriptor_rrect(desc: &Descriptor, key: &str) -> Option<RRectRadii> {
+        let inner = match desc.items.get(key) {
+            Some(DescriptorValue::Descriptor(inner)) => inner,
+            _ => return None,
+        };
+        Some(RRectRadii {
+            top_right: Self::descriptor_units_value(inner, "topRight")?,
+            top_left: Self::descriptor_units_value(inner, "topLeft")?,
+            bottom_left: Self::descriptor_units_value(inner, "bottomLeft")?,
+            bottom_right: Self::descriptor_units_value(inner, "bottomRight")?,
+        })
+    }
+
+    fn read_blending_restrictions(
+        &mut self,
+        info: &mut LayerAdditionalInfo,
+        length: usize,
+    ) -> Result<()> {
+        let mut restrictions = [1u8, 1u8, 1u8];
+        let count = length / 4;
+        for _ in 0..count {
+            let index = self.read_u32()? as usize;
+            if index < 3 {
+                restrictions[index] = 0;
+            }
+        }
+        info.blending_restrictions = Some(restrictions);
+        Ok(())
+    }
+
+    fn read_reference_point(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
+        info.reference_point = Some(Point {
+            x: self.read_f64()?,
+            y: self.read_f64()?,
+        });
+        Ok(())
+    }
+
+    fn decode_pattern_channel(
+        &mut self,
+        width: usize,
+        height: usize,
+        length: usize,
+    ) -> Result<Vec<u8>> {
+        if length == 0 {
+            return Ok(vec![0; width * height]);
+        }
+
+        let depth = self.read_u32()? as usize;
+        self.skip_bytes(16)?;
+        let compression = self.read_u16()?;
+        self.skip_bytes(1)?;
+        let remaining = length.saturating_sub(23);
+        let bytes_per_sample = depth / 8;
+        let row_width = width * bytes_per_sample;
+
+        if compression == 1 {
+            let mut row_lengths = Vec::with_capacity(height);
+            for _ in 0..height {
+                row_lengths.push(self.read_u16()?);
+            }
+            let encoded_length = remaining.saturating_sub(height * 2);
+            let encoded = self.read_bytes(encoded_length)?;
+            let mut out = vec![0u8; row_width * height];
+            compression::decompress_rle(&encoded, &mut out, row_width, height, &row_lengths)?;
+            Ok(out)
+        } else {
+            self.read_bytes((row_width * height).min(remaining))
+        }
+    }
+
+    fn interleave_pattern_buffer(
+        mode: u32,
+        width: usize,
+        height: usize,
+        palette: Option<&[u8]>,
+        channels: &[Vec<u8>],
+        alpha: Option<&[u8]>,
+    ) -> Option<Vec<u8>> {
+        let pixel_count = width * height;
+        let mut rgba = vec![255u8; pixel_count * 4];
+        match mode {
+            3 => {
+                let red = channels.first()?;
+                let green = channels.get(1).unwrap_or(red);
+                let blue = channels.get(2).unwrap_or(red);
+                for index in 0..pixel_count {
+                    rgba[index * 4] = *red.get(index).unwrap_or(&0);
+                    rgba[index * 4 + 1] = *green.get(index).unwrap_or(&0);
+                    rgba[index * 4 + 2] = *blue.get(index).unwrap_or(&0);
+                    rgba[index * 4 + 3] = alpha.and_then(|a| a.get(index)).copied().unwrap_or(255);
+                }
+                Some(rgba)
+            }
+            1 => {
+                let gray = channels.first()?;
+                for index in 0..pixel_count {
+                    let value = *gray.get(index).unwrap_or(&0);
+                    rgba[index * 4] = value;
+                    rgba[index * 4 + 1] = value;
+                    rgba[index * 4 + 2] = value;
+                    rgba[index * 4 + 3] = alpha.and_then(|a| a.get(index)).copied().unwrap_or(255);
+                }
+                Some(rgba)
+            }
+            2 => {
+                let palette = palette?;
+                let indexed = channels.first()?;
+                for index in 0..pixel_count {
+                    let color_index = *indexed.get(index).unwrap_or(&0) as usize;
+                    let palette_offset = color_index * 3;
+                    rgba[index * 4] = *palette.get(palette_offset).unwrap_or(&0);
+                    rgba[index * 4 + 1] = *palette.get(palette_offset + 1).unwrap_or(&0);
+                    rgba[index * 4 + 2] = *palette.get(palette_offset + 2).unwrap_or(&0);
+                    rgba[index * 4 + 3] = alpha.and_then(|a| a.get(index)).copied().unwrap_or(255);
+                }
+                Some(rgba)
+            }
+            _ => None,
+        }
+    }
+
+    fn read_pattern_entry(&mut self, length: usize) -> Result<PatternBlockEntry> {
+        let start = self.offset;
+        let version = self.read_u32()?;
+        let mode = self.read_u32()?;
+        let height = self.read_u16()?;
+        let width = self.read_u16()?;
+        let name = self.read_unicode_string()?;
+        let id = self.read_pascal_string(1)?;
+        let palette = if mode == 2 {
+            let palette = self.read_bytes(3 * 256)?;
+            self.read_u32()?;
+            Some(palette)
+        } else {
+            None
+        };
+        self.read_u32()?;
+        self.read_u32()?;
+        self.skip_bytes(16)?;
+        let channel_count = self.read_u32()? as usize;
+        let width_usize = width as usize;
+        let height_usize = height as usize;
+        let mut channels = Vec::new();
+        let mut alpha = None;
+        for channel_index in 0..(channel_count + 2) {
+            let present = self.read_u32()?;
+            if present == 0 {
+                continue;
+            }
+            let channel_length = self.read_u32()? as usize;
+            if channel_length == 0 {
+                continue;
+            }
+            let channel = self.decode_pattern_channel(width_usize, height_usize, channel_length)?;
+            if channel_index < channel_count {
+                channels.push(channel);
+            } else if channel_index == channel_count + 1 {
+                alpha = Some(channel);
+            }
+        }
+        let consumed = (self.offset - start) as usize;
+        if consumed < length {
+            self.skip_bytes(length - consumed)?;
+        }
+        Ok(PatternBlockEntry {
+            name,
+            id,
+            version,
+            mode,
+            width,
+            height,
+            palette: palette.clone(),
+            buffer: Self::interleave_pattern_buffer(
+                mode,
+                width_usize,
+                height_usize,
+                palette.as_deref(),
+                &channels,
+                alpha.as_deref(),
+            ),
+        })
+    }
+
+    fn read_pattern_block(&mut self, key: &str, length: usize) -> Result<PatternBlock> {
+        let start = self.offset;
+        let mut patterns = Vec::new();
+        while (self.offset - start) < length as u64 {
+            let entry_length = self.read_u32()? as usize;
+            let entry_start = self.offset;
+            patterns.push(self.read_pattern_entry(entry_length)?);
+            let consumed = (self.offset - entry_start) as usize;
+            if consumed < entry_length {
+                self.skip_bytes(entry_length - consumed)?;
+            }
+            let padding = entry_length % 4;
+            if padding != 0 && (self.offset - start) < length as u64 {
+                self.skip_bytes(4 - padding)?;
+            }
+        }
+        Ok(PatternBlock {
+            key: key.to_string(),
+            patterns,
+        })
+    }
+
     /// Read layer additional info section
-    pub fn read_additional_info(&mut self, key: &str, length: usize, info: &mut LayerAdditionalInfo) -> Result<()> {
+    pub fn read_additional_info(
+        &mut self,
+        key: &str,
+        length: usize,
+        info: &mut LayerAdditionalInfo,
+    ) -> Result<()> {
         let start_offset = self.offset;
-        
+
         match key {
             "luni" => self.read_unicode_layer_name(info)?,
             "lyid" => self.read_layer_id(info)?,
             "lclr" => self.read_layer_color(info)?,
+            "iOpa" => info.fill_opacity = Some(self.read_u8()?),
             "lsct" | "lsdk" => self.read_section_divider(info, length)?,
             "clbl" => self.read_blend_clipped(info)?,
             "infx" => self.read_blend_interior(info)?,
             "knko" => self.read_knockout(info)?,
             "lspf" => self.read_protected_flags(info, length)?,
             "lnsr" => self.read_name_source(info)?,
+            "lyvr" => info.layer_version = Some(self.read_u32()?),
+            "lmgm" => info.lmgm = Some(self.read_u8()?),
+            "vmgm" => info.vmgm = Some(self.read_u8()?),
+            "fcmy" => info.fcmy = Some(self.read_u8()?),
+            "brst" => self.read_blending_restrictions(info, length)?,
+            "fxrp" => self.read_reference_point(info)?,
             "TySh" => self.read_text_layer(info, length)?,
             "SoCo" | "GdFl" | "PtFl" => self.read_vector_fill(info, key)?,
             "vstk" => self.read_vector_stroke(info, length)?,
@@ -259,21 +719,70 @@ impl<R: Read + Seek> PsdReader<R> {
             "vmsk" | "vsms" => self.read_vector_mask(info, length)?,
             "vogk" => self.read_vector_origination(info, length)?,
             "lrFX" | "lfx2" => self.read_layer_effects(info, key, length)?,
-            "PlLd" | "SoLd" => self.read_placed_layer(info, key, length)?,
+            "PlLd" => self.read_placed_layer(info, key, length)?,
+            "SoLd" => self.read_sold_layer(info, length)?,
             "artb" | "artd" => self.read_artboard(info, key, length)?,
             "sn2P" => self.read_using_aligned_rendering(info)?,
             "shmd" => self.read_metadata(info, length)?,
-            "brit" | "levl" | "curv" | "expA" | "blnc" | "phfl" | "hue2" |
-            "selc" | "mixr" | "post" | "thrs" | "nvrt" | "grdm" | "blwh" => {
+            "brit" | "levl" | "curv" | "expA" | "blnc" | "phfl" | "hue2" | "selc" | "mixr"
+            | "post" | "thrs" | "nvrt" | "grdm" | "blwh" => {
                 let data = self.read_bytes(length)?;
                 info.adjustment = Some(AdjustmentLayer::from_key_and_bytes(key, &data)?);
             }
             "Lr16" | "Lr32" => {
                 let data = self.read_bytes(length)?;
-                info.high_depth_layer_data = Some((key.to_string(), data));
+                let bits = if key == "Lr16" { 16 } else { 32 };
+                let layers = crate::reader::read_nested_layer_info_block(&data, bits)?;
+                info.high_depth_layer_data = Some(HighDepthLayerInfo {
+                    key: key.to_string(),
+                    layers,
+                });
             }
-            "lnk2" | "lnkD" | "lnk3" => {
-                info.linked_layer_data = Some(self.read_bytes(length)?);
+            "lnk2" | "lnkD" | "lnkD__" | "lnk3" => {
+                let block_end = start_offset + length as u64;
+                let mut items = Vec::new();
+                while self.offset < block_end {
+                    let chunk_length = self.read_u32()? as u64;
+                    let low = self.read_u32()? as u64;
+                    let chunk_length = (chunk_length << 32) | low;
+                    let chunk_start = self.offset;
+                    let kind = self.read_signature()?;
+                    let _version = self.read_u32()?;
+                    let id = self.read_pascal_string(1)?;
+                    let name = self.read_unicode_string()?;
+                    let file_type = self.read_signature()?;
+                    let creator = self.read_signature()?;
+                    let payload_high = self.read_u32()? as u64;
+                    let payload_low = self.read_u32()? as u64;
+                    let payload_length = (payload_high << 32) | payload_low;
+                    let _open = self.read_u8()?;
+                    let data = self.read_bytes(payload_length as usize)?;
+                    let remaining =
+                        (chunk_start + chunk_length).saturating_sub(self.offset) as usize;
+                    if remaining > 0 {
+                        self.skip_bytes(remaining)?;
+                    }
+                    if chunk_length % 4 != 0 {
+                        self.skip_bytes((4 - (chunk_length % 4)) as usize)?;
+                    }
+                    items.push(LinkedFile {
+                        id,
+                        name,
+                        file_type: Some(file_type),
+                        creator: Some(creator),
+                        data: Some(data),
+                        time: None,
+                        descriptor: None,
+                        child_document_id: Some(kind),
+                        asset_mod_time: None,
+                        asset_locked_state: None,
+                        linked_file: None,
+                    });
+                }
+                info.linked_files = Some(LinkedFilesBlock {
+                    key: key.to_string(),
+                    items,
+                });
             }
             "lmfx" | "lfxs" => {
                 // u32 version + u32 (descriptor version) + descriptor
@@ -281,29 +790,276 @@ impl<R: Read + Seek> PsdReader<R> {
                 let descriptor = self.read_version_and_descriptor()?;
                 info.layer_effects_descriptor = Some(descriptor);
             }
-            "Patt" | "Pat2" | "Pat3" => {
-                let data = self.read_bytes(length)?;
-                info.pattern_data = Some((key.to_string(), data));
+            "FMsk" => {
+                info.filter_mask = Some(self.read_bytes(length)?);
             }
-            "FMsk" | "Anno" | "iOpa" | "vmgm" | "lmgm" |
-            "fcmy" | "shpa" | "pths" | "CgEd" | "vibA" | "PxSc" | "phry"  |
-            "clrL" | "rplc" | "lyvr" | "fxrp" | "brst" => {
-                let data = self.read_bytes(length)?;
-                info.unknown.insert(key.to_string(), data);
+            "shpa" => {
+                info.shape_pattern = Some(ShapePatternStatus {
+                    version: self.read_u32()?,
+                    present_count: self.read_u32()?,
+                });
+            }
+            "Patt" | "Pat2" | "Pat3" => {
+                info.pattern_data = Some(self.read_pattern_block(key, length)?);
+            }
+            "clrL" | "rplc" => {
+                // u16 + u32 + descriptor
+                let _ = self.read_u16()?;
+                let _ = self.read_u32()?;
+                let descriptor = self.read_descriptor_structure()?;
+                info.descriptor_blocks.insert(key.to_string(), descriptor);
+            }
+            "pths" | "CgEd" | "vibA" | "PxSc" | "phry" => {
+                let _version = self.read_u32()?;
+                let descriptor = self.read_descriptor_structure()?;
+                info.descriptor_blocks.insert(key.to_string(), descriptor);
+            }
+            "Txt2" => {
+                let raw = self.read_bytes(length)?;
+                let parsed = crate::engine_data::parse_engine_data(&raw)
+                    .map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
+                info.text_engine = Some(TextEngineBlock { data: parsed });
+            }
+            "Anno" => {
+                let _major = self.read_u16()?;
+                let _minor = self.read_u16()?;
+                let count = self.read_u32()? as usize;
+                let mut items = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let item_length = self.read_u32()? as usize;
+                    let item_start = self.offset;
+                    let signature = self.read_signature()?;
+                    if signature != "txtA" {
+                        return Err(PsdError::InvalidFormat(format!(
+                            "Unexpected annotation signature: {}",
+                            signature
+                        )));
+                    }
+                    self.skip_bytes(4)?;
+                    let x = self.read_i32()?;
+                    let y = self.read_i32()?;
+                    self.skip_bytes(24)?;
+                    let color_l = self.read_u16()?;
+                    let color_o = self.read_u16()?;
+                    let color_c = self.read_u16()?;
+                    let author = self.read_pascal_string(2)?;
+                    let _ = self.read_pascal_string(2)?;
+                    let _ = self.read_pascal_string(2)?;
+                    let _text_len = self.read_u32()? as usize;
+                    let block = self.read_signature()?;
+                    if block != "txtC" {
+                        return Err(PsdError::InvalidFormat(format!(
+                            "Unexpected annotation text block: {}",
+                            block
+                        )));
+                    }
+                    let chars_len = self.read_u32()? as usize;
+                    self.skip_bytes(2)?;
+                    let text = self.read_unicode_string_with_length(chars_len / 2)?;
+                    let consumed = (self.offset - item_start) as usize;
+                    if consumed < item_length {
+                        self.skip_bytes(item_length - consumed)?;
+                    }
+                    items.push(AnnotationItem {
+                        x,
+                        y,
+                        color_l,
+                        color_o,
+                        color_c,
+                        author,
+                        text,
+                    });
+                }
+                info.annotations = Some(items);
+            }
+            "FEid" => {
+                let block_end = start_offset + length as u64;
+                let version = self.read_u32()?;
+                let mut items = Vec::new();
+                while self.offset < block_end {
+                    let high = self.read_u32()? as u64;
+                    let low = self.read_u32()? as u64;
+                    let chunk_length = (high << 32) | low;
+                    let chunk_start = self.offset;
+                    let id = self.read_pascal_string(1)?;
+                    let item_version = if self.offset + 4 <= chunk_start + chunk_length {
+                        Some(self.read_u32()?)
+                    } else {
+                        None
+                    };
+                    if self.offset + 4 <= chunk_start + chunk_length {
+                        let _ = self.read_u32()?;
+                    }
+                    let mut rect = None;
+                    let mut depth = None;
+                    let mut channel_count = None;
+                    let mut slots = Vec::new();
+                    let mut preview = None;
+                    if self.offset + 24 <= chunk_start + chunk_length {
+                        rect = Some(FilterEffectsRect {
+                            left: self.read_i32()?,
+                            top: self.read_i32()?,
+                            right: self.read_i32()?,
+                            bottom: self.read_i32()?,
+                        });
+                        depth = Some(self.read_u32()?);
+                        let ch_count = self.read_u32()?;
+                        channel_count = Some(ch_count);
+                        for slot_index in 0..ch_count + 2 {
+                            if self.offset + 4 > chunk_start + chunk_length {
+                                break;
+                            }
+                            let present = self.read_u32()?;
+                            if present != 0 && self.offset + 8 <= chunk_start + chunk_length {
+                                let slot_high = self.read_u32()? as u64;
+                                let slot_low = self.read_u32()? as u64;
+                                let slot_length = (slot_high << 32) | slot_low;
+                                if slot_length
+                                    <= (chunk_start + chunk_length).saturating_sub(self.offset)
+                                {
+                                    let slot_raw = self.read_bytes(slot_length as usize)?;
+                                    slots.push(FilterEffectsSlot {
+                                        slot: slot_index,
+                                        raw: slot_raw,
+                                    });
+                                }
+                            }
+                        }
+                        if self.offset < chunk_start + chunk_length {
+                            let has_preview = self.read_u8()?;
+                            if has_preview != 0 && self.offset + 24 <= chunk_start + chunk_length {
+                                let preview_rect = FilterEffectsRect {
+                                    left: self.read_i32()?,
+                                    top: self.read_i32()?,
+                                    right: self.read_i32()?,
+                                    bottom: self.read_i32()?,
+                                };
+                                let preview_high = self.read_u32()? as u64;
+                                let preview_low = self.read_u32()? as u64;
+                                let preview_len = (preview_high << 32) | preview_low;
+                                let remaining =
+                                    (chunk_start + chunk_length).saturating_sub(self.offset);
+                                let preview_raw = if preview_len > 0 && preview_len <= remaining {
+                                    self.read_bytes(preview_len as usize)?
+                                } else {
+                                    Vec::new()
+                                };
+                                preview = Some(FilterEffectsPreview {
+                                    rect: preview_rect,
+                                    raw: preview_raw,
+                                    buffer: None,
+                                });
+                            }
+                        }
+                    }
+                    self.skip_bytes(
+                        (chunk_start + chunk_length).saturating_sub(self.offset) as usize
+                    )?;
+                    if chunk_length % 4 != 0 {
+                        self.skip_bytes((4 - (chunk_length % 4)) as usize)?;
+                    }
+                    let buffer = None;
+                    items.push(FilterEffectsItem {
+                        id,
+                        version: item_version,
+                        rect,
+                        depth,
+                        channel_count,
+                        slots: if slots.is_empty() { None } else { Some(slots) },
+                        preview,
+                        buffer,
+                    });
+                }
+                info.filter_effects = Some(FilterEffectsBlock { version, items });
+            }
+            "PxSD" => {
+                let block_end = start_offset + length as u64;
+                let mut items = Vec::new();
+                while self.offset + 8 <= block_end {
+                    let high = self.read_u32()? as u64;
+                    let low = self.read_u32()? as u64;
+                    let chunk_length = (high << 32) | low;
+                    let chunk_start = self.offset;
+                    let key_value = self.read_u32()?;
+                    let kind = self.read_u32()?;
+                    let mut images = Vec::new();
+                    if kind == 2 && self.offset + 12 <= chunk_start + chunk_length {
+                        let _ = self.read_u32()?;
+                        let _high = self.read_u32()?;
+                        let _low = self.read_u32()?;
+                        let image_count = self.read_u32()?;
+                        for _image_index in 0..image_count {
+                            if self.offset + 8 > chunk_start + chunk_length {
+                                break;
+                            }
+                            let img_high = self.read_u32()? as u64;
+                            let img_low = self.read_u32()? as u64;
+                            let img_length = (img_high << 32) | img_low;
+                            if img_length == 0 {
+                                break;
+                            }
+                            let img_start = self.offset;
+                            let parsed_index = self.read_u32()?;
+                            let _top = self.read_i32()?;
+                            let _left = self.read_i32()?;
+                            let _ = self.read_u32()?;
+                            let _ = self.read_u32()?;
+                            let mut rect = None;
+                            for _channel_index in 0..6 {
+                                if self.offset + 28 > img_start + img_length {
+                                    break;
+                                }
+                                let _ = self.read_u32()?;
+                                rect = Some(FilterEffectsRect {
+                                    left: self.read_i32()?,
+                                    top: self.read_i32()?,
+                                    right: self.read_i32()?,
+                                    bottom: self.read_i32()?,
+                                });
+                                let _ = self.read_u32()?;
+                                let payload_len = self.read_u32()? as usize;
+                                if payload_len > 0
+                                    && self.offset + payload_len as u64 <= img_start + img_length
+                                {
+                                    self.skip_bytes(payload_len)?;
+                                }
+                                break;
+                            }
+                            self.skip_bytes(
+                                (img_start + img_length).saturating_sub(self.offset) as usize
+                            )?;
+                            images.push(PixelSourceDataImage {
+                                index: parsed_index,
+                                rect,
+                                buffer: None,
+                            });
+                        }
+                    }
+                    self.skip_bytes(
+                        (chunk_start + chunk_length).saturating_sub(self.offset) as usize
+                    )?;
+                    items.push(PixelSourceDataItem {
+                        key: key_value,
+                        images: if images.is_empty() {
+                            None
+                        } else {
+                            Some(images)
+                        },
+                    });
+                }
+                info.pixel_source_data = Some(PixelSourceDataBlock { items });
             }
             _ => {
-                // Store unknown sections
-                let data = self.read_bytes(length)?;
-                info.unknown.insert(key.to_string(), data);
+                self.skip_bytes(length)?;
             }
         }
-        
+
         // Ensure we consumed exactly the right amount
         let consumed = (self.offset - start_offset) as usize;
         if consumed < length {
             self.skip_bytes(length - consumed)?;
         }
-        
+
         Ok(())
     }
 
@@ -321,62 +1077,79 @@ impl<R: Read + Seek> PsdReader<R> {
 
     /// Read layer color (lclr)
     fn read_layer_color(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        let color_value = self.read_u16()?;
-        self.skip_bytes(6)?; // Skip padding
-        info.layer_color = Some(LayerColor::from_u16(color_value)?);
+        let record: LayerColorRecord = decode_be(&self.read_bytes(8)?, "layer color")?;
+        info.layer_color = Some(LayerColor::from_u16(record.color_value)?);
         Ok(())
     }
 
     /// Read section divider (lsct/lsdk)
-    fn read_section_divider(&mut self, info: &mut LayerAdditionalInfo, length: usize) -> Result<()> {
-        let divider_type = self.read_u32()?;
-        
+    fn read_section_divider(
+        &mut self,
+        info: &mut LayerAdditionalInfo,
+        length: usize,
+    ) -> Result<()> {
+        let base: SectionDividerBaseRecord = decode_be(&self.read_bytes(4)?, "section divider")?;
+
         let mut blend_mode = None;
         let mut sub_type = None;
-        
+
         if length >= 12 {
-            let sig = self.read_signature()?;
-            if sig != "8BIM" {
-                return Err(PsdError::InvalidFormat(format!("Invalid section divider signature: {}", sig)));
+            let ext: SectionDividerExtendedRecord =
+                decode_be(&self.read_bytes(8)?, "section divider extended")?;
+            if &ext.signature != b"8BIM" {
+                return Err(PsdError::InvalidFormat(format!(
+                    "Invalid section divider signature: {}",
+                    String::from_utf8_lossy(&ext.signature),
+                )));
             }
-            blend_mode = Some(self.read_signature()?);
+            blend_mode = Some(String::from_utf8_lossy(&ext.blend_mode).to_string());
         }
-        
+
         if length >= 16 {
-            sub_type = Some(self.read_u32()?);
+            sub_type = Some(
+                decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "section divider subtype")?.value,
+            );
         }
-        
+
         info.section_divider = Some(SectionDivider {
-            divider_type,
+            divider_type: base.divider_type,
             blend_mode,
             sub_type,
         });
-        
+
         Ok(())
     }
 
     /// Read blend clipped elements (clbl)
     fn read_blend_clipped(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        info.blend_clipped = Some(self.read_u8()? != 0);
+        info.blend_clipped =
+            Some(decode_be::<U8BoolRecord>(&self.read_bytes(1)?, "blend clipped")?.value != 0);
         Ok(())
     }
 
     /// Read blend interior elements (infx)
     fn read_blend_interior(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        info.blend_interior = Some(self.read_u8()? != 0);
+        info.blend_interior =
+            Some(decode_be::<U8BoolRecord>(&self.read_bytes(1)?, "blend interior")?.value != 0);
         Ok(())
     }
 
     /// Read knockout mode (knko)
     fn read_knockout(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        info.knockout = Some(self.read_u8()? != 0);
+        info.knockout =
+            Some(decode_be::<U8BoolRecord>(&self.read_bytes(1)?, "knockout")?.value != 0);
         Ok(())
     }
 
     /// Read protected flags (lspf)
-    fn read_protected_flags(&mut self, info: &mut LayerAdditionalInfo, length: usize) -> Result<()> {
-        let flags = self.read_u32()?;
-        
+    fn read_protected_flags(
+        &mut self,
+        info: &mut LayerAdditionalInfo,
+        length: usize,
+    ) -> Result<()> {
+        let flags =
+            decode_be::<ProtectedFlagsRecord>(&self.read_bytes(4)?, "protected flags")?.flags;
+
         let protected = ProtectedFlags {
             transparency: (flags & 0x01) != 0,
             composite: (flags & 0x02) != 0,
@@ -387,14 +1160,15 @@ impl<R: Read + Seek> PsdReader<R> {
                 None
             },
         };
-        
+
         info.protected = Some(protected);
         Ok(())
     }
 
     /// Read layer name source (lnsr)
     fn read_name_source(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        info.name_source = Some(self.read_signature()?);
+        let record: NameSourceRecord = decode_be(&self.read_bytes(4)?, "name source")?;
+        info.name_source = Some(String::from_utf8_lossy(&record.signature).to_string());
         Ok(())
     }
 
@@ -402,44 +1176,61 @@ impl<R: Read + Seek> PsdReader<R> {
     fn read_text_layer(&mut self, info: &mut LayerAdditionalInfo, _length: usize) -> Result<()> {
         let version = self.read_i16()?;
         if version != 1 {
-            return Err(PsdError::InvalidFormat(format!("Invalid TySh version: {}", version)));
+            return Err(PsdError::InvalidFormat(format!(
+                "Invalid TySh version: {}",
+                version
+            )));
         }
-        
+
         // Read transform matrix (6 doubles)
         let mut transform = Vec::with_capacity(6);
         for _ in 0..6 {
             transform.push(self.read_f64()?);
         }
-        
+
         // Read text version
         let text_version = self.read_i16()? as u16;
         if text_version != 50 {
-            return Err(PsdError::InvalidFormat(format!("Invalid text version: {}", text_version)));
+            return Err(PsdError::InvalidFormat(format!(
+                "Invalid text version: {}",
+                text_version
+            )));
         }
-        
+
         // Read text descriptor
         let text_descriptor = self.read_version_and_descriptor()?;
-        
+
         // Read warp version
         let warp_version = self.read_i16()? as u16;
         if warp_version != 1 {
-            return Err(PsdError::InvalidFormat(format!("Invalid warp version: {}", warp_version)));
+            return Err(PsdError::InvalidFormat(format!(
+                "Invalid warp version: {}",
+                warp_version
+            )));
         }
-        
+
         // Read warp descriptor
         let warp_descriptor = self.read_version_and_descriptor()?;
-        
+
         // Read bounds
         let left = self.read_f32()?;
         let top = self.read_f32()?;
         let right = self.read_f32()?;
         let bottom = self.read_f32()?;
-        
+
         // Extract text from descriptor
-        let text = text_descriptor.items.get("Txt ")
-            .and_then(|v| if let DescriptorValue::Text(s) = v { Some(s.clone()) } else { None })
+        let text = text_descriptor
+            .items
+            .get("Txt ")
+            .and_then(|v| {
+                if let DescriptorValue::Text(s) = v {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
             .unwrap_or_default();
-        
+
         info.text = Some(TextLayerData {
             transform,
             text: text.replace('\r', "\n"),
@@ -453,26 +1244,27 @@ impl<R: Read + Seek> PsdReader<R> {
             right,
             bottom,
         });
-        
+
         Ok(())
     }
 
     /// Read vector fill (SoCo/GdFl/PtFl)
     fn read_vector_fill(&mut self, info: &mut LayerAdditionalInfo, key: &str) -> Result<()> {
-        let descriptor = self.read_version_and_descriptor()?;
-        
+        let _version = self.read_u32()?;
+        let descriptor = self.read_descriptor_structure()?;
+
         let fill_type = match key {
             "SoCo" => "color",
             "GdFl" => "gradient",
             "PtFl" => "pattern",
             _ => "unknown",
         };
-        
+
         info.vector_fill = Some(VectorFill {
             fill_type: fill_type.to_string(),
             data: descriptor,
         });
-        
+
         Ok(())
     }
 
@@ -480,7 +1272,10 @@ impl<R: Read + Seek> PsdReader<R> {
     fn read_vector_stroke(&mut self, info: &mut LayerAdditionalInfo, _length: usize) -> Result<()> {
         let version = self.read_u32()?;
         let descriptor = self.read_descriptor_structure()?;
-        info.vector_stroke = Some(VectorStroke { version, descriptor });
+        info.vector_stroke = Some(VectorStroke {
+            version,
+            descriptor,
+        });
         Ok(())
     }
 
@@ -489,65 +1284,79 @@ impl<R: Read + Seek> PsdReader<R> {
         let _wrapped_key = self.read_signature()?; // always "vstk" in practice
         let version = self.read_u32()?;
         let descriptor = self.read_descriptor_structure()?;
-        info.vector_stroke = Some(VectorStroke { version, descriptor });
+        info.vector_stroke = Some(VectorStroke {
+            version,
+            descriptor,
+        });
         Ok(())
     }
 
     /// Read vector mask (vmsk/vsms)
     fn read_vector_mask(&mut self, info: &mut LayerAdditionalInfo, length: usize) -> Result<()> {
-        let start_offset = self.offset;
-        let version = self.read_u32()?;
-        let flags = self.read_u32()?;
-        
+        let data = self.read_bytes(length)?;
+        let mut reader = PsdReader::new(std::io::Cursor::new(data), Default::default());
+        let version = reader.read_u32()?;
+        let flags = reader.read_u32()?;
+
         let invert = (flags & 1) != 0;
         let not_link = (flags & 2) != 0;
         let disable = (flags & 4) != 0;
-        
+
         let mut paths = Vec::new();
-        
-        // Read path records
-        while (self.offset - start_offset) < length as u64 {
-            let selector = self.read_u16()?;
-            
+
+        while reader.offset + 26 <= length as u64 {
+            let selector = reader.read_u16()?;
+
             match selector {
                 0 | 3 => {
-                    // Closed or open subpath length record
-                    let num_points = self.read_u16()?;
-                    self.skip_bytes(22)?; // Skip rest of record
-                    
+                    let num_points = reader.read_u16()? as usize;
+                    reader.skip_bytes(2)?; // GH
+                    reader.skip_bytes(2)?; // Operation
+                    reader.skip_bytes(4)?; // Index
+                    reader.skip_bytes(4)?; // Reserved
+                    reader.skip_bytes(10)?; // Padding
+
                     let path_type = if selector == 0 {
                         PathType::Closed
                     } else {
                         PathType::Open
                     };
-                    
                     let mut points = Vec::new();
-                    
-                    // Read bezier knot records
+
                     for _ in 0..num_points {
-                        let knot_selector = self.read_u16()?;
-                        if knot_selector != 1 && knot_selector != 2 {
-                            return Err(PsdError::InvalidFormat(format!("Invalid knot selector: {}", knot_selector)));
+                        if reader.offset + 26 > length as u64 {
+                            break;
                         }
-                        
-                        let linked = knot_selector == 1;
-                        
+
+                        let knot_selector = reader.read_u16()?;
+                        // TS accepts any selector value; treat non-2 as "linked"
+                        let linked = knot_selector != 2;
+
                         // Read points (vertical, horizontal order)
-                        let vert_y = self.read_fixed_point_path_32()?;
-                        let hor_y = self.read_fixed_point_path_32()?;
-                        let vert_anchor = self.read_fixed_point_path_32()?;
-                        let hor_anchor = self.read_fixed_point_path_32()?;
-                        let vert_forward = self.read_fixed_point_path_32()?;
-                        let hor_forward = self.read_fixed_point_path_32()?;
-                        
+                        let vert_y = reader.read_fixed_point_path_32()?;
+                        let hor_y = reader.read_fixed_point_path_32()?;
+                        let vert_anchor = reader.read_fixed_point_path_32()?;
+                        let hor_anchor = reader.read_fixed_point_path_32()?;
+                        let vert_forward = reader.read_fixed_point_path_32()?;
+                        let hor_forward = reader.read_fixed_point_path_32()?;
+
                         points.push(PathPoint {
-                            anchor: Point { x: hor_anchor, y: vert_anchor },
-                            forward: Point { x: hor_forward, y: vert_forward },
-                            backward: Point { x: hor_y, y: vert_y },
+                            anchor: Point {
+                                x: hor_anchor,
+                                y: vert_anchor,
+                            },
+                            forward: Point {
+                                x: hor_forward,
+                                y: vert_forward,
+                            },
+                            backward: Point {
+                                x: hor_y,
+                                y: vert_y,
+                            },
                             linked,
                         });
                     }
-                    
+
                     paths.push(VectorPath {
                         path_type,
                         initial_fill_rule: None,
@@ -556,24 +1365,20 @@ impl<R: Read + Seek> PsdReader<R> {
                     });
                 }
                 6 => {
-                    // Path fill rule
-                    self.skip_bytes(24)?;
+                    reader.skip_bytes(24)?;
                 }
                 7 => {
-                    // Clipboard record
-                    self.skip_bytes(24)?;
+                    reader.skip_bytes(24)?;
                 }
                 8 => {
-                    // Initial fill rule
-                    self.skip_bytes(24)?;
+                    reader.skip_bytes(24)?;
                 }
                 _ => {
-                    // Unknown selector, skip
-                    self.skip_bytes(24)?;
+                    reader.skip_bytes(24)?;
                 }
             }
         }
-        
+
         info.vector_mask = Some(VectorMask {
             version,
             invert,
@@ -581,111 +1386,247 @@ impl<R: Read + Seek> PsdReader<R> {
             disable,
             paths,
         });
-        
+
         Ok(())
     }
 
     /// Read vector origination data (vogk)
-    fn read_vector_origination(&mut self, info: &mut LayerAdditionalInfo, length: usize) -> Result<()> {
-        info.vector_origination = Some(self.read_bytes(length)?);
+    fn read_vector_origination(
+        &mut self,
+        info: &mut LayerAdditionalInfo,
+        _length: usize,
+    ) -> Result<()> {
+        let _version = self.read_u32()?;
+        let _descriptor_version = self.read_u32()?;
+        let descriptor = self.read_descriptor_structure()?;
+        let list = match descriptor.items.get("keyDescriptorList") {
+            Some(DescriptorValue::List(items)) => items,
+            _ => {
+                info.vector_origination = Some(VectorOrigination {
+                    key_descriptor_list: Vec::new(),
+                });
+                return Ok(());
+            }
+        };
+        let mut key_descriptor_list = Vec::new();
+        for item in list {
+            let inner = match item {
+                DescriptorValue::Descriptor(desc) => desc,
+                _ => continue,
+            };
+            key_descriptor_list.push(KeyDescriptorItem {
+                key_shape_invalidated: Self::descriptor_bool(inner, "keyShapeInvalidated"),
+                key_origin_type: Self::descriptor_int(inner, "keyOriginType"),
+                key_origin_resolution: Self::descriptor_number(inner, "keyOriginResolution"),
+                key_origin_rrect_radii: Self::descriptor_rrect(inner, "keyOriginRRectRadii"),
+                key_origin_shape_bounding_box: Self::descriptor_bounds(inner, "keyOriginShapeBBox")
+                    .or_else(|| Self::descriptor_bounds(inner, "keyOriginShapeBoundingBox")),
+                key_origin_box_corners: Self::descriptor_points(inner, "keyOriginBoxCorners"),
+                transform: match inner.items.get("transform") {
+                    Some(DescriptorValue::List(items)) => Some(
+                        items
+                            .iter()
+                            .filter_map(|v| match v {
+                                DescriptorValue::Double(v) => Some(*v),
+                                DescriptorValue::Float(v) => Some(*v as f64),
+                                DescriptorValue::Integer(v) => Some(*v as f64),
+                                _ => None,
+                            })
+                            .collect(),
+                    ),
+                    _ => None,
+                },
+            });
+        }
+        info.vector_origination = Some(VectorOrigination {
+            key_descriptor_list,
+        });
         Ok(())
     }
 
     /// Read layer effects (lrFX/lfx2)
-    fn read_layer_effects(&mut self, info: &mut LayerAdditionalInfo, key: &str, _length: usize) -> Result<()> {
+    fn read_layer_effects(
+        &mut self,
+        info: &mut LayerAdditionalInfo,
+        key: &str,
+        _length: usize,
+    ) -> Result<()> {
         let version = self.read_u32()?;
-        
+
         let descriptor = if key == "lfx2" {
             Some(self.read_version_and_descriptor()?)
         } else {
             None
         };
-        
+
         info.layer_effects = Some(LayerEffects {
             version,
             descriptor,
         });
-        
+
         Ok(())
     }
 
-    /// Read placed layer (PlLd/SoLd)
-    fn read_placed_layer(&mut self, info: &mut LayerAdditionalInfo, _key: &str, length: usize) -> Result<()> {
-        let start_offset = self.offset;
-        
-        // Read type (may be 'plcL' or 'sold')
+    /// Read placed layer (PlLd legacy binary format)
+    fn read_placed_layer(
+        &mut self,
+        info: &mut LayerAdditionalInfo,
+        _key: &str,
+        _length: usize,
+    ) -> Result<()> {
+        // Read type and version
         let _placed_type = self.read_signature()?;
         let _version = self.read_u32()?;
-        
+
         // Read UUID as pascal string (u8 length + bytes)
         let id_length = self.read_u8()? as usize;
         let id_bytes = self.read_bytes(id_length)?;
         let id = String::from_utf8_lossy(&id_bytes).to_string();
-        
-        // Read page number
-        let page = self.read_i32()?;
-        let total_pages = self.read_i32()?;
-        let anti_alias = self.read_i32()?;
-        let placed_type_val = self.read_i32()?;
-        
+
+        // Skip 4×u32 (matching TS: reader.readUint32() × 4)
+        self.skip_bytes(16)?;
+
         // Read transform (8 doubles)
         let mut transform = Vec::with_capacity(8);
         for _ in 0..8 {
             transform.push(self.read_f64()?);
         }
-        
-        // Read warp descriptor if there's more data
-        let warp = if (self.offset - start_offset) < length as u64 {
-            Some(self.read_version_and_descriptor()?)
-        } else {
-            None
-        };
-        
+
+        // Skip 2×u32 (matching TS)
+        self.skip_bytes(8)?;
+
+        // Read warp descriptor (legacy PlLd uses a raw descriptor here, no nested version)
+        let warp = Some(self.read_descriptor_structure()?);
+
         info.placed_layer = Some(PlacedLayer {
             id,
-            page: Some(page),
-            total_pages: Some(total_pages),
-            anti_alias_policy: Some(anti_alias),
-            placed_layer_type: Some(placed_type_val),
+            page: None,
+            total_pages: None,
+            anti_alias_policy: None,
+            placed_layer_type: None,
             transform,
             warp,
             placed: None,
         });
-        
+
+        Ok(())
+    }
+
+    /// Read SoLd (descriptor-based format): type + version + u32 + descriptor
+    fn read_sold_layer(&mut self, info: &mut LayerAdditionalInfo, _length: usize) -> Result<()> {
+        let _sold_type = self.read_signature()?;
+        let _version = self.read_u32()?;
+        let _skip = self.read_u32()?;
+        let descriptor = self.read_descriptor_structure()?;
+
+        // Extract ID from descriptor if possible
+        let id = descriptor
+            .items
+            .get("Idnt")
+            .and_then(|v| {
+                if let DescriptorValue::Text(s) = v {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        info.placed_layer = Some(PlacedLayer {
+            id,
+            page: None,
+            total_pages: None,
+            anti_alias_policy: None,
+            placed_layer_type: None,
+            transform: Vec::new(),
+            warp: Some(descriptor),
+            placed: None,
+        });
+
         Ok(())
     }
 
     /// Read artboard data (artb/artd)
-    fn read_artboard(&mut self, info: &mut LayerAdditionalInfo, _key: &str, _length: usize) -> Result<()> {
-        let descriptor = self.read_version_and_descriptor()?;
-        
+    fn read_artboard(
+        &mut self,
+        info: &mut LayerAdditionalInfo,
+        _key: &str,
+        _length: usize,
+    ) -> Result<()> {
+        let _version = self.read_u32()?;
+        let descriptor = self.read_descriptor_structure()?;
+
         // Extract artboard rectangle
-        let rect = if let Some(DescriptorValue::Descriptor(rect_desc)) = descriptor.items.get("artboardRect") {
-            let top = rect_desc.items.get("Top ")
-                .and_then(|v| if let DescriptorValue::Double(d) = v { Some(*d) } else { None })
+        let rect = if let Some(DescriptorValue::Descriptor(rect_desc)) =
+            descriptor.items.get("artboardRect")
+        {
+            let top = rect_desc
+                .items
+                .get("Top ")
+                .and_then(|v| {
+                    if let DescriptorValue::Double(d) = v {
+                        Some(*d)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(0.0);
-            let left = rect_desc.items.get("Left")
-                .and_then(|v| if let DescriptorValue::Double(d) = v { Some(*d) } else { None })
+            let left = rect_desc
+                .items
+                .get("Left")
+                .and_then(|v| {
+                    if let DescriptorValue::Double(d) = v {
+                        Some(*d)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(0.0);
-            let bottom = rect_desc.items.get("Btom")
-                .and_then(|v| if let DescriptorValue::Double(d) = v { Some(*d) } else { None })
+            let bottom = rect_desc
+                .items
+                .get("Btom")
+                .and_then(|v| {
+                    if let DescriptorValue::Double(d) = v {
+                        Some(*d)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(0.0);
-            let right = rect_desc.items.get("Rght")
-                .and_then(|v| if let DescriptorValue::Double(d) = v { Some(*d) } else { None })
+            let right = rect_desc
+                .items
+                .get("Rght")
+                .and_then(|v| {
+                    if let DescriptorValue::Double(d) = v {
+                        Some(*d)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(0.0);
-            
-            Bounds { top, left, bottom, right }
+
+            Bounds {
+                top,
+                left,
+                bottom,
+                right,
+            }
         } else {
-            Bounds { top: 0.0, left: 0.0, bottom: 0.0, right: 0.0 }
+            Bounds {
+                top: 0.0,
+                left: 0.0,
+                bottom: 0.0,
+                right: 0.0,
+            }
         };
-        
+
         info.artboard = Some(ArtboardData {
             rect,
             preset_name: None,
             color: None,
             background_type: None,
         });
-        
+
         Ok(())
     }
 
@@ -706,7 +1647,11 @@ impl<R: Read + Seek> PsdReader<R> {
             self.skip_bytes(3)?;
             let data_length = self.read_u32()? as usize;
             let data = self.read_bytes(data_length)?;
-            entries.push(MetadataEntry { key, copy_on_sheet_change, data });
+            entries.push(MetadataEntry {
+                key,
+                copy_on_sheet_change,
+                data,
+            });
         }
         info.metadata = Some(Metadata { entries });
         Ok(())
@@ -714,10 +1659,170 @@ impl<R: Read + Seek> PsdReader<R> {
 }
 
 impl PsdWriter {
+    fn units_to_descriptor(value: &UnitsValue) -> DescriptorValue {
+        let units = match value.units {
+            Units::Pixels => "Pixels",
+            Units::Points => "Points",
+            Units::Millimeters => "Millimeters",
+            Units::Centimeters => "Centimeters",
+            Units::Inches => "Inches",
+            Units::Density => "Density",
+            _ => "None",
+        };
+        DescriptorValue::UnitDouble {
+            units: units.to_string(),
+            value: value.value,
+        }
+    }
+
+    fn descriptor_from_bounds(bounds: &UnitsBounds) -> Descriptor {
+        let mut items = HashMap::new();
+        items.insert("Top".to_string(), Self::units_to_descriptor(&bounds.top));
+        items.insert("Left".to_string(), Self::units_to_descriptor(&bounds.left));
+        items.insert("Rght".to_string(), Self::units_to_descriptor(&bounds.right));
+        items.insert(
+            "Btom".to_string(),
+            Self::units_to_descriptor(&bounds.bottom),
+        );
+        Descriptor {
+            name: String::new(),
+            class_id: "null".to_string(),
+            items,
+        }
+    }
+
+    fn descriptor_from_rrect(rrect: &RRectRadii) -> Descriptor {
+        let mut items = HashMap::new();
+        items.insert(
+            "topRight".to_string(),
+            Self::units_to_descriptor(&rrect.top_right),
+        );
+        items.insert(
+            "topLeft".to_string(),
+            Self::units_to_descriptor(&rrect.top_left),
+        );
+        items.insert(
+            "bottomLeft".to_string(),
+            Self::units_to_descriptor(&rrect.bottom_left),
+        );
+        items.insert(
+            "bottomRight".to_string(),
+            Self::units_to_descriptor(&rrect.bottom_right),
+        );
+        Descriptor {
+            name: String::new(),
+            class_id: "null".to_string(),
+            items,
+        }
+    }
+
+    fn split_pattern_buffer(
+        mode: u32,
+        buffer: &[u8],
+        width: usize,
+        height: usize,
+    ) -> (Vec<Vec<u8>>, Vec<u8>) {
+        let pixel_count = width * height;
+        let mut alpha = vec![0u8; pixel_count];
+        match mode {
+            1 => {
+                let mut gray = vec![0u8; pixel_count];
+                for index in 0..pixel_count {
+                    gray[index] = *buffer.get(index * 4).unwrap_or(&0);
+                    alpha[index] = *buffer.get(index * 4 + 3).unwrap_or(&255);
+                }
+                (vec![gray], alpha)
+            }
+            2 => {
+                let mut indexed = vec![0u8; pixel_count];
+                for index in 0..pixel_count {
+                    indexed[index] = *buffer.get(index * 4).unwrap_or(&0);
+                    alpha[index] = *buffer.get(index * 4 + 3).unwrap_or(&255);
+                }
+                (vec![indexed], alpha)
+            }
+            _ => {
+                let mut red = vec![0u8; pixel_count];
+                let mut green = vec![0u8; pixel_count];
+                let mut blue = vec![0u8; pixel_count];
+                for index in 0..pixel_count {
+                    red[index] = *buffer.get(index * 4).unwrap_or(&0);
+                    green[index] = *buffer.get(index * 4 + 1).unwrap_or(&0);
+                    blue[index] = *buffer.get(index * 4 + 2).unwrap_or(&0);
+                    alpha[index] = *buffer.get(index * 4 + 3).unwrap_or(&255);
+                }
+                (vec![red, green, blue], alpha)
+            }
+        }
+    }
+
+    fn write_pattern_entry(&mut self, entry: &PatternBlockEntry) -> Result<()> {
+        let width = entry.width as usize;
+        let height = entry.height as usize;
+        self.write_u32(entry.version)?;
+        self.write_u32(entry.mode)?;
+        self.write_u16(entry.height)?;
+        self.write_u16(entry.width)?;
+        self.write_unicode_string_with_padding(&entry.name)?;
+        self.write_pascal_string(&entry.id, 1)?;
+        if entry.mode == 2 {
+            let default_palette = vec![0; 3 * 256];
+            self.write_bytes(
+                entry
+                    .palette
+                    .as_deref()
+                    .unwrap_or(default_palette.as_slice()),
+            )?;
+            self.write_u32(0)?;
+        }
+        let buffer = entry
+            .buffer
+            .clone()
+            .unwrap_or_else(|| vec![0; width * height * 4]);
+        let (channels, alpha) = Self::split_pattern_buffer(entry.mode, &buffer, width, height);
+        self.write_u32(3)?;
+        self.write_u32(0)?;
+        self.write_i32(0)?;
+        self.write_i32(0)?;
+        self.write_i32(width as i32)?;
+        self.write_i32(height as i32)?;
+        self.write_u32(24)?;
+        for channel_index in 0..26 {
+            let include = channel_index < channels.len() || channel_index == 25;
+            self.write_u32(u32::from(include))?;
+            if !include {
+                continue;
+            }
+            let channel_data = if channel_index < channels.len() {
+                &channels[channel_index]
+            } else {
+                &alpha
+            };
+            let mut channel_writer = PsdWriter::new(channel_data.len() + 128);
+            channel_writer.write_u32(8)?;
+            channel_writer.write_i32(0)?;
+            channel_writer.write_i32(0)?;
+            channel_writer.write_i32(width as i32)?;
+            channel_writer.write_i32(height as i32)?;
+            channel_writer.write_u16(1)?;
+            channel_writer.write_u8(1)?;
+            let encoded = compression::compress_rle(channel_data, width, height)?;
+            channel_writer.write_bytes(&encoded)?;
+            let bytes = channel_writer.into_buffer();
+            self.write_u32(bytes.len() as u32)?;
+            self.write_bytes(&bytes)?;
+        }
+        Ok(())
+    }
+
     /// Write layer additional info section
-    pub fn write_additional_info(&mut self, key: &str, info: &LayerAdditionalInfo) -> Result<usize> {
+    pub fn write_additional_info(
+        &mut self,
+        key: &str,
+        info: &LayerAdditionalInfo,
+    ) -> Result<usize> {
         let mut temp_writer = PsdWriter::new(1024);
-        
+
         match key {
             "luni" => {
                 if let Some(ref name) = info.unicode_name {
@@ -731,50 +1836,153 @@ impl PsdWriter {
             }
             "lclr" => {
                 if let Some(color) = info.layer_color {
-                    temp_writer.write_u16(color as u16)?;
-                    temp_writer.write_zeros(6)?;
+                    temp_writer.write_bytes(&encode_be(
+                        &LayerColorRecord {
+                            color_value: color as u16,
+                            padding: [0; 6],
+                        },
+                        "layer color",
+                    )?)?;
+                }
+            }
+            "iOpa" => {
+                if let Some(value) = info.fill_opacity {
+                    temp_writer.write_u8(value)?;
                 }
             }
             "lsct" => {
                 if let Some(ref divider) = info.section_divider {
-                    temp_writer.write_u32(divider.divider_type)?;
+                    temp_writer.write_bytes(&encode_be(
+                        &SectionDividerBaseRecord {
+                            divider_type: divider.divider_type,
+                        },
+                        "section divider",
+                    )?)?;
                     if let Some(ref blend_mode) = divider.blend_mode {
-                        temp_writer.write_signature("8BIM")?;
-                        temp_writer.write_signature(blend_mode)?;
+                        let blend_mode_bytes = blend_mode.as_bytes();
+                        if blend_mode_bytes.len() != 4 {
+                            return Err(PsdError::InvalidFormat(
+                                "Invalid section divider blend mode".to_string(),
+                            ));
+                        }
+                        let mut raw = [0u8; 4];
+                        raw.copy_from_slice(blend_mode_bytes);
+                        temp_writer.write_bytes(&encode_be(
+                            &SectionDividerExtendedRecord {
+                                signature: *b"8BIM",
+                                blend_mode: raw,
+                            },
+                            "section divider extended",
+                        )?)?;
                     }
                     if let Some(sub_type) = divider.sub_type {
-                        temp_writer.write_u32(sub_type)?;
+                        temp_writer.write_bytes(&encode_be(
+                            &U32ValueRecord { value: sub_type },
+                            "section divider subtype",
+                        )?)?;
                     }
                 }
             }
             "clbl" => {
                 if let Some(blend_clipped) = info.blend_clipped {
-                    temp_writer.write_u8(if blend_clipped { 1 } else { 0 })?;
+                    temp_writer.write_bytes(&encode_be(
+                        &U8BoolRecord {
+                            value: u8::from(blend_clipped),
+                        },
+                        "blend clipped",
+                    )?)?;
                 }
             }
             "infx" => {
                 if let Some(blend_interior) = info.blend_interior {
-                    temp_writer.write_u8(if blend_interior { 1 } else { 0 })?;
+                    temp_writer.write_bytes(&encode_be(
+                        &U8BoolRecord {
+                            value: u8::from(blend_interior),
+                        },
+                        "blend interior",
+                    )?)?;
                 }
             }
             "knko" => {
                 if let Some(knockout) = info.knockout {
-                    temp_writer.write_u8(if knockout { 1 } else { 0 })?;
+                    temp_writer.write_bytes(&encode_be(
+                        &U8BoolRecord {
+                            value: u8::from(knockout),
+                        },
+                        "knockout",
+                    )?)?;
                 }
             }
             "lspf" => {
                 if let Some(ref protected) = info.protected {
                     let mut flags = 0u32;
-                    if protected.transparency { flags |= 0x01; }
-                    if protected.composite { flags |= 0x02; }
-                    if protected.position { flags |= 0x04; }
-                    if protected.artboards.unwrap_or(false) { flags |= 0x08; }
-                    temp_writer.write_u32(flags)?;
+                    if protected.transparency {
+                        flags |= 0x01;
+                    }
+                    if protected.composite {
+                        flags |= 0x02;
+                    }
+                    if protected.position {
+                        flags |= 0x04;
+                    }
+                    if protected.artboards.unwrap_or(false) {
+                        flags |= 0x08;
+                    }
+                    temp_writer.write_bytes(&encode_be(
+                        &ProtectedFlagsRecord { flags },
+                        "protected flags",
+                    )?)?;
                 }
             }
             "lnsr" => {
                 if let Some(ref source) = info.name_source {
-                    temp_writer.write_signature(source)?;
+                    let source_bytes = source.as_bytes();
+                    if source_bytes.len() != 4 {
+                        return Err(PsdError::InvalidFormat(
+                            "Invalid name source signature".to_string(),
+                        ));
+                    }
+                    let mut raw = [0u8; 4];
+                    raw.copy_from_slice(source_bytes);
+                    temp_writer.write_bytes(&encode_be(
+                        &NameSourceRecord { signature: raw },
+                        "name source",
+                    )?)?;
+                }
+            }
+            "lyvr" => {
+                if let Some(value) = info.layer_version {
+                    temp_writer.write_u32(value)?;
+                }
+            }
+            "lmgm" => {
+                if let Some(value) = info.lmgm {
+                    temp_writer.write_u8(value)?;
+                }
+            }
+            "vmgm" => {
+                if let Some(value) = info.vmgm {
+                    temp_writer.write_u8(value)?;
+                }
+            }
+            "fcmy" => {
+                if let Some(value) = info.fcmy {
+                    temp_writer.write_u8(value)?;
+                }
+            }
+            "brst" => {
+                if let Some(restrictions) = info.blending_restrictions {
+                    for (index, value) in restrictions.into_iter().enumerate() {
+                        if value == 0 {
+                            temp_writer.write_u32(index as u32)?;
+                        }
+                    }
+                }
+            }
+            "fxrp" => {
+                if let Some(point) = info.reference_point {
+                    temp_writer.write_f64(point.x)?;
+                    temp_writer.write_f64(point.y)?;
                 }
             }
             "shmd" => {
@@ -812,10 +2020,18 @@ impl PsdWriter {
             }
             "SoCo" | "GdFl" | "PtFl" => {
                 if let Some(ref vf) = info.vector_fill {
-                    temp_writer.write_version_and_descriptor(16, &vf.data)?;
+                    temp_writer.write_u32(16)?;
+                    temp_writer.write_descriptor_structure(&vf.data)?;
                 }
             }
-            "vscg" | "vstk" => {
+            "vscg" => {
+                if let Some(ref vs) = info.vector_stroke {
+                    temp_writer.write_signature("vstk")?; // wrapped key prefix
+                    temp_writer.write_u32(vs.version)?;
+                    temp_writer.write_descriptor_structure(&vs.descriptor)?;
+                }
+            }
+            "vstk" => {
                 if let Some(ref vs) = info.vector_stroke {
                     temp_writer.write_u32(vs.version)?;
                     temp_writer.write_descriptor_structure(&vs.descriptor)?;
@@ -852,11 +2068,88 @@ impl PsdWriter {
             }
             "vogk" => {
                 if let Some(ref data) = info.vector_origination {
-                    temp_writer.write_bytes(data)?;
+                    temp_writer.write_u32(1)?;
+                    temp_writer.write_u32(16)?;
+                    let mut list = Vec::new();
+                    for item in &data.key_descriptor_list {
+                        let mut items = HashMap::new();
+                        if let Some(v) = item.key_shape_invalidated {
+                            items.insert(
+                                "keyShapeInvalidated".to_string(),
+                                DescriptorValue::Boolean(v),
+                            );
+                        }
+                        if let Some(v) = item.key_origin_type {
+                            items.insert("keyOriginType".to_string(), DescriptorValue::Integer(v));
+                        }
+                        if let Some(v) = item.key_origin_resolution {
+                            items.insert(
+                                "keyOriginResolution".to_string(),
+                                DescriptorValue::Double(v),
+                            );
+                        }
+                        if let Some(ref v) = item.key_origin_rrect_radii {
+                            items.insert(
+                                "keyOriginRRectRadii".to_string(),
+                                DescriptorValue::Descriptor(Self::descriptor_from_rrect(v)),
+                            );
+                        }
+                        if let Some(ref v) = item.key_origin_shape_bounding_box {
+                            items.insert(
+                                "keyOriginShapeBBox".to_string(),
+                                DescriptorValue::Descriptor(Self::descriptor_from_bounds(v)),
+                            );
+                        }
+                        if let Some(ref points) = item.key_origin_box_corners {
+                            let mut point_values = Vec::new();
+                            for point in points {
+                                point_values.push(DescriptorValue::Double(point.x));
+                                point_values.push(DescriptorValue::Double(point.y));
+                            }
+                            let mut point_desc_items = HashMap::new();
+                            point_desc_items
+                                .insert("points".to_string(), DescriptorValue::List(point_values));
+                            items.insert(
+                                "keyOriginBoxCorners".to_string(),
+                                DescriptorValue::Descriptor(Descriptor {
+                                    name: String::new(),
+                                    class_id: "null".to_string(),
+                                    items: point_desc_items,
+                                }),
+                            );
+                        }
+                        if let Some(ref transform) = item.transform {
+                            items.insert(
+                                "transform".to_string(),
+                                DescriptorValue::List(
+                                    transform
+                                        .iter()
+                                        .copied()
+                                        .map(DescriptorValue::Double)
+                                        .collect(),
+                                ),
+                            );
+                        }
+                        list.push(DescriptorValue::Descriptor(Descriptor {
+                            name: String::new(),
+                            class_id: "null".to_string(),
+                            items,
+                        }));
+                    }
+                    let mut desc_items = HashMap::new();
+                    desc_items.insert("keyDescriptorList".to_string(), DescriptorValue::List(list));
+                    temp_writer.write_descriptor_structure(&Descriptor {
+                        name: String::new(),
+                        class_id: "null".to_string(),
+                        items: desc_items,
+                    })?;
                 }
             }
             "lrFX" | "lfx2" => {
                 if let Some(ref le) = info.layer_effects {
+                    if key == "lfx2" && le.descriptor.is_none() {
+                        return Ok(0);
+                    }
                     temp_writer.write_u32(le.version)?;
                     if key == "lfx2" {
                         if let Some(ref desc) = le.descriptor {
@@ -865,37 +2158,75 @@ impl PsdWriter {
                     }
                 }
             }
-            "PlLd" | "SoLd" => {
+            "PlLd" => {
                 if let Some(ref pl) = info.placed_layer {
-                    temp_writer.write_signature(if key == "PlLd" { "plcL" } else { "sold" })?;
+                    if pl.transform.is_empty() {
+                        return Ok(0);
+                    }
+                    temp_writer.write_signature("plcL")?;
                     temp_writer.write_u32(3)?; // version
-                    // UUID as pascal string (u8 length + bytes)
+                                               // UUID as pascal string (u8 length + bytes)
                     let id_bytes = pl.id.as_bytes();
                     temp_writer.write_u8(id_bytes.len() as u8)?;
                     temp_writer.write_bytes(id_bytes)?;
-                    temp_writer.write_i32(pl.page.unwrap_or(0))?;
-                    temp_writer.write_i32(pl.total_pages.unwrap_or(0))?;
-                    temp_writer.write_i32(pl.anti_alias_policy.unwrap_or(0))?;
-                    temp_writer.write_i32(pl.placed_layer_type.unwrap_or(0))?;
+                    // Match the TS writer's legacy constants.
+                    temp_writer.write_u32(1)?;
+                    temp_writer.write_u32(1)?;
+                    temp_writer.write_u32(16)?;
+                    temp_writer.write_u32(2)?;
+                    // transform (8×f64)
                     for &v in &pl.transform {
                         temp_writer.write_f64(v)?;
                     }
+                    temp_writer.write_u32(0)?;
+                    temp_writer.write_u32(16)?;
+                    // Legacy PlLd stores a raw descriptor here, not version+descriptor.
                     if let Some(ref warp) = pl.warp {
-                        temp_writer.write_version_and_descriptor(16, warp)?;
+                        temp_writer.write_descriptor_structure(warp)?;
+                    }
+                }
+            }
+            "SoLd" => {
+                if let Some(ref pl) = info.placed_layer {
+                    temp_writer.write_signature("soLD")?;
+                    temp_writer.write_u32(4)?;
+                    temp_writer.write_u32(16)?;
+                    if let Some(ref warp) = pl.warp {
+                        temp_writer.write_descriptor_structure(warp)?;
                     }
                 }
             }
             "artb" | "artd" => {
                 if let Some(ref ab) = info.artboard {
                     use crate::descriptor::{Descriptor, DescriptorValue};
-                    let mut rect_desc = Descriptor { name: String::new(), class_id: "Rct1".to_string(), items: std::collections::HashMap::new() };
-                    rect_desc.items.insert("Top ".to_string(), DescriptorValue::Double(ab.rect.top));
-                    rect_desc.items.insert("Left".to_string(), DescriptorValue::Double(ab.rect.left));
-                    rect_desc.items.insert("Btom".to_string(), DescriptorValue::Double(ab.rect.bottom));
-                    rect_desc.items.insert("Rght".to_string(), DescriptorValue::Double(ab.rect.right));
-                    let mut desc = Descriptor { name: String::new(), class_id: "artd".to_string(), items: std::collections::HashMap::new() };
-                    desc.items.insert("artboardRect".to_string(), DescriptorValue::Descriptor(rect_desc));
-                    temp_writer.write_version_and_descriptor(16, &desc)?;
+                    let mut rect_desc = Descriptor {
+                        name: String::new(),
+                        class_id: "Rct1".to_string(),
+                        items: std::collections::HashMap::new(),
+                    };
+                    rect_desc
+                        .items
+                        .insert("Top ".to_string(), DescriptorValue::Double(ab.rect.top));
+                    rect_desc
+                        .items
+                        .insert("Left".to_string(), DescriptorValue::Double(ab.rect.left));
+                    rect_desc
+                        .items
+                        .insert("Btom".to_string(), DescriptorValue::Double(ab.rect.bottom));
+                    rect_desc
+                        .items
+                        .insert("Rght".to_string(), DescriptorValue::Double(ab.rect.right));
+                    let mut desc = Descriptor {
+                        name: String::new(),
+                        class_id: "artd".to_string(),
+                        items: std::collections::HashMap::new(),
+                    };
+                    desc.items.insert(
+                        "artboardRect".to_string(),
+                        DescriptorValue::Descriptor(rect_desc),
+                    );
+                    temp_writer.write_u32(16)?;
+                    temp_writer.write_descriptor_structure(&desc)?;
                 }
             }
             "sn2P" => {
@@ -903,25 +2234,59 @@ impl PsdWriter {
                     temp_writer.write_u8(if using { 1 } else { 0 })?;
                 }
             }
-            "brit" | "levl" | "curv" | "expA" | "blnc" | "phfl" | "hue2" |
-            "selc" | "mixr" | "post" | "thrs" | "nvrt" | "grdm" | "blwh" => {
+            "brit" | "levl" | "curv" | "expA" | "blnc" | "phfl" | "hue2" | "selc" | "mixr"
+            | "post" | "thrs" | "nvrt" | "grdm" | "blwh" => {
                 if let Some(ref adj) = info.adjustment {
                     if adj.key() == key {
-                        let data = adj.to_bytes().map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
+                        let data = adj
+                            .to_bytes()
+                            .map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
                         temp_writer.write_bytes(&data)?;
                     }
                 }
             }
             "Lr16" | "Lr32" => {
-                if let Some((ref hd_key, ref data)) = info.high_depth_layer_data {
-                    if hd_key == key {
-                        temp_writer.write_bytes(data)?;
+                if let Some(ref block) = info.high_depth_layer_data {
+                    if block.key == key {
+                        let bits = if key == "Lr16" { 16 } else { 32 };
+                        crate::writer::write_nested_layer_info_block(
+                            &mut temp_writer,
+                            &block.layers,
+                            bits,
+                        )?;
                     }
                 }
             }
-            "lnk2" => {
-                if let Some(ref data) = info.linked_layer_data {
-                    temp_writer.write_bytes(data)?;
+            "lnk2" | "lnkD" | "lnkD__" | "lnk3" => {
+                if let Some(ref block) = info.linked_files {
+                    if block.key != key {
+                        return Ok(0);
+                    }
+                    for item in &block.items {
+                        let mut item_writer = PsdWriter::new(256);
+                        let kind = item.child_document_id.as_deref().unwrap_or("liFD");
+                        item_writer.write_signature(kind)?;
+                        item_writer.write_u32(7)?;
+                        item_writer.write_pascal_string(&item.id, 1)?;
+                        item_writer.write_unicode_string_with_padding(&item.name)?;
+                        item_writer.write_signature(item.file_type.as_deref().unwrap_or("    "))?;
+                        item_writer.write_signature(item.creator.as_deref().unwrap_or("    "))?;
+                        let data = item.data.as_deref().unwrap_or(&[]);
+                        item_writer.write_u32(0)?;
+                        item_writer.write_u32(data.len() as u32)?;
+                        item_writer.write_u8(0)?;
+                        item_writer.write_bytes(data)?;
+                        item_writer.write_u32(1)?;
+                        item_writer.write_zeros(11)?;
+                        let item_bytes = item_writer.into_buffer();
+                        temp_writer.write_u32(0)?;
+                        temp_writer.write_u32(item_bytes.len() as u32)?;
+                        temp_writer.write_bytes(&item_bytes)?;
+                        let padding = item_bytes.len() % 4;
+                        if padding != 0 {
+                            temp_writer.write_zeros(4 - padding)?;
+                        }
+                    }
                 }
             }
             "lmfx" | "lfxs" => {
@@ -930,28 +2295,222 @@ impl PsdWriter {
                     temp_writer.write_version_and_descriptor(16, desc)?;
                 }
             }
-            "Patt" | "Pat2" | "Pat3" => {
-                if let Some((ref pat_key, ref data)) = info.pattern_data {
-                    if pat_key == key {
-                        temp_writer.write_bytes(data)?;
-                    }
-                }
-            }
-            _ => {
-                // Write unknown sections
-                if let Some(data) = info.unknown.get(key) {
+            "FMsk" => {
+                if let Some(ref data) = info.filter_mask {
                     temp_writer.write_bytes(data)?;
                 }
             }
+            "shpa" => {
+                if let Some(ref shape) = info.shape_pattern {
+                    temp_writer.write_u32(shape.version)?;
+                    temp_writer.write_u32(shape.present_count)?;
+                }
+            }
+            "clrL" | "rplc" => {
+                if let Some(desc) = info.descriptor_blocks.get(key) {
+                    temp_writer.write_u16(1)?;
+                    temp_writer.write_u32(16)?;
+                    temp_writer.write_descriptor_structure(desc)?;
+                }
+            }
+            "pths" | "CgEd" | "vibA" | "PxSc" | "phry" => {
+                if let Some(desc) = info.descriptor_blocks.get(key) {
+                    temp_writer.write_u32(16)?;
+                    temp_writer.write_descriptor_structure(desc)?;
+                }
+            }
+            "Patt" | "Pat2" | "Pat3" => {
+                if let Some(ref block) = info.pattern_data {
+                    if block.key == key {
+                        for pattern in &block.patterns {
+                            let mut pattern_writer = PsdWriter::new(1024);
+                            pattern_writer.write_pattern_entry(pattern)?;
+                            let bytes = pattern_writer.into_buffer();
+                            temp_writer.write_u32(bytes.len() as u32)?;
+                            temp_writer.write_bytes(&bytes)?;
+                            let remainder = bytes.len() % 4;
+                            if remainder != 0 {
+                                temp_writer.write_zeros(4 - remainder)?;
+                            }
+                        }
+                    }
+                }
+            }
+            "Txt2" => {
+                if let Some(ref text_engine) = info.text_engine {
+                    let bytes = crate::engine_data::serialize_engine_data(&text_engine.data, true)
+                        .map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
+                    temp_writer.write_bytes(&bytes)?;
+                }
+            }
+            "Anno" => {
+                if let Some(ref annotations) = info.annotations {
+                    temp_writer.write_u16(2)?;
+                    temp_writer.write_u16(1)?;
+                    temp_writer.write_u32(annotations.len() as u32)?;
+                    for item in annotations {
+                        let mut item_writer = PsdWriter::new(256);
+                        item_writer.write_signature("txtA")?;
+                        item_writer.write_u8(1)?;
+                        item_writer.write_u8(28)?;
+                        item_writer.write_u16(1)?;
+                        item_writer.write_i32(item.x)?;
+                        item_writer.write_i32(item.y)?;
+                        item_writer.write_i32(17)?;
+                        item_writer.write_i32(21)?;
+                        item_writer.write_i32(item.x + 8)?;
+                        item_writer.write_i32(item.y + 10)?;
+                        item_writer.write_i32(241)?;
+                        item_writer.write_i32(141)?;
+                        item_writer.write_u16(item.color_l)?;
+                        item_writer.write_u16(item.color_o)?;
+                        item_writer.write_u16(item.color_c)?;
+                        item_writer.write_pascal_string(&item.author, 2)?;
+                        item_writer.write_pascal_string("", 2)?;
+                        item_writer.write_pascal_string("D:20211012120233+01'00'", 2)?;
+                        item_writer.write_u32((12 + 2 + item.text.len() * 2) as u32)?;
+                        item_writer.write_signature("txtC")?;
+                        item_writer.write_u32((2 + item.text.len() * 2) as u32)?;
+                        item_writer.write_u8(254)?;
+                        item_writer.write_u8(255)?;
+                        for ch in item.text.chars() {
+                            item_writer.write_u16(ch as u16)?;
+                        }
+                        let bytes = item_writer.into_buffer();
+                        temp_writer.write_u32(bytes.len() as u32)?;
+                        temp_writer.write_bytes(&bytes)?;
+                    }
+                }
+            }
+            "FEid" => {
+                if let Some(ref block) = info.filter_effects {
+                    temp_writer.write_u32(block.version)?;
+                    for item in &block.items {
+                        let mut item_writer = PsdWriter::new(512);
+                        item_writer.write_pascal_string(&item.id, 1)?;
+                        item_writer.write_u32(item.version.unwrap_or(1))?;
+                        // Write number of items in the extra block (always 8 for full items)
+                        item_writer.write_u32(if item.rect.is_some() { 8 } else { 0 })?;
+                        if let Some(ref rect) = item.rect {
+                            item_writer.write_i32(rect.left)?;
+                            item_writer.write_i32(rect.top)?;
+                            item_writer.write_i32(rect.right)?;
+                            item_writer.write_i32(rect.bottom)?;
+                        }
+                        if let Some(d) = item.depth {
+                            item_writer.write_u32(d)?;
+                        } else if item.rect.is_some() {
+                            item_writer.write_u32(8)?;
+                        }
+                        let ch_count = item.channel_count.unwrap_or(24);
+                        if item.rect.is_some() {
+                            item_writer.write_u32(ch_count)?;
+                        }
+                        // Write slot presence flags and payloads
+                        if let Some(ref slots) = item.slots {
+                            let slot_map: std::collections::HashMap<u32, &Vec<u8>> =
+                                slots.iter().map(|s| (s.slot, &s.raw)).collect();
+                            for slot_index in 0..ch_count + 2 {
+                                if let Some(slot_raw) = slot_map.get(&slot_index) {
+                                    item_writer.write_u32(1)?;
+                                    item_writer.write_u32(0)?;
+                                    item_writer.write_u32(slot_raw.len() as u32)?;
+                                    item_writer.write_bytes(slot_raw)?;
+                                } else {
+                                    item_writer.write_u32(0)?;
+                                }
+                            }
+                        }
+                        // Write preview
+                        if let Some(ref preview) = item.preview {
+                            item_writer.write_u8(1)?;
+                            item_writer.write_i32(preview.rect.left)?;
+                            item_writer.write_i32(preview.rect.top)?;
+                            item_writer.write_i32(preview.rect.right)?;
+                            item_writer.write_i32(preview.rect.bottom)?;
+                            item_writer.write_u32(0)?;
+                            item_writer.write_u32(preview.raw.len() as u32)?;
+                            item_writer.write_bytes(&preview.raw)?;
+                        } else if item.rect.is_some() {
+                            item_writer.write_u8(0)?;
+                        }
+                        let bytes = item_writer.into_buffer();
+                        temp_writer.write_u32(0)?;
+                        temp_writer.write_u32(bytes.len() as u32)?;
+                        temp_writer.write_bytes(&bytes)?;
+                        let remainder = bytes.len() % 4;
+                        if remainder != 0 {
+                            temp_writer.write_zeros(4 - remainder)?;
+                        }
+                    }
+                }
+            }
+            "PxSD" => {
+                if let Some(ref block) = info.pixel_source_data {
+                    for item in &block.items {
+                        let mut item_writer = PsdWriter::new(512);
+                        item_writer.write_u32(item.key)?;
+                        item_writer.write_u32(2)?;
+                        // Reserved u32 + BigUint64 for nested length
+                        item_writer.write_u32(2)?;
+                        let _nested_len_offset = item_writer.get_buffer().len();
+                        item_writer.write_u32(0)?; // BigUint64 high
+                        item_writer.write_u32(0)?; // BigUint64 low
+                        if let Some(ref images) = item.images {
+                            item_writer.write_u32(images.len() as u32)?;
+                            for image in images {
+                                let mut img_writer = PsdWriter::new(256);
+                                img_writer.write_u32(image.index)?;
+                                if let Some(ref rect) = image.rect {
+                                    img_writer.write_i32(rect.top)?;
+                                    img_writer.write_i32(rect.left)?;
+                                } else {
+                                    img_writer.write_i32(0)?;
+                                    img_writer.write_i32(0)?;
+                                }
+                                img_writer.write_u32(3)?;
+                                img_writer.write_u32(3)?;
+                                // Write 6 channels (RGBA + extra)
+                                let rect = image.rect.unwrap_or(FilterEffectsRect {
+                                    left: 0,
+                                    top: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                });
+                                for _channel_index in 0..6 {
+                                    img_writer.write_u32(8)?;
+                                    img_writer.write_i32(rect.left)?;
+                                    img_writer.write_i32(rect.top)?;
+                                    img_writer.write_i32(rect.right)?;
+                                    img_writer.write_i32(rect.bottom)?;
+                                    img_writer.write_u32(0)?;
+                                    img_writer.write_u32(0)?;
+                                }
+                                let img_bytes = img_writer.into_buffer();
+                                item_writer.write_u32(0)?;
+                                item_writer.write_u32(img_bytes.len() as u32)?;
+                                item_writer.write_bytes(&img_bytes)?;
+                            }
+                        } else {
+                            item_writer.write_u32(0)?;
+                        }
+                        let bytes = item_writer.into_buffer();
+                        temp_writer.write_u32(0)?;
+                        temp_writer.write_u32(bytes.len() as u32)?;
+                        temp_writer.write_bytes(&bytes)?;
+                    }
+                }
+            }
+            _ => {}
         }
-        
+
         let data = temp_writer.get_buffer();
         let length = data.len();
-        
+
         if length > 0 {
             self.write_bytes(data)?;
         }
-        
+
         Ok(length)
     }
 }
@@ -963,33 +2522,38 @@ pub fn read_layer_additional_info<R: Read + Seek>(
 ) -> Result<LayerAdditionalInfo> {
     let mut info = LayerAdditionalInfo::default();
     let start_offset = reader.offset;
-    
+
     while (reader.offset - start_offset) < length as u64 {
         let signature = reader.read_signature()?;
         if signature != "8BIM" && signature != "8B64" {
-            return Err(PsdError::InvalidFormat(format!("Invalid additional info signature: {}", signature)));
+            return Err(PsdError::InvalidFormat(format!(
+                "Invalid additional info signature: {}",
+                signature
+            )));
         }
-        
+
         let key = reader.read_signature()?;
         let data_length = if signature == "8B64" {
             // Read 64-bit length
             let high = reader.read_u32()?;
             if high != 0 {
-                return Err(PsdError::InvalidFormat("Resource size above 4GB".to_string()));
+                return Err(PsdError::InvalidFormat(
+                    "Resource size above 4GB".to_string(),
+                ));
             }
             reader.read_u32()? as usize
         } else {
             reader.read_u32()? as usize
         };
-        
         reader.read_additional_info(&key, data_length, &mut info)?;
-        
-        // Some sections need padding to even boundary
-        if data_length % 2 != 0 && key != "vmsk" && key != "vsms" {
-            reader.skip_bytes(1)?;
+
+        // Tagged blocks are padded to a 4-byte boundary (spec §13.1)
+        let remainder = data_length % 4;
+        if remainder != 0 {
+            reader.skip_bytes(4 - remainder)?;
         }
     }
-    
+
     Ok(info)
 }
 
@@ -998,42 +2562,57 @@ pub fn write_layer_additional_info(
     writer: &mut PsdWriter,
     info: &LayerAdditionalInfo,
 ) -> Result<()> {
+    fn disk_key(key: &str) -> &str {
+        match key {
+            // TS exposes this alias in the type surface, but PSD tagged-block
+            // signatures are always 4 bytes on disk.
+            "lnkD__" => "lnkD",
+            _ => key,
+        }
+    }
+
     let sections = vec![
-        "luni", "lyid", "lclr", "lsct", "clbl", "infx", "knko", "lspf", "lnsr",
-        "TySh", "SoCo", "GdFl", "PtFl", "vstk", "vmsk", "vogk", "lfx2", "lrFX",
-        "PlLd", "SoLd", "artb", "sn2P", "shmd", "Lr16", "Lr32", "lnk2",
+        "luni", "lyid", "lclr", "iOpa", "lsct", "clbl", "infx", "knko", "lspf", "lnsr", "lyvr",
+        "lmgm", "vmgm", "fcmy", "brst", "fxrp", "TySh", "Txt2", "SoCo", "GdFl", "PtFl", "vstk",
+        "vscg", "vmsk", "vogk", "lfx2", "lrFX", "clrL", "rplc", "PlLd", "SoLd", "artb", "sn2P",
+        "shmd", "FMsk", "shpa", "pths", "CgEd", "vibA", "PxSc", "phry", "Lr16", "Lr32", "lnk2",
+        "lnkD", "lnkD__", "lnk3", "FEid", "PxSD", "Anno",
     ];
-    
+
     for key in sections {
         // Create temporary writer for section data
         let mut temp_writer = PsdWriter::new(1024);
         let length = temp_writer.write_additional_info(key, info)?;
-        
+
         if length > 0 {
             // Write section header
             writer.write_signature("8BIM")?;
-            writer.write_signature(key)?;
+            writer.write_signature(disk_key(key))?;
             writer.write_u32(length as u32)?;
             // Write data
             writer.write_bytes(temp_writer.get_buffer())?;
-            
-            // Pad to even boundary
-            if length % 2 != 0 {
-                writer.write_u8(0)?;
+
+            // Pad to 4-byte boundary (spec §13.1)
+            let remainder = length % 4;
+            if remainder != 0 {
+                writer.write_zeros((4 - remainder) as usize)?;
             }
         }
     }
-    
+
     // Write adjustment layer block
     if let Some(ref adj) = info.adjustment {
         let adj_key = adj.key().to_string();
-        let data = adj.to_bytes().map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
+        let data = adj
+            .to_bytes()
+            .map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
         writer.write_signature("8BIM")?;
         writer.write_signature(&adj_key)?;
         writer.write_u32(data.len() as u32)?;
         writer.write_bytes(&data)?;
-        if data.len() % 2 != 0 {
-            writer.write_u8(0)?;
+        let remainder = data.len() % 4;
+        if remainder != 0 {
+            writer.write_zeros(4 - remainder)?;
         }
     }
 
@@ -1047,31 +2626,34 @@ pub fn write_layer_additional_info(
         writer.write_signature("lmfx")?;
         writer.write_u32(data.len() as u32)?;
         writer.write_bytes(&data)?;
-        if data.len() % 2 != 0 {
-            writer.write_u8(0)?;
+        let remainder = data.len() % 4;
+        if remainder != 0 {
+            writer.write_zeros(4 - remainder)?;
         }
     }
 
     // Write pattern block (Patt/Pat2/Pat3)
-    if let Some((ref pat_key, ref data)) = info.pattern_data {
-        writer.write_signature("8BIM")?;
-        writer.write_signature(pat_key)?;
-        writer.write_u32(data.len() as u32)?;
-        writer.write_bytes(data)?;
-        if data.len() % 2 != 0 {
-            writer.write_u8(0)?;
+    if let Some(ref block) = info.pattern_data {
+        let mut pattern_writer = PsdWriter::new(1024);
+        for pattern in &block.patterns {
+            let mut entry_writer = PsdWriter::new(1024);
+            entry_writer.write_pattern_entry(pattern)?;
+            let bytes = entry_writer.into_buffer();
+            pattern_writer.write_u32(bytes.len() as u32)?;
+            pattern_writer.write_bytes(&bytes)?;
+            let remainder = bytes.len() % 4;
+            if remainder != 0 {
+                pattern_writer.write_zeros(4 - remainder)?;
+            }
         }
-    }
-
-    // Write unknown sections
-    for (key, data) in &info.unknown {
+        let data = pattern_writer.into_buffer();
         writer.write_signature("8BIM")?;
-        writer.write_signature(key)?;
+        writer.write_signature(&block.key)?;
         writer.write_u32(data.len() as u32)?;
-        writer.write_bytes(data)?;
-
-        if data.len() % 2 != 0 {
-            writer.write_u8(0)?;
+        writer.write_bytes(&data)?;
+        let remainder = data.len() % 4;
+        if remainder != 0 {
+            writer.write_zeros(4 - remainder)?;
         }
     }
 
@@ -1085,11 +2667,21 @@ mod tests {
     #[test]
     fn vstk_descriptor_roundtrip() {
         use crate::descriptor::{Descriptor, DescriptorValue};
-        let mut desc = Descriptor { name: String::new(), class_id: "vstk".to_string(), items: std::collections::HashMap::new() };
-        desc.items.insert("strokeStyleVersion".to_string(), DescriptorValue::Integer(2));
+        let mut desc = Descriptor {
+            name: String::new(),
+            class_id: "vstk".to_string(),
+            items: std::collections::HashMap::new(),
+        };
+        desc.items.insert(
+            "strokeStyleVersion".to_string(),
+            DescriptorValue::Integer(2),
+        );
 
         let mut info = LayerAdditionalInfo::default();
-        info.vector_stroke = Some(VectorStroke { version: 1, descriptor: desc.clone() });
+        info.vector_stroke = Some(VectorStroke {
+            version: 1,
+            descriptor: desc.clone(),
+        });
 
         let mut w = PsdWriter::new(256);
         let len = w.write_additional_info("vstk", &info).unwrap();
@@ -1098,7 +2690,9 @@ mod tests {
         let cursor = std::io::Cursor::new(buf);
         let mut reader = PsdReader::new(cursor, Default::default());
         let mut read_info = LayerAdditionalInfo::default();
-        reader.read_additional_info("vstk", len, &mut read_info).unwrap();
+        reader
+            .read_additional_info("vstk", len, &mut read_info)
+            .unwrap();
 
         let vs = read_info.vector_stroke.unwrap();
         assert!(vs.descriptor.items.contains_key("strokeStyleVersion"));
@@ -1108,19 +2702,21 @@ mod tests {
     fn test_layer_id_roundtrip() {
         let mut info = LayerAdditionalInfo::default();
         info.layer_id = Some(12345);
-        
+
         let mut writer = PsdWriter::new(128);
         let length = writer.write_additional_info("lyid", &info).unwrap();
-        
+
         assert_eq!(length, 4);
-        
+
         let buffer = writer.into_buffer();
         let cursor = std::io::Cursor::new(buffer);
         let mut reader = PsdReader::new(cursor, Default::default());
-        
+
         let mut read_info = LayerAdditionalInfo::default();
-        reader.read_additional_info("lyid", length, &mut read_info).unwrap();
-        
+        reader
+            .read_additional_info("lyid", length, &mut read_info)
+            .unwrap();
+
         assert_eq!(read_info.layer_id, Some(12345));
     }
 
@@ -1128,56 +2724,225 @@ mod tests {
     fn test_layer_color_roundtrip() {
         let mut info = LayerAdditionalInfo::default();
         info.layer_color = Some(LayerColor::Blue);
-        
+
         let mut writer = PsdWriter::new(128);
         let length = writer.write_additional_info("lclr", &info).unwrap();
-        
+
         assert_eq!(length, 8);
-        
+
         let buffer = writer.into_buffer();
         let cursor = std::io::Cursor::new(buffer);
         let mut reader = PsdReader::new(cursor, Default::default());
-        
+
         let mut read_info = LayerAdditionalInfo::default();
-        reader.read_additional_info("lclr", length, &mut read_info).unwrap();
-        
+        reader
+            .read_additional_info("lclr", length, &mut read_info)
+            .unwrap();
+
         assert_eq!(read_info.layer_color, Some(LayerColor::Blue));
     }
 
     #[test]
-    fn lnk2_raw_preserved() {
+    fn test_section_divider_roundtrip() {
         let mut info = LayerAdditionalInfo::default();
-        info.linked_layer_data = Some(vec![0xAA, 0xBB]);
-        let mut w = PsdWriter::new(64);
-        write_layer_additional_info(&mut w, &info).unwrap();
-        let buf = w.into_buffer();
-        assert!(buf.windows(4).any(|w| w == b"lnk2"));
+        info.section_divider = Some(SectionDivider {
+            divider_type: 1,
+            blend_mode: Some("norm".to_string()),
+            sub_type: Some(2),
+        });
+
+        let mut writer = PsdWriter::new(128);
+        let length = writer.write_additional_info("lsct", &info).unwrap();
+
+        let buffer = writer.into_buffer();
+        let cursor = std::io::Cursor::new(buffer);
+        let mut reader = PsdReader::new(cursor, Default::default());
+
+        let mut read_info = LayerAdditionalInfo::default();
+        reader
+            .read_additional_info("lsct", length, &mut read_info)
+            .unwrap();
+
+        assert_eq!(read_info.section_divider, info.section_divider);
     }
 
     #[test]
-    fn fcmy_lands_in_unknown_map() {
-        // fcmy is a genuinely-unknown block that should go into the unknown HashMap
-        let payload = vec![0xde, 0xad, 0xbe, 0xef];
-        let cursor = std::io::Cursor::new(payload.clone());
+    fn test_small_bool_and_name_source_roundtrip() {
+        let mut info = LayerAdditionalInfo::default();
+        info.blend_clipped = Some(true);
+        info.blend_interior = Some(false);
+        info.knockout = Some(true);
+        info.name_source = Some("abcd".to_string());
+
+        let mut writer = PsdWriter::new(128);
+        let clbl_len = writer.write_additional_info("clbl", &info).unwrap();
+        let infx_len = writer.write_additional_info("infx", &info).unwrap();
+        let knko_len = writer.write_additional_info("knko", &info).unwrap();
+        let lnsr_len = writer.write_additional_info("lnsr", &info).unwrap();
+
+        let buffer = writer.into_buffer();
+        let cursor = std::io::Cursor::new(buffer);
+        let mut reader = PsdReader::new(cursor, Default::default());
+
+        let mut read_info = LayerAdditionalInfo::default();
+        reader
+            .read_additional_info("clbl", clbl_len, &mut read_info)
+            .unwrap();
+        reader
+            .read_additional_info("infx", infx_len, &mut read_info)
+            .unwrap();
+        reader
+            .read_additional_info("knko", knko_len, &mut read_info)
+            .unwrap();
+        reader
+            .read_additional_info("lnsr", lnsr_len, &mut read_info)
+            .unwrap();
+
+        assert_eq!(read_info.blend_clipped, Some(true));
+        assert_eq!(read_info.blend_interior, Some(false));
+        assert_eq!(read_info.knockout, Some(true));
+        assert_eq!(read_info.name_source.as_deref(), Some("abcd"));
+    }
+
+    #[test]
+    fn test_vector_origination_roundtrip() {
+        let mut info = LayerAdditionalInfo::default();
+        info.vector_origination = Some(VectorOrigination {
+            key_descriptor_list: vec![KeyDescriptorItem {
+                key_shape_invalidated: Some(true),
+                key_origin_type: Some(4),
+                key_origin_resolution: Some(72.0),
+                key_origin_rrect_radii: None,
+                key_origin_shape_bounding_box: None,
+                key_origin_box_corners: Some(vec![
+                    crate::types::Point { x: 1.0, y: 2.0 },
+                    crate::types::Point { x: 3.0, y: 4.0 },
+                ]),
+                transform: Some(vec![1.0, 0.0, 0.0, 1.0, 10.0, 20.0]),
+            }],
+        });
+
+        let mut writer = PsdWriter::new(256);
+        let length = writer.write_additional_info("vogk", &info).unwrap();
+        let buffer = writer.into_buffer();
+        let cursor = std::io::Cursor::new(buffer);
+        let mut reader = PsdReader::new(cursor, Default::default());
+        let mut read_info = LayerAdditionalInfo::default();
+        reader
+            .read_additional_info("vogk", length, &mut read_info)
+            .unwrap();
+
+        assert_eq!(read_info.vector_origination, info.vector_origination);
+    }
+
+    #[test]
+    fn lnk2_roundtrip() {
+        let mut info = LayerAdditionalInfo::default();
+        info.linked_files = Some(LinkedFilesBlock {
+            key: "lnk2".to_string(),
+            items: vec![LinkedFile {
+                id: "id".to_string(),
+                name: "name".to_string(),
+                file_type: Some("JPEG".to_string()),
+                creator: Some("8BIM".to_string()),
+                data: Some(vec![0xAA, 0xBB]),
+                time: None,
+                descriptor: None,
+                child_document_id: Some("liFD".to_string()),
+                asset_mod_time: None,
+                asset_locked_state: None,
+                linked_file: None,
+            }],
+        });
+        let mut w = PsdWriter::new(128);
+        let len = w.write_additional_info("lnk2", &info).unwrap();
+        let buf = w.into_buffer();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut read_info = LayerAdditionalInfo::default();
+        reader
+            .read_additional_info("lnk2", len, &mut read_info)
+            .unwrap();
+        assert_eq!(read_info.linked_files, info.linked_files);
+    }
+
+    #[test]
+    fn fcmy_is_typed_u8() {
+        let payload = vec![7u8];
+        let cursor = std::io::Cursor::new(payload);
         let mut reader = PsdReader::new(cursor, Default::default());
         let mut info = LayerAdditionalInfo::default();
-        reader.read_additional_info("fcmy", payload.len(), &mut info).unwrap();
-        assert_eq!(info.unknown.get("fcmy").unwrap(), &payload);
+        reader.read_additional_info("fcmy", 1, &mut info).unwrap();
+        assert_eq!(info.fcmy, Some(7));
     }
 
     #[test]
-    fn lr16_raw_roundtrip() {
-        let payload = vec![0xde, 0xad, 0xbe, 0xef];
+    fn pattern_block_roundtrip() {
         let mut info = LayerAdditionalInfo::default();
-        info.high_depth_layer_data = Some(("Lr16".to_string(), payload.clone()));
+        info.pattern_data = Some(PatternBlock {
+            key: "Patt".to_string(),
+            patterns: vec![PatternBlockEntry {
+                name: "pattern".to_string(),
+                id: "pat".to_string(),
+                version: 1,
+                mode: 3,
+                width: 2,
+                height: 1,
+                palette: None,
+                buffer: Some(vec![10, 20, 30, 255, 40, 50, 60, 128]),
+            }],
+        });
+
+        let mut writer = PsdWriter::new(256);
+        let len = writer.write_additional_info("Patt", &info).unwrap();
+        let buf = writer.into_buffer();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut read_info = LayerAdditionalInfo::default();
+        reader
+            .read_additional_info("Patt", len, &mut read_info)
+            .unwrap();
+
+        assert_eq!(read_info.pattern_data, info.pattern_data);
+    }
+
+    #[test]
+    fn lr16_typed_roundtrip() {
+        let layer = Layer {
+            top: Some(0),
+            left: Some(0),
+            bottom: Some(1),
+            right: Some(1),
+            blend_mode: Some(crate::types::BlendMode::Normal),
+            opacity: Some(1.0),
+            raw_data: Some(crate::layer::LayerRawData {
+                color_mode: crate::types::ColorMode::RGB,
+                bits_per_channel: 16,
+                channels: vec![crate::layer::LayerRawDataChannel {
+                    id: crate::types::ChannelID::Color0,
+                    compression: crate::types::Compression::RawData,
+                    data: Some(vec![0x12, 0x34]),
+                }],
+                large: false,
+            }),
+            ..Layer::default()
+        };
+        let mut info = LayerAdditionalInfo::default();
+        info.high_depth_layer_data = Some(HighDepthLayerInfo {
+            key: "Lr16".to_string(),
+            layers: vec![layer.clone()],
+        });
 
         let mut w = PsdWriter::new(64);
         write_layer_additional_info(&mut w, &info).unwrap();
         let buf = w.into_buffer();
-
-        assert!(buf.windows(4).any(|w| w == b"Lr16"));
-        // Confirm payload is present
-        assert!(buf.windows(4).any(|w| w == [0xde, 0xad, 0xbe, 0xef]));
+        let total_len = buf.len();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let parsed = read_layer_additional_info(&mut reader, total_len).unwrap();
+        let block = parsed.high_depth_layer_data.unwrap();
+        assert_eq!(block.key, "Lr16");
+        assert_eq!(block.layers.len(), 1);
+        let raw = block.layers[0].raw_data.as_ref().unwrap();
+        assert_eq!(raw.bits_per_channel, 16);
+        assert_eq!(raw.channels[0].data.as_deref(), Some(&[0x12, 0x34][..]));
     }
 
     #[test]
@@ -1202,9 +2967,14 @@ mod tests {
         let mut reader = PsdReader::new(cursor, Default::default());
 
         let mut read_info = LayerAdditionalInfo::default();
-        reader.read_additional_info("brit", length, &mut read_info).unwrap();
+        reader
+            .read_additional_info("brit", length, &mut read_info)
+            .unwrap();
 
-        assert!(matches!(read_info.adjustment, Some(AdjustmentLayer::BrightnessContrast(_))));
+        assert!(matches!(
+            read_info.adjustment,
+            Some(AdjustmentLayer::BrightnessContrast(_))
+        ));
     }
 
     #[test]
@@ -1233,7 +3003,9 @@ mod tests {
         let mut reader = PsdReader::new(cursor, Default::default());
 
         let mut read_info = LayerAdditionalInfo::default();
-        reader.read_additional_info("shmd", length, &mut read_info).unwrap();
+        reader
+            .read_additional_info("shmd", length, &mut read_info)
+            .unwrap();
 
         let meta = read_info.metadata.unwrap();
         assert_eq!(meta.entries.len(), 2);
@@ -1254,20 +3026,94 @@ mod tests {
             position: true,
             artboards: Some(false),
         });
-        
+
         let mut writer = PsdWriter::new(128);
         let length = writer.write_additional_info("lspf", &info).unwrap();
-        
+
         let buffer = writer.into_buffer();
         let cursor = std::io::Cursor::new(buffer);
         let mut reader = PsdReader::new(cursor, Default::default());
-        
+
         let mut read_info = LayerAdditionalInfo::default();
-        reader.read_additional_info("lspf", length, &mut read_info).unwrap();
-        
+        reader
+            .read_additional_info("lspf", length, &mut read_info)
+            .unwrap();
+
         let protected = read_info.protected.unwrap();
         assert_eq!(protected.transparency, true);
         assert_eq!(protected.composite, false);
         assert_eq!(protected.position, true);
+    }
+
+    #[test]
+    fn feid_roundtrip_minimal_item() {
+        let mut info = LayerAdditionalInfo::default();
+        info.filter_effects = Some(FilterEffectsBlock {
+            version: 1,
+            items: vec![FilterEffectsItem {
+                id: "test".to_string(),
+                version: Some(1),
+                rect: None,
+                depth: None,
+                channel_count: None,
+                slots: None,
+                preview: None,
+                buffer: None,
+            }],
+        });
+
+        let mut w = PsdWriter::new(256);
+        let len = w.write_additional_info("FEid", &info).unwrap();
+        let buf = w.into_buffer();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut reparsed = LayerAdditionalInfo::default();
+        reader
+            .read_additional_info("FEid", len, &mut reparsed)
+            .unwrap();
+        assert_eq!(reparsed.filter_effects, info.filter_effects);
+    }
+
+    #[test]
+    fn pxsd_roundtrip_minimal_item() {
+        let mut info = LayerAdditionalInfo::default();
+        info.pixel_source_data = Some(PixelSourceDataBlock {
+            items: vec![PixelSourceDataItem {
+                key: 7,
+                images: None,
+            }],
+        });
+
+        let mut w = PsdWriter::new(256);
+        let len = w.write_additional_info("PxSD", &info).unwrap();
+        let buf = w.into_buffer();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut reparsed = LayerAdditionalInfo::default();
+        reader
+            .read_additional_info("PxSD", len, &mut reparsed)
+            .unwrap();
+        assert_eq!(reparsed.pixel_source_data, info.pixel_source_data);
+    }
+
+    #[test]
+    fn txt2_roundtrip_engine_data() {
+        use std::collections::HashMap;
+        let engine = crate::engine_data::EngineValue::Object(HashMap::from([(
+            "_DocumentObjects".to_string(),
+            crate::engine_data::EngineValue::Object(HashMap::new()),
+        )]));
+        let mut info = LayerAdditionalInfo::default();
+        info.text_engine = Some(TextEngineBlock {
+            data: engine.clone(),
+        });
+
+        let mut w = PsdWriter::new(256);
+        let len = w.write_additional_info("Txt2", &info).unwrap();
+        let buf = w.into_buffer();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut reparsed = LayerAdditionalInfo::default();
+        reader
+            .read_additional_info("Txt2", len, &mut reparsed)
+            .unwrap();
+        assert_eq!(reparsed.text_engine, info.text_engine);
     }
 }

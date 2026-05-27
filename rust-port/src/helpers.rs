@@ -2,9 +2,9 @@
 //!
 //! Includes blend mode conversion, color space utilities, and image data handling.
 
-use crate::error::{PsdError, Result};
-use crate::types::{BlendMode, PixelData, ChannelID};
 use crate::compression;
+use crate::error::{PsdError, Result};
+use crate::types::{BlendMode, ChannelID, PixelData};
 use std::collections::HashMap;
 
 lazy_static::lazy_static! {
@@ -96,8 +96,20 @@ pub fn offset_for_channel(channel_id: ChannelID, cmyk: bool) -> usize {
         ChannelID::Color0 => 0,
         ChannelID::Color1 => 1,
         ChannelID::Color2 => 2,
-        ChannelID::Color3 => if cmyk { 3 } else { 4 },
-        ChannelID::Transparency => if cmyk { 4 } else { 3 },
+        ChannelID::Color3 => {
+            if cmyk {
+                3
+            } else {
+                4
+            }
+        }
+        ChannelID::Transparency => {
+            if cmyk {
+                4
+            } else {
+                3
+            }
+        }
         ChannelID::UserMask => 0,
         ChannelID::RealUserMask => 0,
     }
@@ -117,20 +129,20 @@ pub fn clamp(value: f64, min: f64, max: f64) -> f64 {
 /// Check if image data has alpha channel with transparency
 pub fn has_alpha(data: &PixelData) -> bool {
     let size = data.width * data.height * 4;
-    
+
     for i in (3..size).step_by(4) {
         if i < data.data.len() && data.data[i] != 255 {
             return true;
         }
     }
-    
+
     false
 }
 
 /// Reset image data to transparent black
 pub fn reset_image_data(data: &mut PixelData) {
     let size = data.width * data.height * 4;
-    
+
     for i in 0..size {
         if i % 4 == 3 {
             data.data[i] = 255; // Alpha
@@ -148,11 +160,9 @@ pub fn decode_bitmap(input: &[u8], output: &mut [u8], width: usize, height: usiz
     for _y in 0..height {
         for x in (0..width).step_by(8) {
             if input_pos >= input.len() {
-                return Err(PsdError::InvalidFormat(
-                    "Bitmap data truncated".to_string(),
-                ));
+                return Err(PsdError::InvalidFormat("Bitmap data truncated".to_string()));
             }
-            
+
             let mut byte = input[input_pos];
             input_pos += 1;
 
@@ -160,7 +170,7 @@ pub fn decode_bitmap(input: &[u8], output: &mut [u8], width: usize, height: usiz
                 if x + i >= width {
                     break;
                 }
-                
+
                 let value = if byte & 0x80 != 0 { 0 } else { 255 };
                 byte <<= 1;
 
@@ -199,13 +209,13 @@ pub fn setup_grayscale(data: &mut PixelData) {
 pub fn write_data_raw(data: &PixelData, offset: usize) -> Option<Vec<u8>> {
     let width = data.width;
     let height = data.height;
-    
+
     if width == 0 || height == 0 {
         return None;
     }
 
     let mut result = Vec::with_capacity(width * height);
-    
+
     for i in 0..(width * height) {
         let pos = i * 4 + offset;
         if pos < data.data.len() {
@@ -226,13 +236,13 @@ pub fn write_data_rle(
 ) -> Result<Option<Vec<u8>>> {
     let width = data.width;
     let height = data.height;
-    
+
     if width == 0 || height == 0 {
         return Ok(None);
     }
 
     let mut all_data = Vec::new();
-    
+
     for &offset in offsets {
         if let Some(channel_data) = write_data_raw(data, offset) {
             let compressed = compression::compress_rle(&channel_data, width, height)?;
@@ -244,19 +254,16 @@ pub fn write_data_rle(
 }
 
 /// Write ZIP-compressed channel data without prediction
-pub fn write_data_zip_without_prediction(
-    data: &PixelData,
-    offsets: &[usize],
-) -> Result<Vec<u8>> {
+pub fn write_data_zip_without_prediction(data: &PixelData, offsets: &[usize]) -> Result<Vec<u8>> {
     let width = data.width;
     let height = data.height;
     let size = width * height;
-    
+
     let mut all_data = Vec::new();
-    
+
     for &offset in offsets {
         let mut channel = Vec::with_capacity(size);
-        
+
         for i in 0..size {
             let pos = i * 4 + offset;
             if pos < data.data.len() {
@@ -265,7 +272,7 @@ pub fn write_data_zip_without_prediction(
                 channel.push(0);
             }
         }
-        
+
         let compressed = compression::compress_zip(&channel)?;
         all_data.extend_from_slice(&compressed);
     }
@@ -307,8 +314,8 @@ pub enum MaskParams {
 
 /// Large additional info keys (for PSB format)
 pub const LARGE_ADDITIONAL_INFO_KEYS: &[&str] = &[
-    "LMsk", "Lr16", "Lr32", "Layr", "Mt16", "Mt32", "Mtrn", "Alph",
-    "FMsk", "lnk2", "FEid", "FXid", "PxSD", "cinf",
+    "LMsk", "Lr16", "Lr32", "Layr", "Mt16", "Mt32", "Mtrn", "Alph", "FMsk", "lnk2", "FEid", "FXid",
+    "PxSD", "cinf",
 ];
 
 #[cfg(test)]
@@ -338,7 +345,7 @@ mod tests {
             data: vec![255, 0, 0, 255, 0, 255, 0, 255],
         };
         assert!(!has_alpha(&data));
-        
+
         data.data[3] = 128;
         assert!(has_alpha(&data));
     }

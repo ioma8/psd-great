@@ -1,24 +1,38 @@
-use ag_psd::*;
 use ag_psd::layer::SectionDivider;
+use ag_psd::*;
 use std::fs::File;
 use std::io::Cursor;
 
 #[test]
 fn test_basic_types() {
     // Test color types
-    let rgba = RGBA { r: 255, g: 128, b: 64, a: 255 };
+    let rgba = RGBA {
+        r: 255,
+        g: 128,
+        b: 64,
+        a: 255,
+    };
     assert_eq!(rgba.r, 255);
-    
-    let rgb = RGB { r: 255, g: 128, b: 64 };
+
+    let rgb = RGB {
+        r: 255,
+        g: 128,
+        b: 64,
+    };
     assert_eq!(rgb.g, 128);
-    
-    let cmyk = CMYK { c: 100, m: 50, y: 25, k: 0 };
+
+    let cmyk = CMYK {
+        c: 100,
+        m: 50,
+        y: 25,
+        k: 0,
+    };
     assert_eq!(cmyk.c, 100);
-    
+
     // Test blend mode
     let blend = BlendMode::Normal;
     assert_eq!(blend, BlendMode::Normal);
-    
+
     // Test color mode
     let mode = ColorMode::RGB;
     assert_eq!(mode as u16, 3);
@@ -36,7 +50,7 @@ fn test_layer_creation() {
         transparency_protected: Some(false),
         effects_open: Some(false),
         hidden: Some(false),
-        clipping: Some(false),
+        clipping: Some(0),
         image_data: None,
         raw_data: None,
         children: None,
@@ -48,8 +62,9 @@ fn test_layer_creation() {
             id: Some(1),
             ..Default::default()
         },
+        ..Default::default()
     };
-    
+
     assert_eq!(layer.additional_info.name, Some("Test Layer".to_string()));
     assert_eq!(layer.top, Some(10));
 }
@@ -74,8 +89,9 @@ fn test_psd_structure() {
             name: Some("Test Document".to_string()),
             ..Default::default()
         },
+        ..Default::default()
     };
-    
+
     assert_eq!(psd.width, 1920);
     assert_eq!(psd.height, 1080);
     assert_eq!(psd.color_mode, Some(ColorMode::RGB));
@@ -83,7 +99,12 @@ fn test_psd_structure() {
 
 #[test]
 fn test_serialization() {
-    let rgba = RGBA { r: 255, g: 128, b: 64, a: 255 };
+    let rgba = RGBA {
+        r: 255,
+        g: 128,
+        b: 64,
+        a: 255,
+    };
     let json = serde_json::to_string(&rgba).unwrap();
     let deserialized: RGBA = serde_json::from_str(&json).unwrap();
     assert_eq!(rgba, deserialized);
@@ -104,7 +125,12 @@ fn test_effects() {
             units: Units::Pixels,
             value: 10.0,
         }),
-        color: Some(Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 })),
+        color: Some(Color::RGBA(RGBA {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        })),
         blend_mode: Some(BlendMode::Multiply),
         opacity: Some(0.75),
         use_global_light: Some(true),
@@ -113,7 +139,7 @@ fn test_effects() {
         choke: None,
         layer_conceals: None,
     };
-    
+
     assert_eq!(shadow.enabled, Some(true));
     assert_eq!(shadow.angle, Some(120.0));
 }
@@ -131,22 +157,20 @@ fn test_create_and_write_simple_psd() {
         channels: Some(4), // RGBA
         bits_per_channel: Some(8),
         color_mode: Some(ColorMode::RGB),
-        children: Some(vec![
-            Layer {
-                top: Some(0),
-                left: Some(0),
-                bottom: Some(100),
-                right: Some(100),
-                blend_mode: Some(BlendMode::Normal),
-                opacity: Some(255.0),
-                additional_info: LayerAdditionalInfo {
-                    name: Some("Background".to_string()),
-                    id: Some(1),
-                    ..Default::default()
-                },
+        children: Some(vec![Layer {
+            top: Some(0),
+            left: Some(0),
+            bottom: Some(100),
+            right: Some(100),
+            blend_mode: Some(BlendMode::Normal),
+            opacity: Some(255.0),
+            additional_info: LayerAdditionalInfo {
+                name: Some("Background".to_string()),
+                id: Some(1),
                 ..Default::default()
             },
-        ]),
+            ..Default::default()
+        }]),
         additional_info: LayerAdditionalInfo {
             name: Some("Simple Test".to_string()),
             ..Default::default()
@@ -167,10 +191,10 @@ fn test_create_and_write_simple_psd() {
 
     let result = write_psd(&psd, &options);
     assert!(result.is_ok(), "Failed to write PSD: {:?}", result.err());
-    
+
     let buffer = result.unwrap();
     assert!(buffer.len() > 0, "Written buffer should not be empty");
-    
+
     // Verify header signature
     assert_eq!(&buffer[0..4], b"8BPS", "Invalid PSD signature");
 }
@@ -223,14 +247,12 @@ fn test_write_and_read_roundtrip() {
 
     // Write to buffer
     let write_options = WriteOptions::default();
-    let buffer = write_psd(&original_psd, &write_options)
-        .expect("Failed to write PSD");
+    let buffer = write_psd(&original_psd, &write_options).expect("Failed to write PSD");
 
     // Read back from buffer
     let read_options = ReadOptions::default();
     let cursor = Cursor::new(buffer);
-    let read_psd = read_psd(cursor, read_options)
-        .expect("Failed to read PSD");
+    let read_psd = read_psd(cursor, read_options).expect("Failed to read PSD");
 
     // Verify core properties match
     assert_eq!(read_psd.width, original_psd.width);
@@ -238,6 +260,42 @@ fn test_write_and_read_roundtrip() {
     assert_eq!(read_psd.channels, original_psd.channels);
     assert_eq!(read_psd.bits_per_channel, original_psd.bits_per_channel);
     assert_eq!(read_psd.color_mode, original_psd.color_mode);
+}
+
+#[test]
+fn test_global_layer_mask_roundtrip() {
+    let original_psd = Psd {
+        width: 2,
+        height: 2,
+        channels: Some(3),
+        bits_per_channel: Some(8),
+        color_mode: Some(ColorMode::RGB),
+        global_layer_mask_info: Some(GlobalLayerMaskInfo {
+            overlay_color_space: 1,
+            color_space1: 2,
+            color_space2: 3,
+            color_space3: 4,
+            color_space4: 5,
+            opacity: 255,
+            kind: 128,
+        }),
+        ..Default::default()
+    };
+
+    let buffer = write_psd(&original_psd, &WriteOptions::default()).unwrap();
+    let read_psd = read_psd(
+        Cursor::new(buffer),
+        ReadOptions {
+            skip_composite_image_data: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        read_psd.global_layer_mask_info,
+        original_psd.global_layer_mask_info
+    );
 }
 
 #[test]
@@ -270,7 +328,7 @@ fn test_different_color_modes() {
 
         let options = WriteOptions::default();
         let result = write_psd(&psd, &options);
-        
+
         // Some color modes may not be fully supported yet
         if result.is_ok() {
             let buffer = result.unwrap();
@@ -289,7 +347,12 @@ fn test_layer_effects_roundtrip() {
             show_in_dialog: None,
             enabled: Some(true),
             blend_mode: Some(BlendMode::Multiply),
-            color: Some(Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 })),
+            color: Some(Color::RGBA(RGBA {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            })),
             opacity: Some(0.75),
             angle: Some(120.0),
             distance: Some(UnitsValue {
@@ -367,16 +430,15 @@ fn test_text_layer_data() {
 fn test_compression_methods() {
     // Test that compression functions exist and can be called
     let data = vec![1, 1, 1, 2, 2, 3, 3, 3, 3];
-    
+
     // Test ZIP compression roundtrip
-    let compressed_zip = compress_zip(&data)
-        .expect("Failed to compress ZIP");
+    let compressed_zip = compress_zip(&data).expect("Failed to compress ZIP");
     assert!(compressed_zip.len() > 0);
-    
-    let decompressed_zip = decompress_zip(&compressed_zip, data.len())
-        .expect("Failed to decompress ZIP");
+
+    let decompressed_zip =
+        decompress_zip(&compressed_zip, data.len()).expect("Failed to decompress ZIP");
     assert_eq!(decompressed_zip, data);
-    
+
     // Test RLE compression (basic test that it doesn't panic)
     let width = 3;
     let height = 3;
@@ -420,7 +482,11 @@ fn test_blend_mode_conversion() {
     for mode in blend_modes {
         let key = from_blend_mode(mode);
         let converted = to_blend_mode(&key).expect("Failed to convert blend mode");
-        assert_eq!(converted, mode, "Blend mode conversion failed for {:?}", mode);
+        assert_eq!(
+            converted, mode,
+            "Blend mode conversion failed for {:?}",
+            mode
+        );
     }
 }
 
@@ -433,46 +499,49 @@ fn test_layer_hierarchy() {
         channels: Some(3),
         bits_per_channel: Some(8),
         color_mode: Some(ColorMode::RGB),
-        children: Some(vec![
-            Layer {
-                additional_info: LayerAdditionalInfo {
-                    name: Some("Group 1".to_string()),
-                    section_divider: Some(SectionDivider {
-                        divider_type: SectionDividerType::OpenFolder,
-                        key: None,
-                        sub_type: None,
-                    }),
-                    ..Default::default()
-                },
-                children: Some(vec![
-                    Layer {
-                        additional_info: LayerAdditionalInfo {
-                            name: Some("Layer 1.1".to_string()),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                    Layer {
-                        additional_info: LayerAdditionalInfo {
-                            name: Some("Layer 1.2".to_string()),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                ]),
+        children: Some(vec![Layer {
+            additional_info: LayerAdditionalInfo {
+                name: Some("Group 1".to_string()),
+                section_divider: Some(SectionDivider {
+                    divider_type: SectionDividerType::OpenFolder,
+                    key: None,
+                    sub_type: None,
+                }),
                 ..Default::default()
             },
-        ]),
+            children: Some(vec![
+                Layer {
+                    additional_info: LayerAdditionalInfo {
+                        name: Some("Layer 1.1".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Layer {
+                    additional_info: LayerAdditionalInfo {
+                        name: Some("Layer 1.2".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        }]),
         ..Default::default()
     };
 
     assert!(psd.children.is_some());
     let children = psd.children.as_ref().unwrap();
     assert_eq!(children.len(), 1);
-    
+
     let group = &children[0];
     assert_eq!(
-        group.additional_info.section_divider.as_ref().unwrap().divider_type,
+        group
+            .additional_info
+            .section_divider
+            .as_ref()
+            .unwrap()
+            .divider_type,
         SectionDividerType::OpenFolder
     );
     assert!(group.children.is_some());
@@ -482,38 +551,8 @@ fn test_layer_hierarchy() {
 #[test]
 fn test_image_resources() {
     let resources = ImageResources {
-        layer_state: None,
-        layer_selection_ids: None,
-        version_info: None,
         alpha_identifiers: Some(vec![1, 2, 3]),
-        alpha_channel_names: None,
-        global_angle: None,
-        global_altitude: None,
-        pixel_aspect_ratio: None,
-        urls_list: None,
-        grid_and_guides_information: None,
-        resolution_info: None,
-        thumbnail_raw: None,
-        caption_digest: None,
-        xmp_metadata: None,
-        print_scale: None,
-        print_information: None,
-        background_color: None,
-        ids_seed_number: None,
-        print_flags: None,
-        icc_untagged_profile: None,
-        path_selection_state: None,
-        image_ready_variables: None,
-        image_ready_data_sets: None,
-        animations: None,
-        onion_skins: None,
-        timeline_information: None,
-        sheet_disclosure: None,
-        count_information: None,
-        slices: None,
-        layer_comps: None,
-        copyrighted: None,
-        url: None,
+        ..Default::default()
     };
 
     assert!(resources.alpha_identifiers.is_some());
@@ -544,19 +583,19 @@ fn test_layer_colors() {
             },
             ..Default::default()
         };
-        
+
         assert_eq!(layer.additional_info.layer_color, Some(color));
     }
 }
 
-#[test] 
+#[test]
 fn test_read_existing_psd() {
     // Try to read a test PSD file if it exists
     let test_file = "../test/test.psd";
     if let Ok(file) = File::open(test_file) {
         let options = ReadOptions::default();
         let result = read_psd(file, options);
-        
+
         if let Ok(psd) = result {
             assert!(psd.width > 0);
             assert!(psd.height > 0);

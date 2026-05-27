@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
-use crate::types::*;
 use crate::effects::LayerEffectsInfo;
 use crate::text::LayerTextData;
+use crate::types::*;
+use serde::{Deserialize, Serialize};
 
 /// Layer mask data
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct LayerMaskData {
     pub top: Option<i32>,
     pub left: Option<i32>,
@@ -1043,7 +1043,9 @@ pub struct Layer {
     #[serde(rename = "effectsOpen")]
     pub effects_open: Option<bool>,
     pub hidden: Option<bool>,
-    pub clipping: Option<bool>,
+    pub clipping: Option<u16>,
+    #[serde(rename = "resourceVisible")]
+    pub resource_visible: Option<bool>,
     #[serde(rename = "imageData")]
     pub image_data: Option<PixelData>,
     #[serde(rename = "rawData")]
@@ -1054,7 +1056,16 @@ pub struct Layer {
     pub link_group: Option<i32>,
     #[serde(rename = "linkGroupEnabled")]
     pub link_group_enabled: Option<bool>,
-    
+
     #[serde(flatten)]
     pub additional_info: LayerAdditionalInfo,
+
+    /// Parsed tagged blocks from the PSD extra data section.
+    /// Used internally for round-trip fidelity of all layer metadata.
+    #[serde(skip)]
+    pub tagged_blocks: crate::additional_info::LayerAdditionalInfo,
+
+    /// Raw blending ranges data for round-trip preservation.
+    #[serde(skip)]
+    pub blending_ranges_raw: Option<Vec<u8>>,
 }

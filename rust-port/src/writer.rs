@@ -2,12 +2,16 @@
 //!
 //! Provides functionality to write PSD files.
 
-use crate::error::{PsdError, Result};
-use crate::types::{BlendMode, ChannelID, ColorMode, Compression, Color};
-use crate::psd::{Psd, WriteOptions, GlobalLayerMaskInfo};
-use crate::layer::Layer;
-use crate::helpers::{from_blend_mode, clamp, has_alpha};
+use crate::binrw_support::{
+    encode_be, ChannelInfoRecord, GlobalLayerMaskRecord, LayerBlendRecord, LayerMaskPrefixRecord,
+    LayerRecordBounds, PsbChannelInfoRecord, PsdHeaderRecord,
+};
 use crate::compression;
+use crate::error::{PsdError, Result};
+use crate::helpers::{clamp, from_blend_mode, has_alpha};
+use crate::layer::Layer;
+use crate::psd::{GlobalLayerMaskInfo, Psd, WriteOptions};
+use crate::types::{BlendMode, ChannelID, Color, ColorMode, Compression};
 use byteorder::{BigEndian, WriteBytesExt};
 use std::io::Cursor;
 
@@ -178,7 +182,7 @@ impl PsdWriter {
     /// Write a Unicode string (UTF-16 BE)
     pub fn write_unicode_string(&mut self, text: &str) -> Result<()> {
         self.write_u32(text.len() as u32)?;
-        
+
         for ch in text.chars() {
             self.write_u16(ch as u16)?;
         }
@@ -189,11 +193,11 @@ impl PsdWriter {
     /// Write a Unicode string with padding
     pub fn write_unicode_string_with_padding(&mut self, text: &str) -> Result<()> {
         self.write_u32((text.len() + 1) as u32)?;
-        
+
         for ch in text.chars() {
             self.write_u16(ch as u16)?;
         }
-        
+
         self.write_u16(0)?;
 
         Ok(())
@@ -207,7 +211,7 @@ impl PsdWriter {
         if large {
             self.write_u32(0)?; // High 32 bits
         }
-        
+
         let length_offset = self.offset;
         self.write_u32(0)?; // Placeholder for length
 
@@ -312,7 +316,11 @@ pub fn write_psd(psd: &Psd, options: &WriteOptions) -> Result<Vec<u8>> {
         return Err(PsdError::InvalidFormat("Invalid document size".to_string()));
     }
 
-    let max_size = if options.psb.unwrap_or(false) { 300000 } else { 30000 };
+    let max_size = if options.psb.unwrap_or(false) {
+        300000
+    } else {
+        30000
+    };
     if psd.width > max_size || psd.height > max_size {
         return Err(PsdError::InvalidFormat(format!(
             "Document size too large: {}x{} (max is {}x{})",
@@ -321,58 +329,97 @@ pub fn write_psd(psd: &Psd, options: &WriteOptions) -> Result<Vec<u8>> {
     }
 
     let bits_per_channel = psd.bits_per_channel.unwrap_or(8);
-    if bits_per_channel != 8 {
-        return Err(PsdError::UnsupportedFeature(
-            "Only 8 bits per channel is supported for writing".to_string(),
-        ));
+    if !matches!(bits_per_channel, 8 | 16 | 32) {
+        return Err(PsdError::UnsupportedFeature(format!(
+            "Unsupported bits per channel for writing: {}",
+            bits_per_channel
+        )));
     }
 
     let mut writer = PsdWriter::new(1024 * 1024); // 1MB initial capacity
 
-    // Write header
-    writer.write_signature("8BPS")?;
-    writer.write_u16(if options.psb.unwrap_or(false) { 2 } else { 1 })?; // Version
-    writer.write_zeros(6)?; // Reserved
-
+    let color_mode = psd.color_mode.unwrap_or(ColorMode::RGB);
     let global_alpha = if let Some(ref image_data) = psd.image_data {
         has_alpha(image_data)
     } else {
         false
     };
+    let base_channels = match color_mode {
+        ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Indexed => 1,
+        ColorMode::CMYK => 4,
+        _ => 3,
+    };
+    let channel_count = psd
+        .channels
+        .unwrap_or((base_channels + usize::from(global_alpha)) as u16);
 
-    writer.write_u16(if global_alpha { 4 } else { 3 })?; // Channels
-    writer.write_u32(psd.height)?;
-    writer.write_u32(psd.width)?;
-    writer.write_u16(bits_per_channel as u16)?;
-    writer.write_u16(ColorMode::RGB as u16)?; // Only RGB supported for now
+    // Apply prewrite passes
+    let mut psd = psd.clone();
+    apply_resource_prewrite(&mut psd);
+    crate::document_resource_postprocess::apply_document_prewrite(&mut psd)?;
+    apply_text_prewrite(&mut psd)?;
+
+    let header = PsdHeaderRecord {
+        signature: *b"8BPS",
+        version: if options.psb.unwrap_or(false) { 2 } else { 1 },
+        reserved: [0; 6],
+        channels: channel_count,
+        height: psd.height,
+        width: psd.width,
+        depth: bits_per_channel as u16,
+        color_mode: color_mode as u16,
+    };
+    writer.write_bytes(&encode_be(&header, "PSD header")?)?;
 
     // Write color mode data section
-    write_color_mode_data(&mut writer, psd)?;
+    write_color_mode_data(&mut writer, &psd)?;
 
     // Write image resources section
-    write_image_resources(&mut writer, psd, options)?;
+    write_image_resources(&mut writer, &psd, options)?;
 
     // Write layer and mask information section
-    write_layer_and_mask_info(&mut writer, psd, options)?;
+    write_layer_and_mask_info(&mut writer, &psd, options)?;
 
     // Write image data section
-    write_image_data(&mut writer, psd, options, global_alpha)?;
+    write_image_data(&mut writer, &psd, options, global_alpha)?;
 
     Ok(writer.into_buffer())
 }
 
 /// Write color mode data section
-fn write_color_mode_data(writer: &mut PsdWriter, _psd: &Psd) -> Result<()> {
-    writer.write_section(1, false, |_writer| {
-        // Empty for RGB mode
+fn write_color_mode_data(writer: &mut PsdWriter, psd: &Psd) -> Result<()> {
+    writer.write_section(1, false, |writer| {
+        if psd.color_mode == Some(ColorMode::Indexed) {
+            let palette = psd.palette.as_ref().ok_or_else(|| {
+                PsdError::InvalidFormat("Indexed color mode requires palette".to_string())
+            })?;
+            if palette.len() != 256 {
+                return Err(PsdError::InvalidFormat(
+                    "Indexed color mode requires 256 palette entries".to_string(),
+                ));
+            }
+            for entry in palette {
+                writer.write_u8(entry.r)?;
+            }
+            for entry in palette {
+                writer.write_u8(entry.g)?;
+            }
+            for entry in palette {
+                writer.write_u8(entry.b)?;
+            }
+        } else if let Some(ref data) = psd.color_mode_data {
+            writer.write_bytes(data)?;
+        }
         Ok(())
     })
 }
 
 /// Write image resources section
-fn write_image_resources(writer: &mut PsdWriter, _psd: &Psd, _options: &WriteOptions) -> Result<()> {
-    writer.write_section(1, false, |_writer| {
-        // Write minimal image resources for now
+fn write_image_resources(writer: &mut PsdWriter, psd: &Psd, _options: &WriteOptions) -> Result<()> {
+    writer.write_section(1, false, |writer| {
+        if let Some(ref resources) = psd.image_resources {
+            crate::image_resources::write_image_resources(writer, resources)?;
+        }
         Ok(())
     })
 }
@@ -387,9 +434,12 @@ fn write_layer_and_mask_info(
     writer.write_section(1, psb, |writer| {
         // Write layer info
         write_layer_info(writer, psd, options)?;
-        
+
         // Write global layer mask info
         write_global_layer_mask_info(writer, psd.global_layer_mask_info.as_ref())?;
+
+        // Write document-level tagged blocks
+        crate::additional_info::write_layer_additional_info(writer, &psd.tagged_blocks)?;
 
         Ok(())
     })
@@ -398,24 +448,14 @@ fn write_layer_and_mask_info(
 /// Write layer info section
 fn write_layer_info(writer: &mut PsdWriter, psd: &Psd, options: &WriteOptions) -> Result<()> {
     let psb = options.psb.unwrap_or(false);
+    let bits_per_channel = psd.bits_per_channel.unwrap_or(8);
     writer.write_section(2, psb, |writer| {
         let layers = flatten_layers(psd.children.as_ref());
-        let channel_ids = [
-            ChannelID::Transparency,
-            ChannelID::Color0,
-            ChannelID::Color1,
-            ChannelID::Color2,
-        ];
-        let prepared_payloads: Vec<Vec<Vec<u8>>> = layers
+        let prepared_payloads: Vec<PreparedLayerChannels> = layers
             .iter()
-            .map(|layer| {
-                channel_ids
-                    .iter()
-                    .map(|&channel_id| layer_channel_payload(layer, channel_id, options))
-                    .collect::<Result<Vec<Vec<u8>>>>()
-            })
-            .collect::<Result<Vec<Vec<Vec<u8>>>>>()?;
-        
+            .map(|layer| prepare_layer_channels(layer, bits_per_channel, options))
+            .collect::<Result<Vec<PreparedLayerChannels>>>()?;
+
         let layer_count = layers.len() as i16;
         writer.write_i16(layer_count)?;
 
@@ -426,7 +466,7 @@ fn write_layer_info(writer: &mut PsdWriter, psd: &Psd, options: &WriteOptions) -
 
         // Write layer channel image data
         for payloads in &prepared_payloads {
-            write_layer_channel_data(writer, payloads, options)?;
+            write_layer_channel_data(writer, payloads)?;
         }
 
         Ok(())
@@ -434,9 +474,9 @@ fn write_layer_info(writer: &mut PsdWriter, psd: &Psd, options: &WriteOptions) -
 }
 
 /// Flatten layer hierarchy to a list
-fn flatten_layers(children: Option<&Vec<Layer>>) -> Vec<Layer> {
+pub(crate) fn flatten_layers(children: Option<&Vec<Layer>>) -> Vec<Layer> {
     let mut result = Vec::new();
-    
+
     if let Some(children) = children {
         for child in children {
             if let Some(ref child_children) = child.children {
@@ -444,10 +484,10 @@ fn flatten_layers(children: Option<&Vec<Layer>>) -> Vec<Layer> {
                 let mut folder = child.clone();
                 folder.children = None;
                 result.push(folder);
-                
+
                 // Add children
                 result.extend(flatten_layers(Some(child_children)));
-                
+
                 // Add closing folder marker
                 let mut closing = Layer::default();
                 closing.additional_info.name = Some("</Layer group>".to_string());
@@ -457,61 +497,68 @@ fn flatten_layers(children: Option<&Vec<Layer>>) -> Vec<Layer> {
             }
         }
     }
-    
+
     result
+}
+
+#[derive(Debug, Clone)]
+struct PreparedChannel {
+    id: ChannelID,
+    compression: Compression,
+    payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedLayerChannels {
+    entries: Vec<PreparedChannel>,
 }
 
 /// Write a single layer record
 fn write_layer_record(
     writer: &mut PsdWriter,
     layer: &Layer,
-    channel_payloads: &[Vec<u8>],
+    channel_payloads: &PreparedLayerChannels,
     options: &WriteOptions,
 ) -> Result<()> {
     let psb = options.psb.unwrap_or(false);
-    
-    // Write bounds
-    writer.write_i32(layer.top.unwrap_or(0))?;
-    writer.write_i32(layer.left.unwrap_or(0))?;
-    writer.write_i32(layer.bottom.unwrap_or(0))?;
-    writer.write_i32(layer.right.unwrap_or(0))?;
+    writer.write_bytes(&encode_be(
+        &LayerRecordBounds {
+            top: layer.top.unwrap_or(0),
+            left: layer.left.unwrap_or(0),
+            bottom: layer.bottom.unwrap_or(0),
+            right: layer.right.unwrap_or(0),
+            channel_count: channel_payloads.entries.len() as u16,
+        },
+        "layer record bounds",
+    )?)?;
 
-    // Write channel count (A, R, G, B)
-    let channel_ids = [
-        ChannelID::Transparency,
-        ChannelID::Color0,
-        ChannelID::Color1,
-        ChannelID::Color2,
-    ];
-    let channel_count = channel_ids.len() as u16;
-    writer.write_u16(channel_count)?;
-
-    for (idx, channel_id) in channel_ids.iter().enumerate() {
-        let channel_payload_len = channel_payloads
-            .get(idx)
-            .map(|p| p.len())
-            .unwrap_or(0) as u32;
-        writer.write_i16(*channel_id as i16)?;
+    for entry in &channel_payloads.entries {
+        let channel_payload_len = entry.payload.len() as u32;
         if psb {
-            writer.write_u32(0)?;
+            writer.write_bytes(&encode_be(
+                &PsbChannelInfoRecord {
+                    id: entry.id as i16,
+                    high_length: 0,
+                    low_length: channel_payload_len + 2,
+                },
+                "PSB channel info",
+            )?)?;
+        } else {
+            writer.write_bytes(&encode_be(
+                &ChannelInfoRecord {
+                    id: entry.id as i16,
+                    length: channel_payload_len + 2,
+                },
+                "channel info",
+            )?)?;
         }
-        writer.write_u32(channel_payload_len + 2)?; // Compression field + payload
     }
 
-    // Write blend mode signature
-    writer.write_signature("8BIM")?;
-    
     let blend_mode = layer.blend_mode.unwrap_or(BlendMode::Normal);
-    writer.write_signature(from_blend_mode(blend_mode))?;
-
-    // Write opacity
+    let blend_mode_sig = from_blend_mode(blend_mode);
+    let mut blend_mode_raw = [0u8; 4];
+    blend_mode_raw.copy_from_slice(blend_mode_sig.as_bytes());
     let opacity = layer.opacity.unwrap_or(1.0);
-    writer.write_u8((clamp(opacity, 0.0, 1.0) * 255.0).round() as u8)?;
-
-    // Write clipping
-    writer.write_u8(if layer.clipping.unwrap_or(false) { 1 } else { 0 })?;
-
-    // Write flags
     let mut flags = 0x08u8; // Photoshop 5.0+ bit
     if layer.transparency_protected.unwrap_or(false) {
         flags |= 0x01;
@@ -519,20 +566,100 @@ fn write_layer_record(
     if layer.hidden.unwrap_or(false) {
         flags |= 0x02;
     }
-    writer.write_u8(flags)?;
-    writer.write_u8(0)?; // Filler
+    writer.write_bytes(&encode_be(
+        &LayerBlendRecord {
+            signature: *b"8BIM",
+            blend_mode: blend_mode_raw,
+            opacity: (clamp(opacity, 0.0, 1.0) * 255.0).round() as u8,
+            // TS always writes 0 here and uses image resource 1026 as the
+            // semantic clipping source.
+            clipping: 0,
+            flags,
+            filler: 0,
+        },
+        "layer blend record",
+    )?)?;
 
     // Write extra data
     writer.write_section(1, false, |writer| {
-        // Write empty mask data
-        writer.write_section(1, false, |_writer| Ok(()))?;
+        // Write layer mask data
+        writer.write_section(1, false, |writer| {
+            if let Some(ref mask) = layer.additional_info.mask {
+                let mut flags = 0u8;
+                if mask.position_relative_to_layer.unwrap_or(false) {
+                    flags |= 0x01;
+                }
+                if mask.disabled.unwrap_or(false) {
+                    flags |= 0x02;
+                }
+                if mask.from_vector_data.unwrap_or(false) {
+                    flags |= 0x08;
+                }
+                let has_params = mask.user_mask_density.is_some()
+                    || mask.user_mask_feather.is_some()
+                    || mask.vector_mask_density.is_some()
+                    || mask.vector_mask_feather.is_some();
+                if has_params {
+                    flags |= 0x10;
+                }
+                writer.write_bytes(&encode_be(
+                    &LayerMaskPrefixRecord {
+                        top: mask.top.unwrap_or(0),
+                        left: mask.left.unwrap_or(0),
+                        bottom: mask.bottom.unwrap_or(0),
+                        right: mask.right.unwrap_or(0),
+                        default_color: mask.default_color.unwrap_or(0),
+                        flags,
+                    },
+                    "layer mask prefix",
+                )?)?;
+                if has_params {
+                    writer.write_zeros(18)?; // real mask rect + real flags (not stored currently)
+                    let mut param_flags = 0u8;
+                    if mask.user_mask_density.is_some() {
+                        param_flags |= 0x01;
+                    }
+                    if mask.user_mask_feather.is_some() {
+                        param_flags |= 0x02;
+                    }
+                    if mask.vector_mask_density.is_some() {
+                        param_flags |= 0x04;
+                    }
+                    if mask.vector_mask_feather.is_some() {
+                        param_flags |= 0x08;
+                    }
+                    writer.write_u8(param_flags)?;
+                    if let Some(v) = mask.user_mask_density {
+                        writer.write_u8(v as u8)?;
+                    }
+                    if let Some(v) = mask.user_mask_feather {
+                        writer.write_f64(v)?;
+                    }
+                    if let Some(v) = mask.vector_mask_density {
+                        writer.write_u8(v as u8)?;
+                    }
+                    if let Some(v) = mask.vector_mask_feather {
+                        writer.write_f64(v)?;
+                    }
+                }
+            }
+            Ok(())
+        })?;
 
-        // Write empty blending ranges
-        writer.write_section(1, false, |_writer| Ok(()))?;
+        // Write blending ranges
+        writer.write_section(1, false, |writer| {
+            if let Some(ref bytes) = layer.blending_ranges_raw {
+                writer.write_bytes(bytes)?;
+            }
+            Ok(())
+        })?;
 
         // Write layer name
         let name = layer.additional_info.name.as_deref().unwrap_or("");
         writer.write_pascal_string(name, 4)?;
+
+        // Write tagged blocks (additional layer info)
+        crate::additional_info::write_layer_additional_info(writer, &layer.tagged_blocks)?;
 
         Ok(())
     })?;
@@ -543,20 +670,35 @@ fn write_layer_record(
 /// Write layer channel image data
 fn write_layer_channel_data(
     writer: &mut PsdWriter,
-    channel_payloads: &[Vec<u8>],
-    options: &WriteOptions,
+    channel_payloads: &PreparedLayerChannels,
 ) -> Result<()> {
-    let compression = if options.compress.unwrap_or(false) {
-        Compression::RleCompressed
-    } else {
-        Compression::RawData
-    };
-
-    for payload in channel_payloads {
-        writer.write_u16(compression as u16)?;
-        writer.write_bytes(payload)?;
+    for entry in &channel_payloads.entries {
+        writer.write_u16(entry.compression as u16)?;
+        writer.write_bytes(&entry.payload)?;
     }
 
+    Ok(())
+}
+
+pub(crate) fn write_nested_layer_info_block(
+    writer: &mut PsdWriter,
+    layers: &[Layer],
+    bits_per_channel: u8,
+) -> Result<()> {
+    let options = WriteOptions::default();
+    let flattened = flatten_layers(Some(&layers.to_vec()));
+    let prepared_payloads: Vec<PreparedLayerChannels> = flattened
+        .iter()
+        .map(|layer| prepare_layer_channels(layer, bits_per_channel, &options))
+        .collect::<Result<Vec<PreparedLayerChannels>>>()?;
+
+    writer.write_i16(flattened.len() as i16)?;
+    for (layer, prepared) in flattened.iter().zip(prepared_payloads.iter()) {
+        write_layer_record(writer, layer, prepared, &options)?;
+    }
+    for prepared in &prepared_payloads {
+        write_layer_channel_data(writer, prepared)?;
+    }
     Ok(())
 }
 
@@ -567,14 +709,17 @@ fn write_global_layer_mask_info(
 ) -> Result<()> {
     writer.write_section(1, false, |writer| {
         if let Some(info) = info {
-            writer.write_u16(info.overlay_color_space)?;
-            writer.write_u16(info.color_space1)?;
-            writer.write_u16(info.color_space2)?;
-            writer.write_u16(info.color_space3)?;
-            writer.write_u16(info.color_space4)?;
-            writer.write_u16(info.opacity)?;
-            writer.write_u8(info.kind)?;
-            writer.write_zeros(3)?;
+            let record = GlobalLayerMaskRecord {
+                overlay_color_space: info.overlay_color_space,
+                color_space1: info.color_space1,
+                color_space2: info.color_space2,
+                color_space3: info.color_space3,
+                color_space4: info.color_space4,
+                opacity: info.opacity,
+                kind: info.kind,
+                reserved: [0; 3],
+            };
+            writer.write_bytes(&encode_be(&record, "global layer mask info")?)?;
         }
         Ok(())
     })
@@ -587,34 +732,42 @@ fn write_image_data(
     options: &WriteOptions,
     global_alpha: bool,
 ) -> Result<()> {
-    let compression = if options.compress.unwrap_or(false) {
-        Compression::RleCompressed
-    } else {
-        Compression::RawData
-    };
+    let bits_per_channel = psd.bits_per_channel.unwrap_or(8);
+    let compression = preferred_channel_compression(bits_per_channel, options);
     writer.write_u16(compression as u16)?;
 
     let fallback_width = psd.width as usize;
     let fallback_height = psd.height as usize;
     let fallback_rgba = vec![0u8; fallback_width * fallback_height * 4];
     let (image_data, width, height) = if let Some(ref image_data) = psd.image_data {
-        (image_data.data.as_slice(), image_data.width, image_data.height)
+        (
+            image_data.data.as_slice(),
+            image_data.width,
+            image_data.height,
+        )
     } else {
         (fallback_rgba.as_slice(), fallback_width, fallback_height)
     };
 
-    let offsets: &[usize] = if global_alpha { &[0, 1, 2, 3] } else { &[0, 1, 2] };
+    let offsets: &[usize] = if global_alpha {
+        &[0, 1, 2, 3]
+    } else {
+        &[0, 1, 2]
+    };
     match compression {
         Compression::RawData => {
             for &offset in offsets {
-                writer.write_bytes(&extract_channel_data_from_rgba(image_data, width, height, offset))?;
+                let raw = extract_channel_data_from_rgba(image_data, width, height, offset);
+                writer.write_bytes(&expand_samples_for_depth(&raw, bits_per_channel))?;
             }
         }
         Compression::RleCompressed => {
             let mut compressed_channels = Vec::with_capacity(offsets.len());
             for &offset in offsets {
                 let raw = extract_channel_data_from_rgba(image_data, width, height, offset);
-                let compressed = compression::compress_rle(&raw, width, height)?;
+                let expanded = expand_samples_for_depth(&raw, bits_per_channel);
+                let row_bytes = width * bytes_per_sample(bits_per_channel);
+                let compressed = compression::compress_rle(&expanded, row_bytes, height)?;
                 compressed_channels.push(compressed);
             }
 
@@ -628,17 +781,38 @@ fn write_image_data(
                 writer.write_bytes(&channel[table_len..])?;
             }
         }
-        Compression::ZipWithoutPrediction | Compression::ZipWithPrediction => {
-            return Err(PsdError::UnsupportedFeature(
-                "ZIP image compression is not supported for writing".to_string(),
-            ));
+        Compression::ZipWithoutPrediction => {
+            for &offset in offsets {
+                let raw = extract_channel_data_from_rgba(image_data, width, height, offset);
+                let expanded = expand_samples_for_depth(&raw, bits_per_channel);
+                let compressed = compression::compress_zip(&expanded)?;
+                writer.write_bytes(&compressed)?;
+            }
+        }
+        Compression::ZipWithPrediction => {
+            for &offset in offsets {
+                let raw = extract_channel_data_from_rgba(image_data, width, height, offset);
+                let expanded = expand_samples_for_depth(&raw, bits_per_channel);
+                let compressed = compression::compress_zip_with_prediction(
+                    &expanded,
+                    width,
+                    height,
+                    bits_per_channel as u16,
+                )?;
+                writer.write_bytes(&compressed)?;
+            }
         }
     }
 
     Ok(())
 }
 
-fn layer_channel_payload(layer: &Layer, channel_id: ChannelID, options: &WriteOptions) -> Result<Vec<u8>> {
+fn layer_channel_payload(
+    layer: &Layer,
+    channel_id: ChannelID,
+    bits_per_channel: u8,
+    options: &WriteOptions,
+) -> Result<Vec<u8>> {
     let width = (layer.right.unwrap_or(0) - layer.left.unwrap_or(0)).max(0) as usize;
     let height = (layer.bottom.unwrap_or(0) - layer.top.unwrap_or(0)).max(0) as usize;
     let image_data = layer.image_data.as_ref();
@@ -650,15 +824,140 @@ fn layer_channel_payload(layer: &Layer, channel_id: ChannelID, options: &WriteOp
         _ => 0,
     };
     let raw = extract_layer_channel_data(image_data, width, height, offset);
-
-    if options.compress.unwrap_or(false) {
-        compression::compress_rle(&raw, width, height)
-    } else {
-        Ok(raw)
+    let expanded = expand_samples_for_depth(&raw, bits_per_channel);
+    match preferred_channel_compression(bits_per_channel, options) {
+        Compression::RawData => Ok(expanded),
+        Compression::RleCompressed => {
+            let row_bytes = width * bytes_per_sample(bits_per_channel);
+            compression::compress_rle(&expanded, row_bytes, height)
+        }
+        Compression::ZipWithoutPrediction => compression::compress_zip(&expanded),
+        Compression::ZipWithPrediction => compression::compress_zip_with_prediction(
+            &expanded,
+            width,
+            height,
+            bits_per_channel as u16,
+        ),
     }
 }
 
-fn extract_layer_channel_data(image_data: Option<&crate::types::PixelData>, width: usize, height: usize, offset: usize) -> Vec<u8> {
+fn prepare_layer_channels(
+    layer: &Layer,
+    bits_per_channel: u8,
+    options: &WriteOptions,
+) -> Result<PreparedLayerChannels> {
+    if let Some(ref raw_data) = layer.raw_data {
+        if raw_data.bits_per_channel == bits_per_channel {
+            let mut entries = Vec::with_capacity(raw_data.channels.len());
+            for channel in &raw_data.channels {
+                let (width, height) = layer_channel_dimensions(layer, channel.id);
+                let default_len = width * height * bytes_per_sample(bits_per_channel);
+                let raw = channel.data.clone().unwrap_or_else(|| vec![0; default_len]);
+                let payload = match channel.compression {
+                    Compression::RawData => raw,
+                    Compression::RleCompressed => {
+                        let row_bytes = width * bytes_per_sample(bits_per_channel);
+                        compression::compress_rle(&raw, row_bytes, height)?
+                    }
+                    Compression::ZipWithoutPrediction => compression::compress_zip(&raw)?,
+                    Compression::ZipWithPrediction => compression::compress_zip_with_prediction(
+                        &raw,
+                        width,
+                        height,
+                        bits_per_channel as u16,
+                    )?,
+                };
+                entries.push(PreparedChannel {
+                    id: channel.id,
+                    compression: channel.compression,
+                    payload,
+                });
+            }
+            return Ok(PreparedLayerChannels { entries });
+        }
+    }
+
+    let channel_ids = [
+        ChannelID::Transparency,
+        ChannelID::Color0,
+        ChannelID::Color1,
+        ChannelID::Color2,
+    ];
+    let compression = preferred_channel_compression(bits_per_channel, options);
+    let mut entries = Vec::with_capacity(channel_ids.len());
+    for &channel_id in &channel_ids {
+        entries.push(PreparedChannel {
+            id: channel_id,
+            compression,
+            payload: layer_channel_payload(layer, channel_id, bits_per_channel, options)?,
+        });
+    }
+    Ok(PreparedLayerChannels { entries })
+}
+
+fn layer_channel_dimensions(layer: &Layer, channel_id: ChannelID) -> (usize, usize) {
+    if matches!(channel_id, ChannelID::UserMask | ChannelID::RealUserMask) {
+        if let Some(ref mask) = layer.additional_info.mask {
+            return (
+                (mask.right.unwrap_or(0) - mask.left.unwrap_or(0)).max(0) as usize,
+                (mask.bottom.unwrap_or(0) - mask.top.unwrap_or(0)).max(0) as usize,
+            );
+        }
+    }
+    (
+        (layer.right.unwrap_or(0) - layer.left.unwrap_or(0)).max(0) as usize,
+        (layer.bottom.unwrap_or(0) - layer.top.unwrap_or(0)).max(0) as usize,
+    )
+}
+
+fn preferred_channel_compression(bits_per_channel: u8, options: &WriteOptions) -> Compression {
+    if !options.compress.unwrap_or(false) {
+        return Compression::RawData;
+    }
+    if bits_per_channel == 8 {
+        Compression::RleCompressed
+    } else {
+        Compression::ZipWithPrediction
+    }
+}
+
+fn bytes_per_sample(bits_per_channel: u8) -> usize {
+    match bits_per_channel {
+        8 => 1,
+        16 => 2,
+        32 => 4,
+        _ => 1,
+    }
+}
+
+fn expand_samples_for_depth(samples: &[u8], bits_per_channel: u8) -> Vec<u8> {
+    match bits_per_channel {
+        8 => samples.to_vec(),
+        16 => {
+            let mut out = Vec::with_capacity(samples.len() * 2);
+            for &sample in samples {
+                out.push(sample);
+                out.push(sample);
+            }
+            out
+        }
+        32 => {
+            let mut out = Vec::with_capacity(samples.len() * 4);
+            for &sample in samples {
+                out.extend_from_slice(&(sample as f32 / 255.0).to_be_bytes());
+            }
+            out
+        }
+        _ => samples.to_vec(),
+    }
+}
+
+fn extract_layer_channel_data(
+    image_data: Option<&crate::types::PixelData>,
+    width: usize,
+    height: usize,
+    offset: usize,
+) -> Vec<u8> {
     let mut out = vec![0u8; width * height];
     if let Some(image_data) = image_data {
         for i in 0..(width * height) {
@@ -675,7 +974,12 @@ fn extract_layer_channel_data(image_data: Option<&crate::types::PixelData>, widt
     out
 }
 
-fn extract_channel_data_from_rgba(image_data: &[u8], width: usize, height: usize, offset: usize) -> Vec<u8> {
+fn extract_channel_data_from_rgba(
+    image_data: &[u8],
+    width: usize,
+    height: usize,
+    offset: usize,
+) -> Vec<u8> {
     let mut out = vec![0u8; width * height];
     for i in 0..(width * height) {
         let src = i * 4 + offset;
@@ -686,6 +990,138 @@ fn extract_channel_data_from_rgba(image_data: &[u8], width: usize, height: usize
         }
     }
     out
+}
+
+/// Apply resource prewrite: map psd.path_selection_descriptor to resource 3000
+fn apply_resource_prewrite(psd: &mut Psd) {
+    if let Some(ref descriptor) = psd.path_selection_descriptor.clone() {
+        let resources = psd.image_resources.get_or_insert_with(Default::default);
+        resources
+            .descriptor_resources
+            .insert(3000, descriptor.clone());
+    }
+}
+
+/// Apply text prewrite: synthesize Txt2 engine data from TySh layer text data
+fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
+    use crate::engine_data::EngineValue;
+    use std::collections::HashMap;
+
+    let mut text_objects = Vec::new();
+    let mut document_resources: Option<EngineValue> = None;
+
+    if let Some(ref mut layers) = psd.children {
+        for layer in layers.iter_mut() {
+            if let Some(ref mut text) = layer.tagged_blocks.text {
+                // Inject TextIndex into the text descriptor
+                let text_index = text_objects.len() as i32;
+                if let Some(ref mut desc) = text.text_data {
+                    desc.items.insert(
+                        "TextIndex".to_string(),
+                        crate::descriptor::DescriptorValue::Integer(text_index),
+                    );
+                }
+
+                let mut style_run_array = Vec::new();
+                let mut paragraph_run_array = Vec::new();
+
+                if let Some(ref text_desc) = text.text_data {
+                    if let Some(crate::descriptor::DescriptorValue::RawData(engine_bytes)) =
+                        text_desc.items.get("EngineData")
+                    {
+                        if let Ok(EngineValue::Object(engine_map)) =
+                            crate::engine_data::parse_engine_data(engine_bytes)
+                        {
+                            if let Some(EngineValue::Object(engine_dict)) =
+                                engine_map.get("EngineDict")
+                            {
+                                if let Some(EngineValue::Object(style_run)) =
+                                    engine_dict.get("StyleRun")
+                                {
+                                    if let Some(EngineValue::Array(run_array)) =
+                                        style_run.get("RunArray")
+                                    {
+                                        style_run_array = run_array.clone();
+                                    }
+                                }
+                                if let Some(EngineValue::Object(paragraph_run)) =
+                                    engine_dict.get("ParagraphRun")
+                                {
+                                    if let Some(EngineValue::Array(run_array)) =
+                                        paragraph_run.get("RunArray")
+                                    {
+                                        paragraph_run_array = run_array.clone();
+                                    }
+                                }
+                            }
+
+                            if document_resources.is_none() {
+                                if let Some(value) = engine_map
+                                    .get("DocumentResources")
+                                    .cloned()
+                                    .or_else(|| engine_map.get("ResourceDict").cloned())
+                                {
+                                    document_resources = Some(value);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Build richer text object matching TS _Model structure
+                let mut style_run = HashMap::new();
+                style_run.insert("_RunArray".to_string(), EngineValue::Array(style_run_array));
+
+                let mut paragraph_run = HashMap::new();
+                paragraph_run.insert(
+                    "_RunArray".to_string(),
+                    EngineValue::Array(paragraph_run_array),
+                );
+
+                let mut model = HashMap::new();
+                model.insert("_StyleRun".to_string(), EngineValue::Object(style_run));
+                model.insert(
+                    "_ParagraphRun".to_string(),
+                    EngineValue::Object(paragraph_run),
+                );
+
+                let mut text_obj = HashMap::new();
+                text_obj.insert("_Model".to_string(), EngineValue::Object(model));
+                text_objects.push(EngineValue::Object(text_obj));
+            }
+        }
+    }
+
+    if !text_objects.is_empty() {
+        let existing = psd
+            .tagged_blocks
+            .text_engine
+            .as_ref()
+            .map(|b| b.data.clone());
+        let mut synthesized = match existing {
+            Some(EngineValue::Object(map)) => map,
+            _ => HashMap::new(),
+        };
+
+        let mut doc_objects = HashMap::new();
+        doc_objects.insert("_TextObjects".to_string(), EngineValue::Array(text_objects));
+        synthesized.insert(
+            "_DocumentObjects".to_string(),
+            EngineValue::Object(doc_objects),
+        );
+
+        if let Some(doc_resources) = document_resources {
+            synthesized
+                .entry("_DocumentResources".to_string())
+                .or_insert(doc_resources);
+        }
+
+        psd.tagged_blocks.text_engine = Some(crate::additional_info::TextEngineBlock {
+            data: EngineValue::Object(synthesized),
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

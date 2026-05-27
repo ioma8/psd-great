@@ -21,70 +21,64 @@
 //! - `image_resources` - Image resource handlers
 //! - `additional_info` - Layer additional information handlers
 
-pub mod error;
-pub mod types;
+pub mod additional_info;
+pub mod adjustments;
+pub mod compression;
+pub mod descriptor;
+pub mod document_resource_postprocess;
 pub mod effects;
-pub mod text;
+pub mod error;
+pub mod helpers;
+pub mod image_resources;
 pub mod layer;
 pub mod psd;
 pub mod reader;
+pub mod text;
+pub mod types;
 pub mod writer;
-pub mod helpers;
-pub mod compression;
-pub mod descriptor;
-pub mod image_resources;
-pub mod additional_info;
-pub mod adjustments;
 
 // Additional format support modules
-pub mod engine_data;
 pub mod abr;
 pub mod ase;
+mod binrw_support;
 pub mod csh;
+pub mod effects_helpers;
+pub mod engine_data;
 pub mod jpeg;
 pub mod utf8;
-pub mod effects_helpers;
 
 // Re-export commonly used types at the crate root
-pub use error::{PsdError, Result};
-pub use types::{
-    BlendMode, ColorMode, SectionDividerType,
-    RGBA, RGB, FRGB, HSB, CMYK, LAB, Grayscale, Color,
-    Units, UnitsValue, Point, Fraction, PixelData,
-    AntiAlias, Orientation, WarpStyle, GradientStyle,
-    Justification, InterpolationMethod, BooleanOperation,
-    LayerColor, ChannelID, Compression, LayerCompCapturedInfo,
-};
+pub use compression::{compress_rle, compress_zip, decompress_rle, decompress_zip};
 pub use effects::{
-    LayerEffectsInfo, LayerEffectShadow, LayerEffectsOuterGlow,
-    LayerEffectInnerGlow, LayerEffectBevel, LayerEffectSolidFill,
-    LayerEffectStroke, LayerEffectSatin, LayerEffectPatternOverlay,
-    LayerEffectGradientOverlay, EffectContour, EffectPattern,
-    ColorStop, OpacityStop,
+    ColorStop, EffectContour, EffectPattern, LayerEffectBevel, LayerEffectGradientOverlay,
+    LayerEffectInnerGlow, LayerEffectPatternOverlay, LayerEffectSatin, LayerEffectShadow,
+    LayerEffectSolidFill, LayerEffectStroke, LayerEffectsInfo, LayerEffectsOuterGlow, OpacityStop,
 };
-pub use text::{
-    LayerTextData, Font, TextStyle, TextStyleRun,
-    ParagraphStyle, ParagraphStyleRun, Warp,
-};
+pub use error::{PsdError, Result};
+pub use helpers::{from_blend_mode, has_alpha, to_blend_mode};
+pub use image_resources::ImageResources;
 pub use layer::{
-    Layer, LayerAdditionalInfo, LayerMaskData, PatternInfo,
-    BezierPath, BezierKnot, VectorContent, AdjustmentLayer,
-    LinkedFile, PlacedLayer, LayerVectorMask,
+    AdjustmentLayer, BezierKnot, BezierPath, Layer, LayerAdditionalInfo, LayerMaskData,
+    LayerVectorMask, LinkedFile, PatternInfo, PlacedLayer, VectorContent,
 };
-pub use psd::{
-    Psd, ImageResources, ReadOptions, WriteOptions,
-    GlobalLayerMaskInfo, Annotation,
+pub use psd::{Annotation, GlobalLayerMaskInfo, Psd, ReadOptions, WriteOptions};
+pub use reader::{read_psd, PsdReader};
+pub use text::{
+    Font, LayerTextData, ParagraphStyle, ParagraphStyleRun, TextStyle, TextStyleRun, Warp,
 };
-pub use reader::{PsdReader, read_psd};
-pub use writer::{PsdWriter, write_psd};
-pub use helpers::{to_blend_mode, from_blend_mode, has_alpha};
-pub use compression::{compress_rle, decompress_rle, compress_zip, decompress_zip};
+pub use types::{
+    AntiAlias, BlendMode, BooleanOperation, ChannelID, Color, ColorMode, Compression, Fraction,
+    GradientStyle, Grayscale, InterpolationMethod, Justification, LayerColor,
+    LayerCompCapturedInfo, Orientation, PixelData, Point, SectionDividerType, Units, UnitsValue,
+    WarpStyle, CMYK, FRGB, HSB, LAB, RGB, RGBA,
+};
+pub use writer::{write_psd, PsdWriter};
 
 // Re-export additional format types
-pub use engine_data::{EngineValue, parse_engine_data, serialize_engine_data};
-pub use abr::{Abr, Brush, BrushShape, BrushDynamics, SampleInfo, read_abr};
-pub use ase::{Ase, AseColor, AseGroup, AseColorOrGroup, AseColorType, read_ase, write_ase};
-pub use csh::{Csh, CustomShape, read_csh};
-pub use jpeg::{decode_jpeg, decode_jpeg_raw};
-pub use utf8::{encode_string, decode_string, string_length_in_bytes};
+pub use abr::{read_abr, Abr, Brush, BrushDynamics, BrushShape, SampleInfo};
+pub use ase::{read_ase, write_ase, Ase, AseColor, AseColorOrGroup, AseColorType, AseGroup};
+pub use csh::{read_csh, Csh, CustomShape};
 pub use effects_helpers::{read_effects, write_effects};
+pub use engine_data::{parse_engine_data, serialize_engine_data, EngineValue};
+pub use jpeg::{decode_jpeg, decode_jpeg_raw};
+pub use utf8::{decode_string, encode_string, string_length_in_bytes};

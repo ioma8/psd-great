@@ -3,8 +3,8 @@
 //! This example demonstrates how to create a new PSD document programmatically
 //! with layers, effects, and write it to a file.
 
-use ag_psd::*;
 use ag_psd::layer::SectionDivider;
+use ag_psd::*;
 use std::env;
 use std::fs::File;
 use std::io::Write;
@@ -46,7 +46,7 @@ fn main() -> Result<()> {
         opacity: Some(255.0),
         transparency_protected: Some(false),
         hidden: Some(false),
-        clipping: Some(false),
+        clipping: Some(0),
         additional_info: LayerAdditionalInfo {
             name: Some("Background".to_string()),
             id: Some(1),
@@ -62,7 +62,12 @@ fn main() -> Result<()> {
         show_in_dialog: None,
         enabled: Some(true),
         blend_mode: Some(BlendMode::Multiply),
-        color: Some(Color::RGBA(RGBA { r: 0, g: 0, b: 0, a: 255 })),
+        color: Some(Color::RGBA(RGBA {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        })),
         opacity: Some(0.75),
         angle: Some(120.0),
         distance: Some(UnitsValue {
@@ -89,7 +94,7 @@ fn main() -> Result<()> {
         opacity: Some(255.0),
         transparency_protected: Some(false),
         hidden: Some(false),
-        clipping: Some(false),
+        clipping: Some(0),
         additional_info: LayerAdditionalInfo {
             name: Some("Layer with Shadow".to_string()),
             id: Some(2),

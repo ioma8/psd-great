@@ -193,10 +193,15 @@ pub fn decompress_zip_with_prediction(
     depth: u16,
 ) -> Result<Vec<u8>> {
     let bytes_per_sample = match depth {
-        8  => 1usize,
+        8 => 1usize,
         16 => 2,
         32 => 4,
-        _  => return Err(PsdError::Compression(format!("Unsupported depth: {}", depth))),
+        _ => {
+            return Err(PsdError::Compression(format!(
+                "Unsupported depth: {}",
+                depth
+            )))
+        }
     };
     let expected = width * height * bytes_per_sample;
     let mut data = decompress_zip(input, expected)?;
@@ -211,15 +216,21 @@ pub fn decompress_zip_with_prediction(
             }
         }
         16 => {
+            // Big-endian u16 delta encoding (decode path).
+            // Uses BE16 arithmetic which round-trips correctly for any width.
+            // The TS reference uses LE16 but that approach only round-trips
+            // correctly at width=1 (the only case TS tests verify internally).
+            // PSD uses BE for all other numeric fields; this BE16 approach
+            // matches that convention and is correct at any row width.
             for row in 0..height {
                 let value_start = row * width;
                 for vi in (value_start + 1)..(value_start + width) {
                     let bi = vi * 2;
                     let pi = bi - 2;
                     let delta = ((data[bi] as u16) << 8) | data[bi + 1] as u16;
-                    let prev  = ((data[pi] as u16) << 8) | data[pi + 1] as u16;
-                    let val   = delta.wrapping_add(prev);
-                    data[bi]     = (val >> 8) as u8;
+                    let prev = ((data[pi] as u16) << 8) | data[pi + 1] as u16;
+                    let val = delta.wrapping_add(prev);
+                    data[bi] = (val >> 8) as u8;
                     data[bi + 1] = (val & 0xff) as u8;
                 }
             }
@@ -234,13 +245,14 @@ pub fn decompress_zip_with_prediction(
                 for plane in 0..4usize {
                     let base = plane * width;
                     for i in 1..width {
-                        reordered[base + i] = reordered[base + i].wrapping_add(reordered[base + i - 1]);
+                        reordered[base + i] =
+                            reordered[base + i].wrapping_add(reordered[base + i - 1]);
                     }
                 }
                 // De-interleave: planes → pixels
                 for pixel in 0..width {
                     let dst = row_off + pixel * 4;
-                    data[dst]     = reordered[pixel];
+                    data[dst] = reordered[pixel];
                     data[dst + 1] = reordered[width + pixel];
                     data[dst + 2] = reordered[width * 2 + pixel];
                     data[dst + 3] = reordered[width * 3 + pixel];
@@ -263,7 +275,12 @@ pub fn compress_zip_with_prediction(
 ) -> Result<Vec<u8>> {
     match depth {
         8 | 16 | 32 => {}
-        _ => return Err(PsdError::Compression(format!("Unsupported depth: {}", depth))),
+        _ => {
+            return Err(PsdError::Compression(format!(
+                "Unsupported depth: {}",
+                depth
+            )))
+        }
     }
     let mut predicted = input.to_vec();
 
@@ -273,21 +290,24 @@ pub fn compress_zip_with_prediction(
             for row in 0..height {
                 let start = row * width;
                 for x in (1..width).rev() {
-                    predicted[start + x] = predicted[start + x].wrapping_sub(predicted[start + x - 1]);
+                    predicted[start + x] =
+                        predicted[start + x].wrapping_sub(predicted[start + x - 1]);
                 }
             }
         }
         16 => {
-            // Right-to-left big-endian u16 delta per row
+            // Big-endian u16 delta encoding (encode path).
+            // Right-to-left BE16 delta: delta[i] = val[i] - val[i-1] (wrapping).
+            // Pairs with the BE16 decode above; both round-trip at any width.
             for row in 0..height {
                 let value_start = row * width;
                 for vi in (value_start + 1..value_start + width).rev() {
                     let bi = vi * 2;
                     let pi = bi - 2;
-                    let cur  = ((predicted[bi] as u16) << 8) | predicted[bi + 1] as u16;
+                    let cur = ((predicted[bi] as u16) << 8) | predicted[bi + 1] as u16;
                     let prev = ((predicted[pi] as u16) << 8) | predicted[pi + 1] as u16;
                     let delta = cur.wrapping_sub(prev);
-                    predicted[bi]     = (delta >> 8) as u8;
+                    predicted[bi] = (delta >> 8) as u8;
                     predicted[bi + 1] = (delta & 0xff) as u8;
                 }
             }
@@ -300,8 +320,8 @@ pub fn compress_zip_with_prediction(
                 // Pixels → byte-planes
                 for pixel in 0..width {
                     let src = row_off + pixel * 4;
-                    reordered[pixel]             = predicted[src];
-                    reordered[width + pixel]     = predicted[src + 1];
+                    reordered[pixel] = predicted[src];
+                    reordered[width + pixel] = predicted[src + 1];
                     reordered[width * 2 + pixel] = predicted[src + 2];
                     reordered[width * 3 + pixel] = predicted[src + 3];
                 }
@@ -309,7 +329,8 @@ pub fn compress_zip_with_prediction(
                 for plane in 0..4usize {
                     let base = plane * width;
                     for i in (1..width).rev() {
-                        reordered[base + i] = reordered[base + i].wrapping_sub(reordered[base + i - 1]);
+                        reordered[base + i] =
+                            reordered[base + i].wrapping_sub(reordered[base + i - 1]);
                     }
                 }
                 predicted[row_off..row_off + row_bytes].copy_from_slice(&reordered);
@@ -328,14 +349,14 @@ mod tests {
     fn test_compress_decompress_rle() {
         let data = vec![1, 1, 1, 2, 3, 4, 5, 5];
         let compressed = compress_rle(&data, 8, 1).unwrap();
-        
+
         // Skip byte counts (2 bytes for 1 row)
         let byte_count = u16::from_be_bytes([compressed[0], compressed[1]]) as usize;
         let compressed_data = &compressed[2..];
-        
+
         let mut output = vec![0u8; 8];
         decompress_rle(compressed_data, &mut output, 8, 1, &[byte_count as u16]).unwrap();
-        
+
         assert_eq!(output, data);
     }
 
@@ -381,8 +402,7 @@ mod tests {
     #[test]
     fn zip_prediction_32bit_roundtrip() {
         // 2 IEEE-754 floats: 1.0f32 and 2.0f32 (big-endian bytes)
-        let data: Vec<u8> = vec![0x3f, 0x80, 0x00, 0x00,
-                                  0x40, 0x00, 0x00, 0x00];
+        let data: Vec<u8> = vec![0x3f, 0x80, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00];
         let compressed = compress_zip_with_prediction(&data, 2, 1, 32).unwrap();
         let recovered = decompress_zip_with_prediction(&compressed, 2, 1, 32).unwrap();
         assert_eq!(recovered, data);
