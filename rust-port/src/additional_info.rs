@@ -55,6 +55,8 @@ pub struct LayerAdditionalInfo {
     pub adjustment: Option<(String, Vec<u8>)>,
     /// Raw bytes of Lr16 or Lr32 nested high-bit-depth layer section
     pub high_depth_layer_data: Option<(String, Vec<u8>)>,
+    /// Raw bytes of lnk2/lnkD/lnk3 linked layer (smart object) block
+    pub linked_layer_data: Option<Vec<u8>>,
     /// Vector origination data
     pub vector_origination: Option<Vec<u8>>,
     /// Unknown sections (for preservation)
@@ -264,6 +266,15 @@ impl<R: Read + Seek> PsdReader<R> {
             "Lr16" | "Lr32" => {
                 let data = self.read_bytes(length)?;
                 info.high_depth_layer_data = Some((key.to_string(), data));
+            }
+            "lnk2" | "lnkD" | "lnk3" => {
+                info.linked_layer_data = Some(self.read_bytes(length)?);
+            }
+            "lmfx" | "lfxs" | "FMsk" | "Anno" | "iOpa" | "vmgm" | "lmgm" |
+            "fcmy" | "shpa" | "pths" | "CgEd" | "vibA" | "PxSc" | "phry"  |
+            "clrL" | "rplc" | "lyvr" | "fxrp" | "brst" => {
+                let data = self.read_bytes(length)?;
+                info.unknown.insert(key.to_string(), data);
             }
             _ => {
                 // Store unknown sections
@@ -890,6 +901,11 @@ impl PsdWriter {
                     }
                 }
             }
+            "lnk2" => {
+                if let Some(ref data) = info.linked_layer_data {
+                    temp_writer.write_bytes(data)?;
+                }
+            }
             _ => {
                 // Write unknown sections
                 if let Some(data) = info.unknown.get(key) {
@@ -954,7 +970,7 @@ pub fn write_layer_additional_info(
     let sections = vec![
         "luni", "lyid", "lclr", "lsct", "clbl", "infx", "knko", "lspf", "lnsr",
         "TySh", "SoCo", "GdFl", "PtFl", "vstk", "vmsk", "vogk", "lfx2", "lrFX",
-        "PlLd", "SoLd", "artb", "sn2P", "shmd", "Lr16", "Lr32",
+        "PlLd", "SoLd", "artb", "sn2P", "shmd", "Lr16", "Lr32", "lnk2",
     ];
     
     for key in sections {
@@ -1045,6 +1061,26 @@ mod tests {
         reader.read_additional_info("lclr", length, &mut read_info).unwrap();
         
         assert_eq!(read_info.layer_color, Some(LayerColor::Blue));
+    }
+
+    #[test]
+    fn lnk2_raw_preserved() {
+        let mut info = LayerAdditionalInfo::default();
+        info.linked_layer_data = Some(vec![0xAA, 0xBB]);
+        let mut w = PsdWriter::new(64);
+        write_layer_additional_info(&mut w, &info).unwrap();
+        let buf = w.into_buffer();
+        assert!(buf.windows(4).any(|w| w == b"lnk2"));
+    }
+
+    #[test]
+    fn known_misc_blocks_land_in_unknown_map() {
+        let payload = vec![0u8; 4];
+        let cursor = std::io::Cursor::new(payload.clone());
+        let mut reader = PsdReader::new(cursor, Default::default());
+        let mut info = LayerAdditionalInfo::default();
+        reader.read_additional_info("lfxs", payload.len(), &mut info).unwrap();
+        assert!(info.unknown.contains_key("lfxs"));
     }
 
     #[test]
