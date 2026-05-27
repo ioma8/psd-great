@@ -3,8 +3,8 @@
 //! Supports RLE and ZIP compression methods used in PSD files.
 
 use crate::error::{PsdError, Result};
-use flate2::read::ZlibDecoder;
-use flate2::write::ZlibEncoder;
+use flate2::read::DeflateDecoder;
+use flate2::write::DeflateEncoder;
 use flate2::Compression as FlateCompression;
 use std::io::{Read, Write};
 
@@ -158,11 +158,11 @@ fn compress_rle_row(row: &[u8]) -> Result<Vec<u8>> {
     Ok(result)
 }
 
-/// Decompress ZIP-compressed data
+/// Decompress ZIP-compressed data (raw DEFLATE, no Zlib headers)
 pub fn decompress_zip(input: &[u8], output_size: usize) -> Result<Vec<u8>> {
-    let mut decoder = ZlibDecoder::new(input);
+    let mut decoder = DeflateDecoder::new(input);
     let mut output = Vec::with_capacity(output_size);
-    
+
     decoder
         .read_to_end(&mut output)
         .map_err(|e| PsdError::Compression(format!("ZIP decompression failed: {}", e)))?;
@@ -170,17 +170,17 @@ pub fn decompress_zip(input: &[u8], output_size: usize) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-/// Compress data using ZIP
+/// Compress data using ZIP (raw DEFLATE, no Zlib headers)
 pub fn compress_zip(input: &[u8]) -> Result<Vec<u8>> {
-    let mut encoder = ZlibEncoder::new(Vec::new(), FlateCompression::default());
-    
+    let mut encoder = DeflateEncoder::new(Vec::new(), FlateCompression::default());
+
     encoder
         .write_all(input)
         .map_err(|e| PsdError::Compression(format!("ZIP compression failed: {}", e)))?;
-    
+
     encoder
         .finish()
-        .map_err(|e| PsdError::Compression(format!("ZIP compression failed: {}", e)))
+        .map_err(|e| PsdError::Compression(format!("ZIP compression finish failed: {}", e)))
 }
 
 /// Decompress ZIP with prediction
@@ -276,8 +276,21 @@ mod tests {
         let data = b"Hello, World! This is a test of ZIP compression.";
         let compressed = compress_zip(data).unwrap();
         let decompressed = decompress_zip(&compressed, data.len()).unwrap();
-        
+
         assert_eq!(&decompressed[..], &data[..]);
+    }
+
+    #[test]
+    fn zip_roundtrip_is_raw_deflate_not_zlib() {
+        let data: Vec<u8> = (0..256u16).map(|v| v as u8).collect();
+        let compressed = compress_zip(&data).unwrap();
+        let recovered = decompress_zip(&compressed, data.len()).unwrap();
+        assert_eq!(recovered, data);
+        // Zlib best-compression header is 0x78 0x9C; raw deflate must NOT start with that.
+        assert!(
+            !(compressed.len() >= 2 && compressed[0] == 0x78 && compressed[1] == 0x9C),
+            "output looks like a Zlib stream; should be raw deflate"
+        );
     }
 
     #[test]
