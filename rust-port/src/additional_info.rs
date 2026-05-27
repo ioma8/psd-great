@@ -603,8 +603,8 @@ impl<R: Read + Seek> PsdReader<R> {
         let _placed_type = self.read_signature()?;
         let _version = self.read_u32()?;
         
-        // Read UUID
-        let id_length = 32;
+        // Read UUID as pascal string (u8 length + bytes)
+        let id_length = self.read_u8()? as usize;
         let id_bytes = self.read_bytes(id_length)?;
         let id = String::from_utf8_lossy(&id_bytes).to_string();
         
@@ -855,12 +855,10 @@ impl PsdWriter {
                 if let Some(ref pl) = info.placed_layer {
                     temp_writer.write_signature(if key == "PlLd" { "plcL" } else { "sold" })?;
                     temp_writer.write_u32(3)?; // version
+                    // UUID as pascal string (u8 length + bytes)
                     let id_bytes = pl.id.as_bytes();
+                    temp_writer.write_u8(id_bytes.len() as u8)?;
                     temp_writer.write_bytes(id_bytes)?;
-                    // Pad id to 32 bytes
-                    if id_bytes.len() < 32 {
-                        temp_writer.write_zeros(32 - id_bytes.len())?;
-                    }
                     temp_writer.write_i32(pl.page.unwrap_or(0))?;
                     temp_writer.write_i32(pl.total_pages.unwrap_or(0))?;
                     temp_writer.write_i32(pl.anti_alias_policy.unwrap_or(0))?;
