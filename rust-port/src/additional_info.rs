@@ -50,6 +50,9 @@ pub struct LayerAdditionalInfo {
     pub using_aligned_rendering: Option<bool>,
     /// Metadata
     pub metadata: Option<Metadata>,
+    /// Adjustment layer data (brit/levl/curv/expA/blnc/phfl/hue2/selc/mixr/post/thrs/nvrt/grdm/blwh)
+    /// Stored as (key, raw_bytes) so the original binary format is preserved.
+    pub adjustment: Option<(String, Vec<u8>)>,
     /// Vector origination data
     pub vector_origination: Option<Vec<u8>>,
     /// Unknown sections (for preservation)
@@ -251,6 +254,11 @@ impl<R: Read + Seek> PsdReader<R> {
             "artb" | "artd" => self.read_artboard(info, key, length)?,
             "sn2P" => self.read_using_aligned_rendering(info)?,
             "shmd" => self.read_metadata(info, length)?,
+            "brit" | "levl" | "curv" | "expA" | "blnc" | "phfl" | "hue2" |
+            "selc" | "mixr" | "post" | "thrs" | "nvrt" | "grdm" | "blwh" => {
+                let data = self.read_bytes(length)?;
+                info.adjustment = Some((key.to_string(), data));
+            }
             _ => {
                 // Store unknown sections
                 let data = self.read_bytes(length)?;
@@ -861,6 +869,14 @@ impl PsdWriter {
                     temp_writer.write_u8(if using { 1 } else { 0 })?;
                 }
             }
+            "brit" | "levl" | "curv" | "expA" | "blnc" | "phfl" | "hue2" |
+            "selc" | "mixr" | "post" | "thrs" | "nvrt" | "grdm" | "blwh" => {
+                if let Some((ref adj_key, ref data)) = info.adjustment {
+                    if adj_key == key {
+                        temp_writer.write_bytes(data)?;
+                    }
+                }
+            }
             _ => {
                 // Write unknown sections
                 if let Some(data) = info.unknown.get(key) {
@@ -948,6 +964,17 @@ pub fn write_layer_additional_info(
         }
     }
     
+    // Write adjustment layer block
+    if let Some((ref adj_key, ref data)) = info.adjustment {
+        writer.write_signature("8BIM")?;
+        writer.write_signature(adj_key)?;
+        writer.write_u32(data.len() as u32)?;
+        writer.write_bytes(data)?;
+        if data.len() % 2 != 0 {
+            writer.write_u8(0)?;
+        }
+    }
+
     // Write unknown sections
     for (key, data) in &info.unknown {
         writer.write_signature("8BIM")?;
@@ -1005,6 +1032,31 @@ mod tests {
         reader.read_additional_info("lclr", length, &mut read_info).unwrap();
         
         assert_eq!(read_info.layer_color, Some(LayerColor::Blue));
+    }
+
+    #[test]
+    fn adjustment_brit_roundtrip() {
+        // brit block: two i16 values (Brgh, Cntr) — stored as raw bytes
+        let raw: Vec<u8> = vec![0x00, 0x32, 0xFF, 0xD6]; // Brgh=50, Cntr=-42
+
+        let mut info = LayerAdditionalInfo::default();
+        info.adjustment = Some(("brit".to_string(), raw.clone()));
+
+        let mut writer = PsdWriter::new(128);
+        let length = writer.write_additional_info("brit", &info).unwrap();
+
+        assert_eq!(length, 4);
+
+        let buffer = writer.into_buffer();
+        let cursor = std::io::Cursor::new(buffer);
+        let mut reader = PsdReader::new(cursor, Default::default());
+
+        let mut read_info = LayerAdditionalInfo::default();
+        reader.read_additional_info("brit", length, &mut read_info).unwrap();
+
+        let (key, data) = read_info.adjustment.unwrap();
+        assert_eq!(key, "brit");
+        assert_eq!(data, raw);
     }
 
     #[test]
