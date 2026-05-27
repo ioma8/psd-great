@@ -34,6 +34,7 @@ pub mod compression;
 pub mod descriptor;
 pub mod image_resources;
 pub mod additional_info;
+pub mod adjustments;
 
 // Additional format support modules
 pub mod engine_data;

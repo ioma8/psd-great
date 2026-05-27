@@ -3,6 +3,7 @@
 //! Handles layer-specific additional information sections like text layers,
 //! vector masks, layer effects, smart objects, and other layer properties.
 
+use crate::adjustments::AdjustmentLayer;
 use crate::error::{PsdError, Result};
 use crate::reader::PsdReader;
 use crate::writer::PsdWriter;
@@ -51,8 +52,7 @@ pub struct LayerAdditionalInfo {
     /// Metadata
     pub metadata: Option<Metadata>,
     /// Adjustment layer data (brit/levl/curv/expA/blnc/phfl/hue2/selc/mixr/post/thrs/nvrt/grdm/blwh)
-    /// Stored as (key, raw_bytes) so the original binary format is preserved.
-    pub adjustment: Option<(String, Vec<u8>)>,
+    pub adjustment: Option<AdjustmentLayer>,
     /// Raw bytes of Lr16 or Lr32 nested high-bit-depth layer section
     pub high_depth_layer_data: Option<(String, Vec<u8>)>,
     /// Raw bytes of lnk2/lnkD/lnk3 linked layer (smart object) block
@@ -262,7 +262,7 @@ impl<R: Read + Seek> PsdReader<R> {
             "brit" | "levl" | "curv" | "expA" | "blnc" | "phfl" | "hue2" |
             "selc" | "mixr" | "post" | "thrs" | "nvrt" | "grdm" | "blwh" => {
                 let data = self.read_bytes(length)?;
-                info.adjustment = Some((key.to_string(), data));
+                info.adjustment = Some(AdjustmentLayer::from_key_and_bytes(key, &data)?);
             }
             "Lr16" | "Lr32" => {
                 let data = self.read_bytes(length)?;
@@ -891,9 +891,10 @@ impl PsdWriter {
             }
             "brit" | "levl" | "curv" | "expA" | "blnc" | "phfl" | "hue2" |
             "selc" | "mixr" | "post" | "thrs" | "nvrt" | "grdm" | "blwh" => {
-                if let Some((ref adj_key, ref data)) = info.adjustment {
-                    if adj_key == key {
-                        temp_writer.write_bytes(data)?;
+                if let Some(ref adj) = info.adjustment {
+                    if adj.key() == key {
+                        let data = adj.to_bytes().map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
+                        temp_writer.write_bytes(&data)?;
                     }
                 }
             }
@@ -997,11 +998,13 @@ pub fn write_layer_additional_info(
     }
     
     // Write adjustment layer block
-    if let Some((ref adj_key, ref data)) = info.adjustment {
+    if let Some(ref adj) = info.adjustment {
+        let adj_key = adj.key().to_string();
+        let data = adj.to_bytes().map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
         writer.write_signature("8BIM")?;
-        writer.write_signature(adj_key)?;
+        writer.write_signature(&adj_key)?;
         writer.write_u32(data.len() as u32)?;
-        writer.write_bytes(data)?;
+        writer.write_bytes(&data)?;
         if data.len() % 2 != 0 {
             writer.write_u8(0)?;
         }
@@ -1125,16 +1128,20 @@ mod tests {
 
     #[test]
     fn adjustment_brit_roundtrip() {
-        // brit block: two i16 values (Brgh, Cntr) — stored as raw bytes
-        let raw: Vec<u8> = vec![0x00, 0x32, 0xFF, 0xD6]; // Brgh=50, Cntr=-42
+        use crate::adjustments::{AdjustmentLayer, BrightnessContrast};
 
         let mut info = LayerAdditionalInfo::default();
-        info.adjustment = Some(("brit".to_string(), raw.clone()));
+        // brit writer emits 8 zero bytes (legacy block)
+        info.adjustment = Some(AdjustmentLayer::BrightnessContrast(BrightnessContrast {
+            brightness: 50,
+            contrast: -42,
+            use_legacy: true,
+        }));
 
         let mut writer = PsdWriter::new(128);
         let length = writer.write_additional_info("brit", &info).unwrap();
 
-        assert_eq!(length, 4);
+        assert_eq!(length, 8); // legacy zero-fill
 
         let buffer = writer.into_buffer();
         let cursor = std::io::Cursor::new(buffer);
@@ -1143,9 +1150,7 @@ mod tests {
         let mut read_info = LayerAdditionalInfo::default();
         reader.read_additional_info("brit", length, &mut read_info).unwrap();
 
-        let (key, data) = read_info.adjustment.unwrap();
-        assert_eq!(key, "brit");
-        assert_eq!(data, raw);
+        assert!(matches!(read_info.adjustment, Some(AdjustmentLayer::BrightnessContrast(_))));
     }
 
     #[test]
