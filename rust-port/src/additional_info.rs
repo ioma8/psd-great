@@ -59,6 +59,10 @@ pub struct LayerAdditionalInfo {
     pub linked_layer_data: Option<Vec<u8>>,
     /// Vector origination data
     pub vector_origination: Option<Vec<u8>>,
+    /// Layer effects descriptor (lmfx/lfxs blocks)
+    pub layer_effects_descriptor: Option<Descriptor>,
+    /// Pattern block raw bytes (Patt/Pat2/Pat3)
+    pub pattern_data: Option<(String, Vec<u8>)>,
     /// Unknown sections (for preservation)
     pub unknown: HashMap<String, Vec<u8>>,
 }
@@ -271,7 +275,17 @@ impl<R: Read + Seek> PsdReader<R> {
             "lnk2" | "lnkD" | "lnk3" => {
                 info.linked_layer_data = Some(self.read_bytes(length)?);
             }
-            "lmfx" | "lfxs" | "FMsk" | "Anno" | "iOpa" | "vmgm" | "lmgm" |
+            "lmfx" | "lfxs" => {
+                // u32 version + u32 (descriptor version) + descriptor
+                let _ver = self.read_u32()?;
+                let descriptor = self.read_version_and_descriptor()?;
+                info.layer_effects_descriptor = Some(descriptor);
+            }
+            "Patt" | "Pat2" | "Pat3" => {
+                let data = self.read_bytes(length)?;
+                info.pattern_data = Some((key.to_string(), data));
+            }
+            "FMsk" | "Anno" | "iOpa" | "vmgm" | "lmgm" |
             "fcmy" | "shpa" | "pths" | "CgEd" | "vibA" | "PxSc" | "phry"  |
             "clrL" | "rplc" | "lyvr" | "fxrp" | "brst" => {
                 let data = self.read_bytes(length)?;
@@ -910,6 +924,19 @@ impl PsdWriter {
                     temp_writer.write_bytes(data)?;
                 }
             }
+            "lmfx" | "lfxs" => {
+                if let Some(ref desc) = info.layer_effects_descriptor {
+                    temp_writer.write_u32(0)?; // version
+                    temp_writer.write_version_and_descriptor(16, desc)?;
+                }
+            }
+            "Patt" | "Pat2" | "Pat3" => {
+                if let Some((ref pat_key, ref data)) = info.pattern_data {
+                    if pat_key == key {
+                        temp_writer.write_bytes(data)?;
+                    }
+                }
+            }
             _ => {
                 // Write unknown sections
                 if let Some(data) = info.unknown.get(key) {
@@ -1010,18 +1037,44 @@ pub fn write_layer_additional_info(
         }
     }
 
+    // Write layer effects descriptor (lmfx)
+    if let Some(ref desc) = info.layer_effects_descriptor {
+        let mut lmfx_writer = PsdWriter::new(256);
+        lmfx_writer.write_u32(0)?; // version
+        lmfx_writer.write_version_and_descriptor(16, desc)?;
+        let data = lmfx_writer.into_buffer();
+        writer.write_signature("8BIM")?;
+        writer.write_signature("lmfx")?;
+        writer.write_u32(data.len() as u32)?;
+        writer.write_bytes(&data)?;
+        if data.len() % 2 != 0 {
+            writer.write_u8(0)?;
+        }
+    }
+
+    // Write pattern block (Patt/Pat2/Pat3)
+    if let Some((ref pat_key, ref data)) = info.pattern_data {
+        writer.write_signature("8BIM")?;
+        writer.write_signature(pat_key)?;
+        writer.write_u32(data.len() as u32)?;
+        writer.write_bytes(data)?;
+        if data.len() % 2 != 0 {
+            writer.write_u8(0)?;
+        }
+    }
+
     // Write unknown sections
     for (key, data) in &info.unknown {
         writer.write_signature("8BIM")?;
         writer.write_signature(key)?;
         writer.write_u32(data.len() as u32)?;
         writer.write_bytes(data)?;
-        
+
         if data.len() % 2 != 0 {
             writer.write_u8(0)?;
         }
     }
-    
+
     Ok(())
 }
 
@@ -1102,13 +1155,14 @@ mod tests {
     }
 
     #[test]
-    fn known_misc_blocks_land_in_unknown_map() {
-        let payload = vec![0u8; 4];
+    fn fcmy_lands_in_unknown_map() {
+        // fcmy is a genuinely-unknown block that should go into the unknown HashMap
+        let payload = vec![0xde, 0xad, 0xbe, 0xef];
         let cursor = std::io::Cursor::new(payload.clone());
         let mut reader = PsdReader::new(cursor, Default::default());
         let mut info = LayerAdditionalInfo::default();
-        reader.read_additional_info("lfxs", payload.len(), &mut info).unwrap();
-        assert!(info.unknown.contains_key("lfxs"));
+        reader.read_additional_info("fcmy", payload.len(), &mut info).unwrap();
+        assert_eq!(info.unknown.get("fcmy").unwrap(), &payload);
     }
 
     #[test]
