@@ -1,5 +1,6 @@
-use psd_great::layer::SectionDivider;
+use psd_great::additional_info::SectionDivider;
 use psd_great::*;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Cursor;
 
@@ -338,6 +339,103 @@ fn test_different_color_modes() {
 }
 
 #[test]
+fn test_no_remaining_duplicate_public_model_type_names() {
+    let source_files = [
+        ("src/additional_info.rs", include_str!("../src/additional_info.rs")),
+        ("src/adjustments.rs", include_str!("../src/adjustments.rs")),
+        ("src/image_resources.rs", include_str!("../src/image_resources.rs")),
+        ("src/layer.rs", include_str!("../src/layer.rs")),
+        ("src/psd.rs", include_str!("../src/psd.rs")),
+        ("src/types.rs", include_str!("../src/types.rs")),
+    ];
+
+    let audited_names = [
+        "AdjustmentLayer",
+        "Bounds",
+        "Fraction",
+        "LayerComps",
+        "OnionSkins",
+        "PlacedLayer",
+        "Point",
+        "PrintScale",
+        "ProofSetup",
+        "RenderingIntent",
+        "SectionDivider",
+        "Slice",
+        "Timeline",
+        "VectorStroke",
+    ];
+
+    let mut duplicates = Vec::new();
+
+    for name in audited_names {
+        let mut hits = Vec::new();
+        for (path, contents) in &source_files {
+            let needle_struct = format!("pub struct {}", name);
+            let needle_enum = format!("pub enum {}", name);
+            let needle_type = format!("pub type {}", name);
+            if contents.contains(&needle_struct)
+                || contents.contains(&needle_enum)
+                || contents.contains(&needle_type)
+            {
+                hits.push(*path);
+            }
+        }
+        if hits.len() > 1 {
+            duplicates.push((name, hits));
+        }
+    }
+
+    assert!(
+        duplicates.is_empty(),
+        "duplicate public model types remain: {:?}",
+        duplicates
+    );
+}
+
+#[test]
+fn test_no_duplicate_public_type_names_for_canonical_models() {
+    let files = [
+        ("src/additional_info.rs", include_str!("../src/additional_info.rs")),
+        ("src/image_resources.rs", include_str!("../src/image_resources.rs")),
+        ("src/layer.rs", include_str!("../src/layer.rs")),
+        ("src/psd.rs", include_str!("../src/psd.rs")),
+        ("src/types.rs", include_str!("../src/types.rs")),
+    ];
+
+    let mut seen: HashMap<&str, Vec<&str>> = HashMap::new();
+    let target_names = [
+        "LayerAdditionalInfo",
+        "LayerColor",
+        "ResolutionInfo",
+        "PrintInformation",
+        "PrintFlags",
+    ];
+
+    for (path, source) in files {
+        for line in source.lines() {
+            for name in target_names {
+                if line.contains(&format!("pub struct {name}"))
+                    || line.contains(&format!("pub enum {name}"))
+                {
+                    seen.entry(name).or_default().push(path);
+                }
+            }
+        }
+    }
+
+    let duplicates: Vec<_> = seen
+        .into_iter()
+        .filter(|(_, paths)| paths.len() > 1)
+        .collect();
+
+    assert!(
+        duplicates.is_empty(),
+        "duplicate canonical public types remain: {duplicates:?}"
+    );
+}
+
+#[test]
 fn test_layer_effects_roundtrip() {
     let layer_effects = LayerEffectsInfo {
         disabled: Some(false),
@@ -504,7 +602,7 @@ fn test_layer_hierarchy() {
                 name: Some("Group 1".to_string()),
                 section_divider: Some(SectionDivider {
                     divider_type: SectionDividerType::OpenFolder,
-                    key: None,
+                    blend_mode: None,
                     sub_type: None,
                 }),
                 ..Default::default()
