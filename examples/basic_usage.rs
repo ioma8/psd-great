@@ -1,6 +1,6 @@
 //! Basic usage example of the ag-psd library
 
-use ag_psd::*;
+use psd_great::*;
 
 fn main() {
     // Create a simple PSD document

@@ -1,11 +1,11 @@
 [package]
-name = "ag-psd"
+name = "psd-great"
 version = "30.1.0"
 edition = "2021"
 authors = ["Rust Port Contributors"]
 description = "Rust library for reading and writing PSD files (Photoshop Document files)"
 license = "MIT"
-repository = "https://github.com/ioma8/ag-psd-rust"
+repository = "https://github.com/ioma8/psd-great"
 keywords = ["psd", "photoshop", "image", "graphics"]
 categories = ["multimedia::images", "parser-implementations"]
 

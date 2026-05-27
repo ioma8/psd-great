@@ -3,8 +3,8 @@
 //! This example demonstrates how to create a new PSD document programmatically
 //! with layers, effects, and write it to a file.
 
-use ag_psd::layer::SectionDivider;
-use ag_psd::*;
+use psd_great::layer::SectionDivider;
+use psd_great::*;
 use std::env;
 use std::fs::File;
 use std::io::Write;

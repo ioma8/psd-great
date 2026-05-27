@@ -3,7 +3,7 @@
 //! This example demonstrates how to read a PSD file and display its properties,
 //! including document info, layers, effects, and resources.
 
-use ag_psd::*;
+use psd_great::*;
 use std::env;
 use std::fs::File;
 

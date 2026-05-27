@@ -57,7 +57,7 @@ Add a new parity module near the end of `tests/ts_parity_test.rs` with these tes
 ```rust
 #[cfg(test)]
 mod remaining_tagged_block_parity {
-    use ag_psd::{
+    use psd_great::{
         read_psd, write_psd, BlendMode, ChannelID, ColorMode, Compression,
         Descriptor, DescriptorValue, Layer, LayerAdditionalInfo, LayerRawData,
         LayerRawDataChannel, Psd, ReadOptions, RGB, WriteOptions,
@@ -120,7 +120,7 @@ mod remaining_tagged_block_parity {
         layer.blend_mode = Some(BlendMode::Normal);
         layer.opacity = Some(1.0);
         layer.additional_info.name = Some("Text".to_string());
-        layer.tagged_blocks.text = Some(ag_psd::additional_info::TextLayerData {
+        layer.tagged_blocks.text = Some(psd_great::additional_info::TextLayerData {
             transform: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             text: "Hello".to_string(),
             text_version: 50,
@@ -162,7 +162,7 @@ mod remaining_tagged_block_parity {
         layer.opacity = Some(1.0);
         layer.additional_info.name = Some("Annotated".to_string());
         layer.tagged_blocks.annotations = Some(vec![
-            ag_psd::additional_info::AnnotationItem {
+            psd_great::additional_info::AnnotationItem {
                 x: 10,
                 y: 20,
                 color_l: 1,
@@ -197,9 +197,9 @@ mod remaining_tagged_block_parity {
         layer.blend_mode = Some(BlendMode::Normal);
         layer.opacity = Some(1.0);
         layer.additional_info.name = Some("Linked".to_string());
-        layer.tagged_blocks.linked_files = Some(ag_psd::additional_info::LinkedFilesBlock {
+        layer.tagged_blocks.linked_files = Some(psd_great::additional_info::LinkedFilesBlock {
             key: "lnkD__".to_string(),
-            items: vec![ag_psd::LinkedFile {
+            items: vec![psd_great::LinkedFile {
                 id: "id".to_string(),
                 name: "name".to_string(),
                 file_type: Some("JPEG".to_string()),

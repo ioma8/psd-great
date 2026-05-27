@@ -5,7 +5,7 @@
 //! 2. Modify its properties and layers
 //! 3. Write it back to a new file
 
-use ag_psd::*;
+use psd_great::*;
 use std::env;
 use std::fs::File;
 use std::io::Write;

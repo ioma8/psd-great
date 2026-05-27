@@ -1,9 +1,10 @@
-//! # ag-psd
+//! # psd-great
 //!
 //! Rust library for reading and writing Adobe Photoshop PSD files.
 //!
-//! This is a Rust port of the TypeScript ag-psd library, providing complete
-//! data structure definitions for working with PSD files.
+//! This codebase began as a Rust port of the TypeScript ag-psd library and has
+//! since grown into a broader PSD/PSB implementation with expanded feature
+//! coverage and typed data structures for working with Photoshop files.
 //!
 //! ## Modules
 //!

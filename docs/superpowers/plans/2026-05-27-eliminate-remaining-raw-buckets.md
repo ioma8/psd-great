@@ -167,8 +167,8 @@ fn image_resources_use_typed_custom_points_and_display_info() {
     psd.channels = Some(4);
     psd.bits_per_channel = Some(8);
     psd.color_mode = Some(ColorMode::RGB);
-    psd.custom_points = Some(vec![ag_psd::psd::CustomPoint { x: 1.5, y: 2.5 }]);
-    psd.display_info = Some(ag_psd::psd::DisplayInfo {
+    psd.custom_points = Some(vec![psd_great::psd::CustomPoint { x: 1.5, y: 2.5 }]);
+    psd.display_info = Some(psd_great::psd::DisplayInfo {
         h_res_unit: 1,
         v_res_unit: 2,
         width_unit: 3,
@@ -388,14 +388,14 @@ fn layer_blending_ranges_are_typed_not_raw() {
     layer.bottom = Some(1);
     layer.right = Some(1);
     layer.additional_info.name = Some("Blend".to_string());
-    layer.blending_ranges = Some(ag_psd::layer::LayerBlendingRanges {
-        composite_gray: Some(ag_psd::layer::BlendingRangePair {
+    layer.blending_ranges = Some(psd_great::layer::LayerBlendingRanges {
+        composite_gray: Some(psd_great::layer::BlendingRangePair {
             src_black: 0x0010,
             src_white: 0x00F0,
             dst_black: 0x0020,
             dst_white: 0x00E0,
         }),
-        channels: vec![ag_psd::layer::BlendingRangePair {
+        channels: vec![psd_great::layer::BlendingRangePair {
             src_black: 0x0030,
             src_white: 0x00D0,
             dst_black: 0x0040,
@@ -595,7 +595,7 @@ fn non_indexed_color_mode_data_is_typed() {
     psd.channels = Some(1);
     psd.bits_per_channel = Some(8);
     psd.color_mode = Some(ColorMode::Duotone);
-    psd.non_indexed_color_mode_data = Some(ag_psd::psd::NonIndexedColorModeData::Duotone {
+    psd.non_indexed_color_mode_data = Some(psd_great::psd::NonIndexedColorModeData::Duotone {
         data: vec![1, 2, 3, 4],
     });
 
@@ -711,18 +711,18 @@ Add:
 ```rust
 #[test]
 fn filter_mask_is_typed_not_raw() {
-    let mut info = ag_psd::additional_info::LayerAdditionalInfo::default();
-    info.filter_mask_typed = Some(ag_psd::additional_info::FilterMaskInfo {
+    let mut info = psd_great::additional_info::LayerAdditionalInfo::default();
+    info.filter_mask_typed = Some(psd_great::additional_info::FilterMaskInfo {
         color_space: 0,
         colors: [0, 0, 0, 0],
         opacity: 255,
     });
 
-    let mut writer = ag_psd::PsdWriter::new(64);
+    let mut writer = psd_great::PsdWriter::new(64);
     let len = writer.write_additional_info("FMsk", &info).expect("write");
     let buf = writer.into_buffer();
-    let mut reader = ag_psd::PsdReader::new(Cursor::new(buf), Default::default());
-    let mut reparsed = ag_psd::additional_info::LayerAdditionalInfo::default();
+    let mut reader = psd_great::PsdReader::new(Cursor::new(buf), Default::default());
+    let mut reparsed = psd_great::additional_info::LayerAdditionalInfo::default();
     reader.read_additional_info("FMsk", len, &mut reparsed).expect("read");
     assert!(reparsed.filter_mask_typed.is_some());
 }
@@ -818,7 +818,7 @@ Add:
 ```rust
 #[test]
 fn descriptor_raw_data_is_only_used_for_tdta_like_binary_fields() {
-    use ag_psd::descriptor::DescriptorValue;
+    use psd_great::descriptor::DescriptorValue;
     let value = DescriptorValue::RawData(vec![1, 2, 3]);
     assert_eq!(value.ostype(), "tdta");
 }

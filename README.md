@@ -1,24 +1,26 @@
-# ag-psd - Rust
+# psd-great
 
 A Rust library for reading and writing Adobe Photoshop PSD and PSB files.
 
-This crate is a parity-focused port of the TypeScript [ag-psd](https://github.com/Agamnentzar/ag-psd) parser/writer, with a typed Rust API and broad coverage of PSD document structure, layers, tagged blocks, resources, text data, effects, masks, paths, and smart-object metadata.
+This crate began as a port of the TypeScript [ag-psd](https://github.com/Agamnentzar/ag-psd) parser/writer, but has since been expanded substantially with additional PSD/PSB feature coverage and a typed Rust API for document structure, layers, tagged blocks, resources, text data, effects, masks, paths, and smart-object metadata.
 
-[![Crates.io](https://img.shields.io/crates/v/ag-psd.svg)](https://crates.io/crates/ag-psd)
-[![Documentation](https://docs.rs/ag-psd/badge.svg)](https://docs.rs/ag-psd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Installation
 
+This crate is not currently published on crates.io.
+
+Use it as a Git dependency:
+
 ```toml
 [dependencies]
-ag-psd = "30.1.0"
+psd-great = { git = "git@github.com:ioma8/psd-great.git" }
 ```
 
 ## Quick Start
 
 ```rust
-use ag_psd::*;
+use psd_great::*;
 use std::fs::File;
 
 fn main() -> Result<()> {
@@ -84,4 +86,8 @@ cargo run --example create_psd
 - Core enums: `BlendMode`, `ColorMode`, `Compression`
 - I/O options: `ReadOptions`, `WriteOptions`
 
-Full API docs are on [docs.rs](https://docs.rs/ag-psd).
+Generate API docs locally with:
+
+```bash
+cargo doc --open
+```

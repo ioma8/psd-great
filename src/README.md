@@ -1,6 +1,6 @@
 # PSD Rust Data Structures
 
-This directory contains a complete Rust port of the TypeScript PSD data structures from `src/psd.ts`.
+This directory began from a Rust port of the TypeScript PSD data structures from `src/psd.ts`, and has since evolved beyond that original translation.
 
 ## Structure
 
@@ -115,7 +115,7 @@ All types support serde serialization/deserialization with:
 ## Usage Example
 
 ```rust
-use ag_psd::*;
+use psd_great::*;
 
 // Create a new PSD document
 let psd = Psd {

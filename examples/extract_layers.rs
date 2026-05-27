@@ -3,7 +3,7 @@
 //! This example shows how to extract detailed information about layers,
 //! including their properties, effects, masks, and hierarchy.
 
-use ag_psd::*;
+use psd_great::*;
 use std::env;
 use std::fs::File;
 

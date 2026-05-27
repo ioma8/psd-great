@@ -3,7 +3,7 @@
 //!
 //! Source: /Users/jakubkolcar/projects/customs/photoshop/psd/test/*.test.ts
 
-use ag_psd::{
+use psd_great::{
     read_psd, write_psd, BlendMode, ColorMode, Layer, LayerAdditionalInfo, LayerMaskData,
     PixelData, Psd, ReadOptions, WriteOptions,
 };
@@ -16,7 +16,7 @@ fn samples_dir() -> std::path::PathBuf {
         .parent()
         .unwrap() // rust-port
         .parent()
-        .unwrap() // ag-psd-rust
+        .unwrap() // psd-great
         .join("photoshop/psd/samples")
         .canonicalize()
         .unwrap_or_else(|_| {
@@ -171,9 +171,9 @@ mod samples {
 
 #[cfg(test)]
 mod descriptor_parity {
-    use ag_psd::descriptor::{Descriptor, DescriptorValue};
-    use ag_psd::reader::PsdReader;
-    use ag_psd::PsdWriter;
+    use psd_great::descriptor::{Descriptor, DescriptorValue};
+    use psd_great::reader::PsdReader;
+    use psd_great::PsdWriter;
     use std::collections::HashMap;
     use std::io::Cursor;
 
@@ -265,7 +265,7 @@ mod descriptor_parity {
 
 #[cfg(test)]
 mod packbits_parity {
-    use ag_psd::compression::{compress_rle, decompress_rle};
+    use psd_great::compression::{compress_rle, decompress_rle};
 
     #[test]
     fn decode_literal_runs() {
@@ -363,7 +363,7 @@ mod header_parity {
     #[test]
     fn write_and_read_big_endian_values() {
         // Test that PsdWriter correctly writes big-endian values
-        use ag_psd::PsdWriter;
+        use psd_great::PsdWriter;
         let mut writer = PsdWriter::with_default_capacity();
         writer.write_signature("8BPS").unwrap();
         writer.write_u16(1).unwrap();
@@ -430,7 +430,7 @@ mod merged_image_parity {
 
     #[test]
     fn roundtrip_zip_compressed_merged_image_bytes() {
-        use ag_psd::compression;
+        use psd_great::compression;
 
         let input_data = vec![0x11, 0x22, 0x33];
         let compressed = compression::compress_zip(&input_data).unwrap();
@@ -440,7 +440,7 @@ mod merged_image_parity {
 
     #[test]
     fn roundtrip_zip_prediction_merged_image_bytes() {
-        use ag_psd::compression;
+        use psd_great::compression;
 
         let input_data = vec![0x10, 0x20, 0x30];
         let compressed = compression::compress_zip_with_prediction(&input_data, 3, 1, 8).unwrap();
@@ -758,8 +758,8 @@ mod layer_mask_parity {
             },
             ..Default::default()
         };
-        layer.blending_ranges_data = Some(ag_psd::layer::LayerBlendingRangesData {
-            composite_gray: Some(ag_psd::layer::LayerBlendingRangePair {
+        layer.blending_ranges_data = Some(psd_great::layer::LayerBlendingRangesData {
+            composite_gray: Some(psd_great::layer::LayerBlendingRangePair {
                 src_black: 0x01,
                 src_white: 0x02,
                 dst_black: 0x03,
@@ -803,8 +803,8 @@ mod layer_mask_parity {
 
         assert_eq!(
             reparsed_layer.blending_ranges_data,
-            Some(ag_psd::layer::LayerBlendingRangesData {
-                composite_gray: Some(ag_psd::layer::LayerBlendingRangePair {
+            Some(psd_great::layer::LayerBlendingRangesData {
+                composite_gray: Some(psd_great::layer::LayerBlendingRangePair {
                     src_black: 0x01,
                     src_white: 0x02,
                     dst_black: 0x03,
@@ -877,7 +877,7 @@ mod uv_block_parity {
         // The UV block is written by the TS writer when mask data is present.
         // We verify our writer also produces valid output by round-tripping
         // a layer with mask data.
-        use ag_psd::{
+        use psd_great::{
             read_psd, write_psd, BlendMode, ColorMode, Layer, LayerAdditionalInfo, LayerMaskData,
             Psd, ReadOptions, WriteOptions,
         };
@@ -935,7 +935,7 @@ mod uv_block_parity {
 
 #[cfg(test)]
 mod color_mode_parity {
-    use ag_psd::{read_psd, ColorMode, Psd, ReadOptions};
+    use psd_great::{read_psd, ColorMode, Psd, ReadOptions};
     use std::io::Cursor;
 
     #[test]
@@ -982,7 +982,7 @@ mod color_mode_parity {
     #[test]
     fn indexed_palette_roundtrip_preserves_color_mode_and_palette() {
         let palette = (0..256)
-            .map(|i| ag_psd::RGB {
+            .map(|i| psd_great::RGB {
                 r: i as u8,
                 g: 255u8.wrapping_sub(i as u8),
                 b: (i / 2) as u8,
@@ -999,7 +999,7 @@ mod color_mode_parity {
             ..Default::default()
         };
 
-        let output = ag_psd::write_psd(&psd, &ag_psd::WriteOptions::default()).unwrap();
+        let output = psd_great::write_psd(&psd, &psd_great::WriteOptions::default()).unwrap();
         let reparsed = read_psd(
             Cursor::new(&output),
             ReadOptions {
@@ -1021,7 +1021,7 @@ mod color_mode_parity {
 #[cfg(test)]
 mod document_tagged_blocks_parity {
     use super::*;
-    use ag_psd::additional_info::{
+    use psd_great::additional_info::{
         LayerAdditionalInfo as TaggedBlockInfo, Metadata, MetadataEntry,
     };
 
@@ -1077,7 +1077,7 @@ mod document_tagged_blocks_parity {
 
 #[cfg(test)]
 mod image_resources_parity {
-    use ag_psd::{read_psd, write_psd, ColorMode, PixelData, Psd, ReadOptions, WriteOptions};
+    use psd_great::{read_psd, write_psd, ColorMode, PixelData, Psd, ReadOptions, WriteOptions};
     use std::io::Cursor;
 
     #[test]
@@ -1113,7 +1113,7 @@ mod image_resources_parity {
 
 #[cfg(test)]
 mod remaining_tagged_block_parity {
-    use ag_psd::{
+    use psd_great::{
         read_psd, write_psd, BlendMode, ColorMode, Layer, Psd, ReadOptions, WriteOptions,
     };
     use std::collections::HashMap;
@@ -1127,7 +1127,7 @@ mod remaining_tagged_block_parity {
         psd.channels = Some(1);
         psd.bits_per_channel = Some(8);
         psd.color_mode = Some(ColorMode::Duotone);
-        psd.color_mode_data = Some(ag_psd::psd::ColorModeSectionData {
+        psd.color_mode_data = Some(psd_great::psd::ColorModeSectionData {
             bytes: vec![0xAA, 0xBB, 0xCC, 0xDD],
         });
 
@@ -1143,7 +1143,7 @@ mod remaining_tagged_block_parity {
         assert_eq!(reparsed.color_mode, Some(ColorMode::Duotone));
         assert_eq!(
             reparsed.color_mode_data,
-            Some(ag_psd::psd::ColorModeSectionData {
+            Some(psd_great::psd::ColorModeSectionData {
                 bytes: vec![0xAA, 0xBB, 0xCC, 0xDD],
             })
         );
@@ -1157,12 +1157,12 @@ mod remaining_tagged_block_parity {
         psd.channels = Some(3);
         psd.bits_per_channel = Some(8);
         psd.color_mode = Some(ColorMode::RGB);
-        psd.path_selection_descriptor = Some(ag_psd::descriptor::Descriptor {
+        psd.path_selection_descriptor = Some(psd_great::descriptor::Descriptor {
             name: String::new(),
             class_id: "null".to_string(),
             items: HashMap::from([(
                 "name".to_string(),
-                ag_psd::descriptor::DescriptorValue::Text("path".to_string()),
+                psd_great::descriptor::DescriptorValue::Text("path".to_string()),
             )]),
         });
 
@@ -1173,14 +1173,14 @@ mod remaining_tagged_block_parity {
 
     #[test]
     fn roundtrip_document_txt2_synthesized_from_tysh() {
-        let mut text_desc = ag_psd::descriptor::Descriptor {
+        let mut text_desc = psd_great::descriptor::Descriptor {
             name: String::new(),
             class_id: "TxLr".to_string(),
             items: HashMap::new(),
         };
         text_desc.items.insert(
             "Txt ".to_string(),
-            ag_psd::descriptor::DescriptorValue::Text("Hello".to_string()),
+            psd_great::descriptor::DescriptorValue::Text("Hello".to_string()),
         );
 
         let mut layer = Layer::default();
@@ -1191,14 +1191,14 @@ mod remaining_tagged_block_parity {
         layer.blend_mode = Some(BlendMode::Normal);
         layer.opacity = Some(1.0);
         layer.additional_info.name = Some("Text".to_string());
-        layer.tagged_blocks.text = Some(ag_psd::additional_info::TextLayerData {
+        layer.tagged_blocks.text = Some(psd_great::additional_info::TextLayerData {
             transform: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             text: "Hello".to_string(),
             text_version: 50,
             descriptor_version: 16,
             text_data: Some(text_desc),
             warp_version: 1,
-            warp_data: Some(ag_psd::descriptor::Descriptor {
+            warp_data: Some(psd_great::descriptor::Descriptor {
                 name: String::new(),
                 class_id: "warp".to_string(),
                 items: HashMap::new(),
@@ -1243,7 +1243,7 @@ mod remaining_tagged_block_parity {
         layer.blend_mode = Some(BlendMode::Normal);
         layer.opacity = Some(1.0);
         layer.additional_info.name = Some("Annotated".to_string());
-        layer.tagged_blocks.annotations = Some(vec![ag_psd::additional_info::AnnotationItem {
+        layer.tagged_blocks.annotations = Some(vec![psd_great::additional_info::AnnotationItem {
             x: 10,
             y: 20,
             color_l: 1,
@@ -1295,17 +1295,17 @@ mod remaining_tagged_block_parity {
             layer.blend_mode = Some(BlendMode::Normal);
             layer.opacity = Some(1.0);
             layer.additional_info.name = Some("Linked".to_string());
-            layer.tagged_blocks.linked_files = Some(ag_psd::additional_info::LinkedFilesBlock {
-                key: ag_psd::PsdStringCode::from(*test_key),
-                items: vec![ag_psd::LinkedFile {
+            layer.tagged_blocks.linked_files = Some(psd_great::additional_info::LinkedFilesBlock {
+                key: psd_great::PsdStringCode::from(*test_key),
+                items: vec![psd_great::LinkedFile {
                     id: "id".to_string(),
                     name: "name".to_string(),
-                    file_type: Some(ag_psd::PsdStringCode::from("JPEG")),
-                    creator: Some(ag_psd::PsdStringCode::from("8BIM")),
+                    file_type: Some(psd_great::PsdStringCode::from("JPEG")),
+                    creator: Some(psd_great::PsdStringCode::from("8BIM")),
                     data: Some(vec![1, 2, 3]),
                     time: None,
                     descriptor: None,
-                    child_document_id: Some(ag_psd::PsdStringCode::from("liFD")),
+                    child_document_id: Some(psd_great::PsdStringCode::from("liFD")),
                     asset_mod_time: None,
                     asset_locked_state: None,
                     linked_file: None,
@@ -1349,10 +1349,10 @@ mod remaining_tagged_block_parity {
 
     #[test]
     fn roundtrip_feid_with_full_structure() {
-        use ag_psd::additional_info::{
+        use psd_great::additional_info::{
             self, ChannelImageData, FilterEffectsPreview, FilterEffectsRect, FilterEffectsSlot,
         };
-        use ag_psd::PixelData;
+        use psd_great::PixelData;
         let block = additional_info::FilterEffectsBlock {
             version: 1,
             items: vec![additional_info::FilterEffectsItem {
@@ -1414,10 +1414,10 @@ mod remaining_tagged_block_parity {
         let mut info = additional_info::LayerAdditionalInfo::default();
         info.filter_effects = Some(block.clone());
 
-        let mut w = ag_psd::PsdWriter::new(2048);
+        let mut w = psd_great::PsdWriter::new(2048);
         let len = w.write_additional_info("FEid", &info).unwrap();
         let buf = w.into_buffer();
-        let mut reader = ag_psd::PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut reader = psd_great::PsdReader::new(std::io::Cursor::new(buf), Default::default());
         let mut reparsed = additional_info::LayerAdditionalInfo::default();
         reader
             .read_additional_info("FEid", len, &mut reparsed)
@@ -1427,7 +1427,7 @@ mod remaining_tagged_block_parity {
 
     #[test]
     fn roundtrip_pxsd_with_images() {
-        use ag_psd::additional_info::{self, FilterEffectsRect, PixelSourceDataImage};
+        use psd_great::additional_info::{self, FilterEffectsRect, PixelSourceDataImage};
         let block = additional_info::PixelSourceDataBlock {
             items: vec![additional_info::PixelSourceDataItem {
                 key: 7,
@@ -1446,10 +1446,10 @@ mod remaining_tagged_block_parity {
         let mut info = additional_info::LayerAdditionalInfo::default();
         info.pixel_source_data = Some(block.clone());
 
-        let mut w = ag_psd::PsdWriter::new(4096);
+        let mut w = psd_great::PsdWriter::new(4096);
         let len = w.write_additional_info("PxSD", &info).unwrap();
         let buf = w.into_buffer();
-        let mut reader = ag_psd::PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut reader = psd_great::PsdReader::new(std::io::Cursor::new(buf), Default::default());
         let mut reparsed = additional_info::LayerAdditionalInfo::default();
         reader
             .read_additional_info("PxSD", len, &mut reparsed)
@@ -1459,7 +1459,7 @@ mod remaining_tagged_block_parity {
 
     #[test]
     fn roundtrip_document_txt2_preserves_document_resources() {
-        use ag_psd::engine_data::{serialize_engine_data, EngineValue};
+        use psd_great::engine_data::{serialize_engine_data, EngineValue};
         use std::collections::HashMap;
 
         let mut layer = Layer::default();
@@ -1501,24 +1501,24 @@ mod remaining_tagged_block_parity {
         let serialized_engine_data =
             serialize_engine_data(&engine_data, true).expect("serialize engine data");
 
-        let mut text_descriptor = ag_psd::descriptor::Descriptor {
+        let mut text_descriptor = psd_great::descriptor::Descriptor {
             name: String::new(),
             class_id: "TxLr".to_string(),
             items: HashMap::new(),
         };
         text_descriptor.items.insert(
             "EngineData".to_string(),
-            ag_psd::descriptor::DescriptorValue::DataBytes(serialized_engine_data),
+            psd_great::descriptor::DescriptorValue::DataBytes(serialized_engine_data),
         );
 
-        layer.tagged_blocks.text = Some(ag_psd::additional_info::TextLayerData {
+        layer.tagged_blocks.text = Some(psd_great::additional_info::TextLayerData {
             transform: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             text: "Hello".to_string(),
             text_version: 50,
             descriptor_version: 16,
             text_data: Some(text_descriptor),
             warp_version: 1,
-            warp_data: Some(ag_psd::descriptor::Descriptor {
+            warp_data: Some(psd_great::descriptor::Descriptor {
                 name: String::new(),
                 class_id: "warp".to_string(),
                 items: HashMap::new(),
@@ -1550,7 +1550,7 @@ mod remaining_tagged_block_parity {
 
         let txt2 = reparsed.tagged_blocks.text_engine.expect("Txt2");
         let map = match txt2.data {
-            ag_psd::engine_data::EngineValue::Object(map) => map,
+            psd_great::engine_data::EngineValue::Object(map) => map,
             _ => panic!("expected object"),
         };
         assert!(map.contains_key("_DocumentResources"));
@@ -1558,10 +1558,10 @@ mod remaining_tagged_block_parity {
 
     #[test]
     fn roundtrip_vscg_matches_vstk_wrapped_descriptor() {
-        use ag_psd::descriptor::{Descriptor, DescriptorValue};
+        use psd_great::descriptor::{Descriptor, DescriptorValue};
         use std::collections::HashMap;
-        let mut info = ag_psd::additional_info::LayerAdditionalInfo::default();
-        info.vector_stroke = Some(ag_psd::additional_info::VectorStroke {
+        let mut info = psd_great::additional_info::LayerAdditionalInfo::default();
+        info.vector_stroke = Some(psd_great::additional_info::VectorStroke {
             version: 1,
             descriptor: Descriptor {
                 name: String::new(),
@@ -1574,11 +1574,11 @@ mod remaining_tagged_block_parity {
         });
 
         // Write as vscg (wrapped), read back as vstk
-        let mut w = ag_psd::PsdWriter::new(256);
+        let mut w = psd_great::PsdWriter::new(256);
         let len = w.write_additional_info("vscg", &info).unwrap();
         let buf = w.into_buffer();
-        let mut reader = ag_psd::PsdReader::new(std::io::Cursor::new(buf), Default::default());
-        let mut reparsed = ag_psd::additional_info::LayerAdditionalInfo::default();
+        let mut reader = psd_great::PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut reparsed = psd_great::additional_info::LayerAdditionalInfo::default();
         reader
             .read_additional_info("vscg", len, &mut reparsed)
             .unwrap();
@@ -1588,20 +1588,20 @@ mod remaining_tagged_block_parity {
 
     #[test]
     fn roundtrip_lmfx_descriptor_block() {
-        use ag_psd::descriptor::{Descriptor, DescriptorValue};
+        use psd_great::descriptor::{Descriptor, DescriptorValue};
         use std::collections::HashMap;
-        let mut info = ag_psd::additional_info::LayerAdditionalInfo::default();
+        let mut info = psd_great::additional_info::LayerAdditionalInfo::default();
         info.layer_effects_descriptor = Some(Descriptor {
             name: String::new(),
             class_id: "null".to_string(),
             items: HashMap::from([("layerId".to_string(), DescriptorValue::Integer(1))]),
         });
 
-        let mut w = ag_psd::PsdWriter::new(256);
+        let mut w = psd_great::PsdWriter::new(256);
         let len = w.write_additional_info("lmfx", &info).unwrap();
         let buf = w.into_buffer();
-        let mut reader = ag_psd::PsdReader::new(std::io::Cursor::new(buf), Default::default());
-        let mut reparsed = ag_psd::additional_info::LayerAdditionalInfo::default();
+        let mut reader = psd_great::PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut reparsed = psd_great::additional_info::LayerAdditionalInfo::default();
         reader
             .read_additional_info("lmfx", len, &mut reparsed)
             .unwrap();
@@ -1611,15 +1611,15 @@ mod remaining_tagged_block_parity {
 
     #[test]
     fn roundtrip_plld_semantic_descriptor() {
-        use ag_psd::descriptor::{Descriptor, DescriptorValue};
+        use psd_great::descriptor::{Descriptor, DescriptorValue};
         use std::collections::HashMap;
-        let mut info = ag_psd::additional_info::LayerAdditionalInfo::default();
-        info.placed_layer = Some(ag_psd::additional_info::PlacedLayer {
+        let mut info = psd_great::additional_info::LayerAdditionalInfo::default();
+        info.placed_layer = Some(psd_great::additional_info::PlacedLayer {
             id: "abc".to_string(),
             page: Some(1),
             total_pages: Some(1),
-            anti_alias_policy: Some(ag_psd::PsdIntCode(1)),
-            placed_layer_type: Some(ag_psd::PsdIntCode(1)),
+            anti_alias_policy: Some(psd_great::PsdIntCode(1)),
+            placed_layer_type: Some(psd_great::PsdIntCode(1)),
             transform: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             warp: Some(Descriptor {
                 name: String::new(),
@@ -1629,7 +1629,7 @@ mod remaining_tagged_block_parity {
             placed: None,
         });
 
-        let mut w = ag_psd::PsdWriter::new(512);
+        let mut w = psd_great::PsdWriter::new(512);
         let len = w.write_additional_info("PlLd", &info).unwrap();
         assert!(len > 0, "expected non-empty PlLd");
         // Writer produces output without error, validate id-independent roundtrip
@@ -1638,10 +1638,10 @@ mod remaining_tagged_block_parity {
 
     #[test]
     fn roundtrip_sold_semantic_descriptor() {
-        use ag_psd::descriptor::{Descriptor, DescriptorValue};
+        use psd_great::descriptor::{Descriptor, DescriptorValue};
         use std::collections::HashMap;
-        let mut info = ag_psd::additional_info::LayerAdditionalInfo::default();
-        info.placed_layer = Some(ag_psd::additional_info::PlacedLayer {
+        let mut info = psd_great::additional_info::LayerAdditionalInfo::default();
+        info.placed_layer = Some(psd_great::additional_info::PlacedLayer {
             id: "abc".to_string(),
             page: None,
             total_pages: None,
@@ -1656,7 +1656,7 @@ mod remaining_tagged_block_parity {
             placed: None,
         });
 
-        let mut w = ag_psd::PsdWriter::new(512);
+        let mut w = psd_great::PsdWriter::new(512);
         let len = w.write_additional_info("SoLd", &info).unwrap();
         assert!(len > 0, "expected non-empty SoLd");
         // Writer produces output without error
@@ -1745,7 +1745,7 @@ mod remaining_tagged_block_parity {
         psd.channels = Some(4);
         psd.bits_per_channel = Some(8);
         psd.color_mode = Some(ColorMode::RGB);
-        psd.variable_sets = Some(vec![ag_psd::psd::VariableSet {
+        psd.variable_sets = Some(vec![psd_great::psd::VariableSet {
             var_name: Some("title".to_string()),
             trait_name: Some("textcontent".to_string()),
             doc_ref: Some("doc".to_string()),
@@ -1790,13 +1790,13 @@ mod remaining_tagged_block_parity {
         psd.channels = Some(4);
         psd.bits_per_channel = Some(8);
         psd.color_mode = Some(ColorMode::RGB);
-        psd.display_info = Some(ag_psd::psd::DisplayInfo {
-            h_res_unit: ag_psd::PsdU16Code(1),
-            v_res_unit: ag_psd::PsdU16Code(2),
-            width_unit: ag_psd::PsdU16Code(3),
-            height_unit: ag_psd::PsdU16Code(4),
+        psd.display_info = Some(psd_great::psd::DisplayInfo {
+            h_res_unit: psd_great::PsdU16Code(1),
+            v_res_unit: psd_great::PsdU16Code(2),
+            width_unit: psd_great::PsdU16Code(3),
+            height_unit: psd_great::PsdU16Code(4),
         });
-        psd.custom_points = Some(vec![ag_psd::psd::CustomPoint { x: 1.5, y: 2.5 }]);
+        psd.custom_points = Some(vec![psd_great::psd::CustomPoint { x: 1.5, y: 2.5 }]);
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
         let reparsed = read_psd(
@@ -1865,7 +1865,7 @@ mod remaining_tagged_block_parity {
         psd.color_mode = Some(ColorMode::RGB);
         psd.children = Some(vec![Layer::default()]);
 
-        psd.variable_sets = Some(vec![ag_psd::psd::VariableSet {
+        psd.variable_sets = Some(vec![psd_great::psd::VariableSet {
             var_name: Some("title".to_string()),
             trait_name: Some("textcontent".to_string()),
             doc_ref: None,
@@ -1875,19 +1875,19 @@ mod remaining_tagged_block_parity {
             clip: None,
         }]);
         psd.data_sets = Some(vec![vec!["title".to_string()], vec!["Hello".to_string()]]);
-        psd.descriptor_1065 = Some(ag_psd::descriptor::Descriptor {
+        psd.descriptor_1065 = Some(psd_great::descriptor::Descriptor {
             name: String::new(),
             class_id: "test".to_string(),
             items: std::collections::HashMap::new(),
         });
         psd.descriptor_1074 = psd.descriptor_1065.clone();
         psd.descriptor_1075 = psd.descriptor_1065.clone();
-        psd.custom_points = Some(vec![ag_psd::psd::CustomPoint { x: 10.5, y: 20.25 }]);
-        psd.display_info = Some(ag_psd::psd::DisplayInfo {
-            h_res_unit: ag_psd::PsdU16Code(1),
-            v_res_unit: ag_psd::PsdU16Code(2),
-            width_unit: ag_psd::PsdU16Code(3),
-            height_unit: ag_psd::PsdU16Code(4),
+        psd.custom_points = Some(vec![psd_great::psd::CustomPoint { x: 10.5, y: 20.25 }]);
+        psd.display_info = Some(psd_great::psd::DisplayInfo {
+            h_res_unit: psd_great::PsdU16Code(1),
+            v_res_unit: psd_great::PsdU16Code(2),
+            width_unit: psd_great::PsdU16Code(3),
+            height_unit: psd_great::PsdU16Code(4),
         });
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
@@ -1931,7 +1931,7 @@ mod remaining_tagged_block_parity {
         psd.bits_per_channel = Some(8);
         psd.color_mode = Some(ColorMode::RGB);
         psd.children = Some(vec![layer_a, layer_b]);
-        psd.variable_sets = Some(vec![ag_psd::psd::VariableSet {
+        psd.variable_sets = Some(vec![psd_great::psd::VariableSet {
             var_name: Some("title".to_string()),
             trait_name: Some("textcontent".to_string()),
             doc_ref: None,
@@ -1941,12 +1941,12 @@ mod remaining_tagged_block_parity {
             clip: None,
         }]);
         psd.data_sets = Some(vec![vec!["title".to_string()], vec!["Hello".to_string()]]);
-        psd.custom_points = Some(vec![ag_psd::psd::CustomPoint { x: 4.0, y: 8.0 }]);
-        psd.display_info = Some(ag_psd::psd::DisplayInfo {
-            h_res_unit: ag_psd::PsdU16Code(1),
-            v_res_unit: ag_psd::PsdU16Code(1),
-            width_unit: ag_psd::PsdU16Code(1),
-            height_unit: ag_psd::PsdU16Code(1),
+        psd.custom_points = Some(vec![psd_great::psd::CustomPoint { x: 4.0, y: 8.0 }]);
+        psd.display_info = Some(psd_great::psd::DisplayInfo {
+            h_res_unit: psd_great::PsdU16Code(1),
+            v_res_unit: psd_great::PsdU16Code(1),
+            width_unit: psd_great::PsdU16Code(1),
+            height_unit: psd_great::PsdU16Code(1),
         });
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");

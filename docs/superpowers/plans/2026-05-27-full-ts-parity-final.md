@@ -58,9 +58,9 @@ fn roundtrip_lnkd_other_variants() {
         layer.blend_mode = Some(BlendMode::Normal);
         layer.opacity = Some(1.0);
         layer.additional_info.name = Some("Linked".to_string());
-        layer.tagged_blocks.linked_files = Some(ag_psd::additional_info::LinkedFilesBlock {
+        layer.tagged_blocks.linked_files = Some(psd_great::additional_info::LinkedFilesBlock {
             key: test_key.to_string(),
-            items: vec![ag_psd::LinkedFile {
+            items: vec![psd_great::LinkedFile {
                 id: "id".to_string(),
                 name: "name".to_string(),
                 file_type: Some("JPEG".to_string()),
@@ -204,25 +204,25 @@ fn roundtrip_document_txt2_synthesized_from_tysh() {
 
     let text_engine = reparsed.tagged_blocks.text_engine.expect("expected synthesized Txt2");
     let engine = match text_engine.data {
-        ag_psd::engine_data::EngineValue::Object(ref map) => map,
+        psd_great::engine_data::EngineValue::Object(ref map) => map,
         _ => panic!("expected Txt2 object"),
     };
     let doc_objects = match engine.get("_DocumentObjects") {
-        Some(ag_psd::engine_data::EngineValue::Object(map)) => map,
+        Some(psd_great::engine_data::EngineValue::Object(map)) => map,
         _ => panic!("expected _DocumentObjects"),
     };
     let text_objects = match doc_objects.get("_TextObjects") {
-        Some(ag_psd::engine_data::EngineValue::Array(items)) => items,
+        Some(psd_great::engine_data::EngineValue::Array(items)) => items,
         _ => panic!("expected _TextObjects"),
     };
     assert_eq!(text_objects.len(), 1);
 
     let first = match &text_objects[0] {
-        ag_psd::engine_data::EngineValue::Object(map) => map,
+        psd_great::engine_data::EngineValue::Object(map) => map,
         _ => panic!("expected text object"),
     };
     let model = match first.get("_Model") {
-        Some(ag_psd::engine_data::EngineValue::Object(map)) => map,
+        Some(psd_great::engine_data::EngineValue::Object(map)) => map,
         _ => panic!("expected _Model"),
     };
     assert!(model.contains_key("_StyleRun"));
@@ -350,7 +350,7 @@ Add:
 ```rust
 #[test]
 fn roundtrip_document_txt2_preserves_document_resources() {
-    use ag_psd::engine_data::EngineValue;
+    use psd_great::engine_data::EngineValue;
     use std::collections::HashMap;
 
     let mut layer = Layer::default();
@@ -361,18 +361,18 @@ fn roundtrip_document_txt2_preserves_document_resources() {
     layer.blend_mode = Some(BlendMode::Normal);
     layer.opacity = Some(1.0);
     layer.additional_info.name = Some("Text".to_string());
-    layer.tagged_blocks.text = Some(ag_psd::additional_info::TextLayerData {
+    layer.tagged_blocks.text = Some(psd_great::additional_info::TextLayerData {
         transform: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
         text: "Hello".to_string(),
         text_version: 50,
         descriptor_version: 16,
-        text_data: Some(ag_psd::descriptor::Descriptor {
+        text_data: Some(psd_great::descriptor::Descriptor {
             name: String::new(),
             class_id: "TxLr".to_string(),
             items: HashMap::new(),
         }),
         warp_version: 1,
-        warp_data: Some(ag_psd::descriptor::Descriptor {
+        warp_data: Some(psd_great::descriptor::Descriptor {
             name: String::new(),
             class_id: "warp".to_string(),
             items: HashMap::new(),
@@ -382,7 +382,7 @@ fn roundtrip_document_txt2_preserves_document_resources() {
         right: 1.0,
         bottom: 1.0,
     });
-    layer.tagged_blocks.text_engine = Some(ag_psd::additional_info::TextEngineBlock {
+    layer.tagged_blocks.text_engine = Some(psd_great::additional_info::TextEngineBlock {
         data: EngineValue::Object(HashMap::from([
             ("DocumentResources".to_string(), EngineValue::Object(HashMap::from([
                 ("fonts".to_string(), EngineValue::Array(Vec::new())),
@@ -407,7 +407,7 @@ fn roundtrip_document_txt2_preserves_document_resources() {
 
     let txt2 = reparsed.tagged_blocks.text_engine.expect("Txt2");
     let map = match txt2.data {
-        ag_psd::engine_data::EngineValue::Object(map) => map,
+        psd_great::engine_data::EngineValue::Object(map) => map,
         _ => panic!("expected object"),
     };
     assert!(map.contains_key("_DocumentResources"));
@@ -449,7 +449,7 @@ Replace the current minimal FEid test with one that includes structured payloads
 ```rust
 #[test]
 fn roundtrip_feid_with_full_structure() {
-    use ag_psd::additional_info::{self, FilterEffectsPreview, FilterEffectsRect, FilterEffectsSlot};
+    use psd_great::additional_info::{self, FilterEffectsPreview, FilterEffectsRect, FilterEffectsSlot};
     let block = additional_info::FilterEffectsBlock {
         version: 1,
         items: vec![additional_info::FilterEffectsItem {
@@ -473,10 +473,10 @@ fn roundtrip_feid_with_full_structure() {
     let mut info = additional_info::LayerAdditionalInfo::default();
     info.filter_effects = Some(block.clone());
 
-    let mut w = ag_psd::PsdWriter::new(2048);
+    let mut w = psd_great::PsdWriter::new(2048);
     let len = w.write_additional_info("FEid", &info).unwrap();
     let buf = w.into_buffer();
-    let mut reader = ag_psd::PsdReader::new(std::io::Cursor::new(buf), Default::default());
+    let mut reader = psd_great::PsdReader::new(std::io::Cursor::new(buf), Default::default());
     let mut reparsed = additional_info::LayerAdditionalInfo::default();
     reader.read_additional_info("FEid", len, &mut reparsed).unwrap();
     assert_eq!(reparsed.filter_effects, Some(block));
@@ -602,7 +602,7 @@ Use a TS-shaped payload with image entries:
 ```rust
 #[test]
 fn roundtrip_pxsd_with_images() {
-    use ag_psd::additional_info::{self, FilterEffectsRect, PixelSourceDataImage};
+    use psd_great::additional_info::{self, FilterEffectsRect, PixelSourceDataImage};
     let block = additional_info::PixelSourceDataBlock {
         items: vec![additional_info::PixelSourceDataItem {
             key: 7,
@@ -621,10 +621,10 @@ fn roundtrip_pxsd_with_images() {
     let mut info = additional_info::LayerAdditionalInfo::default();
     info.pixel_source_data = Some(block.clone());
 
-    let mut w = ag_psd::PsdWriter::new(4096);
+    let mut w = psd_great::PsdWriter::new(4096);
     let len = w.write_additional_info("PxSD", &info).unwrap();
     let buf = w.into_buffer();
-    let mut reader = ag_psd::PsdReader::new(std::io::Cursor::new(buf), Default::default());
+    let mut reader = psd_great::PsdReader::new(std::io::Cursor::new(buf), Default::default());
     let mut reparsed = additional_info::LayerAdditionalInfo::default();
     reader.read_additional_info("PxSD", len, &mut reparsed).unwrap();
     assert_eq!(reparsed.pixel_source_data, Some(block));

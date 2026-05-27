@@ -59,7 +59,7 @@ fn roundtrip_document_resource_postprocess_fields() {
     psd.color_mode = Some(ColorMode::RGB);
     psd.children = Some(vec![Layer::default()]);
 
-    psd.variable_sets = Some(vec![ag_psd::psd::VariableSet {
+    psd.variable_sets = Some(vec![psd_great::psd::VariableSet {
         var_name: Some("title".to_string()),
         trait_name: Some("textcontent".to_string()),
         doc_ref: None,
@@ -72,15 +72,15 @@ fn roundtrip_document_resource_postprocess_fields() {
         vec!["title".to_string()],
         vec!["Hello".to_string()],
     ]);
-    psd.descriptor_1065 = Some(ag_psd::descriptor::Descriptor {
+    psd.descriptor_1065 = Some(psd_great::descriptor::Descriptor {
         name: String::new(),
         class_id: "test".to_string(),
         items: std::collections::HashMap::new(),
     });
     psd.descriptor_1074 = psd.descriptor_1065.clone();
     psd.descriptor_1075 = psd.descriptor_1065.clone();
-    psd.custom_points = Some(vec![ag_psd::psd::CustomPoint { x: 10.5, y: 20.25 }]);
-    psd.display_info = Some(ag_psd::psd::DisplayInfo {
+    psd.custom_points = Some(vec![psd_great::psd::CustomPoint { x: 10.5, y: 20.25 }]);
+    psd.display_info = Some(psd_great::psd::DisplayInfo {
         h_res_unit: 1,
         v_res_unit: 2,
         width_unit: 3,
@@ -411,7 +411,7 @@ fn roundtrip_variables_and_data_sets_are_typed() {
     psd.channels = Some(4);
     psd.bits_per_channel = Some(8);
     psd.color_mode = Some(ColorMode::RGB);
-    psd.variable_sets = Some(vec![ag_psd::psd::VariableSet {
+    psd.variable_sets = Some(vec![psd_great::psd::VariableSet {
         var_name: Some("title".to_string()),
         trait_name: Some("textcontent".to_string()),
         doc_ref: Some("doc".to_string()),
@@ -440,13 +440,13 @@ fn roundtrip_display_info_and_custom_points_are_typed() {
     psd.channels = Some(4);
     psd.bits_per_channel = Some(8);
     psd.color_mode = Some(ColorMode::RGB);
-    psd.display_info = Some(ag_psd::psd::DisplayInfo {
+    psd.display_info = Some(psd_great::psd::DisplayInfo {
         h_res_unit: 1,
         v_res_unit: 2,
         width_unit: 3,
         height_unit: 4,
     });
-    psd.custom_points = Some(vec![ag_psd::psd::CustomPoint { x: 1.5, y: 2.5 }]);
+    psd.custom_points = Some(vec![psd_great::psd::CustomPoint { x: 1.5, y: 2.5 }]);
 
     let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
     let reparsed = read_psd(Cursor::new(&bytes), ReadOptions::default()).expect("read");
@@ -777,7 +777,7 @@ fn roundtrip_combined_document_resource_parity() {
     psd.bits_per_channel = Some(8);
     psd.color_mode = Some(ColorMode::RGB);
     psd.children = Some(vec![layer_a, layer_b]);
-    psd.variable_sets = Some(vec![ag_psd::psd::VariableSet {
+    psd.variable_sets = Some(vec![psd_great::psd::VariableSet {
         var_name: Some("title".to_string()),
         trait_name: Some("textcontent".to_string()),
         doc_ref: None,
@@ -790,8 +790,8 @@ fn roundtrip_combined_document_resource_parity() {
         vec!["title".to_string()],
         vec!["Hello".to_string()],
     ]);
-    psd.custom_points = Some(vec![ag_psd::psd::CustomPoint { x: 4.0, y: 8.0 }]);
-    psd.display_info = Some(ag_psd::psd::DisplayInfo {
+    psd.custom_points = Some(vec![psd_great::psd::CustomPoint { x: 4.0, y: 8.0 }]);
+    psd.display_info = Some(psd_great::psd::DisplayInfo {
         h_res_unit: 1,
         v_res_unit: 1,
         width_unit: 1,

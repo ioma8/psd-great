@@ -1,5 +1,5 @@
-use ag_psd::layer::SectionDivider;
-use ag_psd::*;
+use psd_great::layer::SectionDivider;
+use psd_great::*;
 use std::fs::File;
 use std::io::Cursor;
 
