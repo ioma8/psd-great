@@ -136,7 +136,6 @@ impl<R: Read + Seek> PsdReader<R> {
     pub fn read_ostype(&mut self, ostype: &str) -> Result<DescriptorValue> {
         match ostype {
             "obj " => {
-                // Reference
                 let items = self.read_reference_structure()?;
                 Ok(DescriptorValue::Reference(items))
             }
@@ -273,9 +272,8 @@ impl<R: Read + Seek> PsdReader<R> {
 
     /// Read reference structure
     pub fn read_reference_structure(&mut self) -> Result<Vec<ReferenceItem>> {
-        let _count = self.read_i32()?;
-        let item_count = self.read_i32()?;
-        
+        let item_count = self.read_u32()?;
+
         let mut items = Vec::new();
         for _ in 0..item_count {
             let ostype = self.read_signature()?;
@@ -489,11 +487,8 @@ impl PsdWriter {
 
     /// Write reference structure
     pub fn write_reference_structure(&mut self, items: &[ReferenceItem]) -> Result<()> {
-        // Calculate total size (approximate)
-        let size = items.len() * 20;
-        self.write_i32(size as i32)?;
-        self.write_i32(items.len() as i32)?;
-        
+        self.write_u32(items.len() as u32)?;
+
         for item in items {
             match item {
                 ReferenceItem::Property { name, class_id, key_id } => {
@@ -599,6 +594,35 @@ mod tests {
             assert_eq!(value, 100.0);
         } else {
             panic!("Expected UnitDouble");
+        }
+    }
+
+    #[test]
+    fn obj_reference_roundtrip() {
+        let items = vec![
+            ReferenceItem::Class {
+                name: "".to_string(),
+                class_id: "Lyr ".to_string(),
+            },
+        ];
+        let value = DescriptorValue::Reference(items);
+
+        let mut writer = PsdWriter::new(256);
+        writer.write_signature("obj ").unwrap();
+        writer.write_ostype(&value).unwrap();
+
+        let buf = writer.into_buffer();
+        let mut reader = PsdReader::new(Cursor::new(buf), Default::default());
+        let _sig = reader.read_signature().unwrap();
+        match reader.read_ostype("obj ").unwrap() {
+            DescriptorValue::Reference(read_items) => {
+                assert_eq!(read_items.len(), 1);
+                match &read_items[0] {
+                    ReferenceItem::Class { class_id, .. } => assert_eq!(class_id, "Lyr "),
+                    _ => panic!("wrong item type"),
+                }
+            }
+            _ => panic!("expected Reference"),
         }
     }
 }
