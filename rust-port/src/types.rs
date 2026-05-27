@@ -38,14 +38,14 @@ pub enum BlendMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u16)]
 pub enum ColorMode {
-    Bitmap = 0,
-    Grayscale = 1,
-    Indexed = 2,
-    RGB = 3,
-    CMYK = 4,
-    Multichannel = 7,
-    Duotone = 8,
-    Lab = 9,
+    Bitmap       = 0,
+    Grayscale    = 1,
+    Indexed      = 2,
+    RGB          = 3,
+    CMYK         = 4,
+    Multichannel = 5,
+    Duotone      = 6,
+    Lab          = 7,
 }
 
 impl ColorMode {
@@ -56,9 +56,9 @@ impl ColorMode {
             2 => Ok(ColorMode::Indexed),
             3 => Ok(ColorMode::RGB),
             4 => Ok(ColorMode::CMYK),
-            7 => Ok(ColorMode::Multichannel),
-            8 => Ok(ColorMode::Duotone),
-            9 => Ok(ColorMode::Lab),
+            5 => Ok(ColorMode::Multichannel),
+            6 => Ok(ColorMode::Duotone),
+            7 => Ok(ColorMode::Lab),
             _ => Err(crate::error::PsdError::InvalidColorMode(value as u8)),
         }
     }
@@ -472,4 +472,29 @@ pub struct PixelData {
     pub data: Vec<u8>,
     pub width: usize,
     pub height: usize,
+}
+
+#[cfg(test)]
+mod color_mode_tests {
+    use super::*;
+
+    #[test]
+    fn color_mode_values_match_psd_spec() {
+        assert_eq!(ColorMode::Bitmap as u16, 0);
+        assert_eq!(ColorMode::Grayscale as u16, 1);
+        assert_eq!(ColorMode::Indexed as u16, 2);
+        assert_eq!(ColorMode::RGB as u16, 3);
+        assert_eq!(ColorMode::CMYK as u16, 4);
+        assert_eq!(ColorMode::Multichannel as u16, 5);
+        assert_eq!(ColorMode::Duotone as u16, 6);
+        assert_eq!(ColorMode::Lab as u16, 7);
+    }
+
+    #[test]
+    fn color_mode_round_trips_from_u16() {
+        for v in [0u16, 1, 2, 3, 4, 5, 6, 7] {
+            let mode = ColorMode::from_u16(v).expect("should parse");
+            assert_eq!(mode as u16, v);
+        }
+    }
 }
