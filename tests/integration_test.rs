@@ -339,6 +339,35 @@ fn test_different_color_modes() {
 }
 
 #[test]
+fn test_psd_roundtrip_does_not_depend_on_serde() {
+    let psd = Psd {
+        width: 4,
+        height: 4,
+        channels: Some(4),
+        bits_per_channel: Some(8),
+        color_mode: Some(ColorMode::RGB),
+        image_data: Some(PixelData {
+            data: vec![128u8; 4 * 4 * 4],
+            width: 4,
+            height: 4,
+        }),
+        ..Default::default()
+    };
+
+    let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
+    let reparsed = read_psd(
+        std::io::Cursor::new(bytes),
+        ReadOptions {
+            skip_composite_image_data: Some(true),
+            ..Default::default()
+        },
+    )
+    .expect("read");
+    assert_eq!(reparsed.width, 4);
+    assert_eq!(reparsed.height, 4);
+}
+
+#[test]
 fn test_canonical_image_resource_types_are_public() {
     // Test that image_resource types are used canonically
     let resources = ImageResources {
