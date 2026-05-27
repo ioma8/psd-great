@@ -3,6 +3,7 @@
 //! Image resources contain document-level information like resolution,
 //! guides, grids, color profiles, and thumbnails.
 
+use crate::descriptor::Descriptor;
 use crate::error::{PsdError, Result};
 use crate::reader::PsdReader;
 use crate::writer::PsdWriter;
@@ -67,6 +68,14 @@ pub struct ImageResources {
     pub count_information: Option<Vec<CountGroup>>,
     /// URL list
     pub url_list: Option<Vec<UrlEntry>>,
+    /// Path resources (IDs 2000–2998) stored as raw bezier records
+    pub path_resources: HashMap<u16, Vec<u8>>,
+    /// Variables XML (resource 7000)
+    pub variables: Option<String>,
+    /// Data sets XML (resource 7001)
+    pub data_sets: Option<String>,
+    /// Generic descriptor resources (1065, 1074, 1075)
+    pub descriptor_resources: HashMap<u16, Descriptor>,
     /// Unknown resources (for preservation)
     pub unknown: HashMap<u16, Vec<u8>>,
 }
@@ -754,6 +763,32 @@ pub fn read_image_resources<R: Read + Seek>(
             1045 => reader.read_alpha_unicode_names(&mut resources, data_length)?,
             1053 => reader.read_alpha_identifiers(&mut resources, data_length)?,
             1039 => reader.read_icc_profile(&mut resources, data_length)?,
+            1050 => {
+                // Slices — store raw; full descriptor parsing is complex
+                let data = reader.read_bytes(data_length)?;
+                resources.unknown.insert(resource_id, data);
+            }
+            1065 | 1074 | 1075 => {
+                let _version = reader.read_u32()?;
+                let desc = reader.read_descriptor_structure()?;
+                resources.descriptor_resources.insert(resource_id, desc);
+            }
+            2000..=2998 => {
+                let data = reader.read_bytes(data_length)?;
+                resources.path_resources.insert(resource_id, data);
+            }
+            2999 | 3000 => {
+                let data = reader.read_bytes(data_length)?;
+                resources.unknown.insert(resource_id, data);
+            }
+            7000 => {
+                let bytes = reader.read_bytes(data_length)?;
+                resources.variables = Some(String::from_utf8_lossy(&bytes).to_string());
+            }
+            7001 => {
+                let bytes = reader.read_bytes(data_length)?;
+                resources.data_sets = Some(String::from_utf8_lossy(&bytes).to_string());
+            }
             _ => {
                 // Store unknown resources
                 let data = reader.read_bytes(data_length)?;
@@ -861,6 +896,34 @@ pub fn write_image_resources(
         write_resource(writer, 1069, &|w| w.write_layer_selection_ids(ids))?;
     }
     
+    // Write descriptor resources (1065, 1074, 1075)
+    for (&id, desc) in &resources.descriptor_resources {
+        write_resource(writer, id, &|w| {
+            w.write_u32(16)?; // version
+            w.write_descriptor_structure(desc)
+        })?;
+    }
+
+    // Write path resources (2000–2998)
+    for (&id, data) in &resources.path_resources {
+        writer.write_signature("8BIM")?;
+        writer.write_u16(id)?;
+        writer.write_u8(0)?;
+        writer.write_u8(0)?;
+        writer.write_u32(data.len() as u32)?;
+        writer.write_bytes(data)?;
+        if data.len() % 2 != 0 {
+            writer.write_u8(0)?;
+        }
+    }
+
+    if let Some(ref xml) = resources.variables {
+        write_resource(writer, 7000, &|w| w.write_bytes(xml.as_bytes()))?;
+    }
+    if let Some(ref xml) = resources.data_sets {
+        write_resource(writer, 7001, &|w| w.write_bytes(xml.as_bytes()))?;
+    }
+
     // Write unknown resources
     for (id, data) in &resources.unknown {
         writer.write_signature("8BIM")?;
@@ -930,5 +993,33 @@ mod tests {
         let read_grid_guides = resources.grid_and_guides.unwrap();
         assert_eq!(read_grid_guides.grid.horizontal, grid_guides.grid.horizontal);
         assert_eq!(read_grid_guides.guides.len(), grid_guides.guides.len());
+    }
+
+    #[test]
+    fn path_resource_roundtrip() {
+        let mut res = ImageResources::default();
+        res.path_resources.insert(2000, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+        let mut w = PsdWriter::new(256);
+        write_image_resources(&mut w, &res).unwrap();
+        let buf = w.into_buffer();
+        let buf_len = buf.len();
+        let cursor = std::io::Cursor::new(buf);
+        let mut reader = PsdReader::new(cursor, Default::default());
+        let read_res = read_image_resources(&mut reader, buf_len).unwrap();
+        assert_eq!(read_res.path_resources.get(&2000), Some(&vec![0xAA, 0xBB, 0xCC, 0xDD]));
+    }
+
+    #[test]
+    fn variables_xml_roundtrip() {
+        let mut res = ImageResources::default();
+        res.variables = Some("<variables/>".to_string());
+        let mut w = PsdWriter::new(256);
+        write_image_resources(&mut w, &res).unwrap();
+        let buf = w.into_buffer();
+        let buf_len = buf.len();
+        let cursor = std::io::Cursor::new(buf);
+        let mut reader = PsdReader::new(cursor, Default::default());
+        let read_res = read_image_resources(&mut reader, buf_len).unwrap();
+        assert_eq!(read_res.variables.as_deref(), Some("<variables/>"));
     }
 }
