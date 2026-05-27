@@ -8,7 +8,10 @@ use crate::binrw_support::{
 };
 use crate::compression;
 use crate::error::{PsdError, Result};
-use crate::helpers::{clamp, from_blend_mode, has_alpha};
+use crate::helpers::{
+    clamp, from_blend_mode, has_alpha, LayerBlendFlags, LayerMaskParameterFlags,
+    LayerMaskStateBits,
+};
 use crate::layer::Layer;
 use crate::psd::{GlobalLayerMaskInfo, Psd, WriteOptions};
 use crate::types::{BlendMode, ChannelID, Color, ColorMode, Compression};
@@ -559,12 +562,12 @@ fn write_layer_record(
     let mut blend_mode_raw = [0u8; 4];
     blend_mode_raw.copy_from_slice(blend_mode_sig.as_bytes());
     let opacity = layer.opacity.unwrap_or(1.0);
-    let mut flags = 0x08u8; // Photoshop 5.0+ bit
+    let mut flags = LayerBlendFlags::PHOTOSHOP_5;
     if layer.transparency_protected.unwrap_or(false) {
-        flags |= 0x01;
+        flags |= LayerBlendFlags::TRANSPARENCY_PROTECTED;
     }
     if layer.hidden.unwrap_or(false) {
-        flags |= 0x02;
+        flags |= LayerBlendFlags::HIDDEN;
     }
     writer.write_bytes(&encode_be(
         &LayerBlendRecord {
@@ -574,7 +577,7 @@ fn write_layer_record(
             // TS always writes 0 here and uses image resource 1026 as the
             // semantic clipping source.
             clipping: 0,
-            flags,
+            flags: flags.bits(),
             filler: 0,
         },
         "layer blend record",
@@ -585,22 +588,22 @@ fn write_layer_record(
         // Write layer mask data
         writer.write_section(1, false, |writer| {
             if let Some(ref mask) = layer.additional_info.mask {
-                let mut flags = 0u8;
+                let mut flags = LayerMaskStateBits::empty();
                 if mask.position_relative_to_layer.unwrap_or(false) {
-                    flags |= 0x01;
+                    flags |= LayerMaskStateBits::POSITION_RELATIVE_TO_LAYER;
                 }
                 if mask.disabled.unwrap_or(false) {
-                    flags |= 0x02;
+                    flags |= LayerMaskStateBits::DISABLED;
                 }
                 if mask.from_vector_data.unwrap_or(false) {
-                    flags |= 0x08;
+                    flags |= LayerMaskStateBits::FROM_VECTOR_DATA;
                 }
                 let has_params = mask.user_mask_density.is_some()
                     || mask.user_mask_feather.is_some()
                     || mask.vector_mask_density.is_some()
                     || mask.vector_mask_feather.is_some();
                 if has_params {
-                    flags |= 0x10;
+                    flags |= LayerMaskStateBits::HAS_PARAMETERS;
                 }
                 writer.write_bytes(&encode_be(
                     &LayerMaskPrefixRecord {
@@ -609,26 +612,26 @@ fn write_layer_record(
                         bottom: mask.bottom.unwrap_or(0),
                         right: mask.right.unwrap_or(0),
                         default_color: mask.default_color.unwrap_or(0),
-                        flags,
+                        flags: flags.bits(),
                     },
                     "layer mask prefix",
                 )?)?;
                 if has_params {
                     writer.write_zeros(18)?; // real mask rect + real flags (not stored currently)
-                    let mut param_flags = 0u8;
+                    let mut param_flags = LayerMaskParameterFlags::empty();
                     if mask.user_mask_density.is_some() {
-                        param_flags |= 0x01;
+                        param_flags |= LayerMaskParameterFlags::USER_MASK_DENSITY;
                     }
                     if mask.user_mask_feather.is_some() {
-                        param_flags |= 0x02;
+                        param_flags |= LayerMaskParameterFlags::USER_MASK_FEATHER;
                     }
                     if mask.vector_mask_density.is_some() {
-                        param_flags |= 0x04;
+                        param_flags |= LayerMaskParameterFlags::VECTOR_MASK_DENSITY;
                     }
                     if mask.vector_mask_feather.is_some() {
-                        param_flags |= 0x08;
+                        param_flags |= LayerMaskParameterFlags::VECTOR_MASK_FEATHER;
                     }
-                    writer.write_u8(param_flags)?;
+                    writer.write_u8(param_flags.bits())?;
                     if let Some(v) = mask.user_mask_density {
                         writer.write_u8(v as u8)?;
                     }

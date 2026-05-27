@@ -24,6 +24,8 @@ serde_json = "1.0"
 # Byte order handling
 byteorder = "1.5"
 binrw = "0.15"
+bitflags = "2.11"
+quick-xml = "0.40"
 # Lazy static for static hashmaps
 lazy_static = "1.4"
 

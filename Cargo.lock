@@ -72,6 +72,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitflags"
+version = "2.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
+
+[[package]]
 name = "bumpalo"
 version = "3.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -421,15 +427,26 @@ version = "30.1.0"
 dependencies = [
  "base64",
  "binrw",
+ "bitflags",
  "byteorder",
  "criterion",
  "flate2",
  "jpeg-decoder",
  "lazy_static",
  "pretty_assertions",
+ "quick-xml",
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.40.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2474bd2e5029e7ccb6abb2ba48cf2383a333851dedf495901544281590c7da7f"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

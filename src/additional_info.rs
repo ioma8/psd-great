@@ -11,7 +11,9 @@ use crate::binrw_support::{
 use crate::compression;
 use crate::descriptor::{Descriptor, DescriptorValue};
 use crate::error::{PsdError, Result};
-use crate::helpers::{from_blend_mode, to_blend_mode};
+use crate::helpers::{
+    from_blend_mode, to_blend_mode, ProtectedFlagsBits, VectorMaskFlagsBits,
+};
 use crate::layer::{KeyDescriptorItem, Layer, LinkedFile, RRectRadii, VectorOrigination};
 use crate::reader::PsdReader;
 use crate::text::UnitsBounds;
@@ -1306,15 +1308,16 @@ impl<R: Read + Seek> PsdReader<R> {
         info: &mut LayerAdditionalInfo,
         length: usize,
     ) -> Result<()> {
-        let flags =
-            decode_be::<ProtectedFlagsRecord>(&self.read_bytes(4)?, "protected flags")?.flags;
+        let flags = ProtectedFlagsBits::from_bits_retain(
+            decode_be::<ProtectedFlagsRecord>(&self.read_bytes(4)?, "protected flags")?.flags,
+        );
 
         let protected = ProtectedFlags {
-            transparency: (flags & 0x01) != 0,
-            composite: (flags & 0x02) != 0,
-            position: (flags & 0x04) != 0,
+            transparency: flags.contains(ProtectedFlagsBits::TRANSPARENCY),
+            composite: flags.contains(ProtectedFlagsBits::COMPOSITE),
+            position: flags.contains(ProtectedFlagsBits::POSITION),
             artboards: if length >= 8 {
-                Some((flags & 0x08) != 0)
+                Some(flags.contains(ProtectedFlagsBits::ARTBOARDS))
             } else {
                 None
             },
@@ -1455,11 +1458,11 @@ impl<R: Read + Seek> PsdReader<R> {
         let data = self.read_bytes(length)?;
         let mut reader = PsdReader::new(std::io::Cursor::new(data), Default::default());
         let version = reader.read_u32()?;
-        let flags = reader.read_u32()?;
+        let flags = VectorMaskFlagsBits::from_bits_retain(reader.read_u32()?);
 
-        let invert = (flags & 1) != 0;
-        let not_link = (flags & 2) != 0;
-        let disable = (flags & 4) != 0;
+        let invert = flags.contains(VectorMaskFlagsBits::INVERT);
+        let not_link = flags.contains(VectorMaskFlagsBits::NOT_LINK);
+        let disable = flags.contains(VectorMaskFlagsBits::DISABLE);
 
         let mut paths = Vec::new();
 
@@ -2077,21 +2080,21 @@ impl PsdWriter {
             }
             "lspf" => {
                 if let Some(ref protected) = info.protected {
-                    let mut flags = 0u32;
+                    let mut flags = ProtectedFlagsBits::empty();
                     if protected.transparency {
-                        flags |= 0x01;
+                        flags |= ProtectedFlagsBits::TRANSPARENCY;
                     }
                     if protected.composite {
-                        flags |= 0x02;
+                        flags |= ProtectedFlagsBits::COMPOSITE;
                     }
                     if protected.position {
-                        flags |= 0x04;
+                        flags |= ProtectedFlagsBits::POSITION;
                     }
                     if protected.artboards.unwrap_or(false) {
-                        flags |= 0x08;
+                        flags |= ProtectedFlagsBits::ARTBOARDS;
                     }
                     temp_writer.write_bytes(&encode_be(
-                        &ProtectedFlagsRecord { flags },
+                        &ProtectedFlagsRecord { flags: flags.bits() },
                         "protected flags",
                     )?)?;
                 }
@@ -2202,10 +2205,17 @@ impl PsdWriter {
             "vmsk" | "vsms" => {
                 if let Some(ref vm) = info.vector_mask {
                     temp_writer.write_u32(vm.version)?;
-                    let flags = (vm.invert as u32)
-                        | ((vm.not_link as u32) << 1)
-                        | ((vm.disable as u32) << 2);
-                    temp_writer.write_u32(flags)?;
+                    let mut flags = VectorMaskFlagsBits::empty();
+                    if vm.invert {
+                        flags |= VectorMaskFlagsBits::INVERT;
+                    }
+                    if vm.not_link {
+                        flags |= VectorMaskFlagsBits::NOT_LINK;
+                    }
+                    if vm.disable {
+                        flags |= VectorMaskFlagsBits::DISABLE;
+                    }
+                    temp_writer.write_u32(flags.bits())?;
                     for path in &vm.paths {
                         // Subpath length record
                         let selector = match path.path_type {

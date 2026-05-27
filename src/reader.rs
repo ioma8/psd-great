@@ -8,7 +8,10 @@ use crate::binrw_support::{
 };
 use crate::compression;
 use crate::error::{PsdError, Result};
-use crate::helpers::{setup_grayscale, to_blend_mode};
+use crate::helpers::{
+    setup_grayscale, to_blend_mode, LayerBlendFlags, LayerMaskParameterFlags,
+    LayerMaskStateBits,
+};
 use crate::layer::{Layer, LayerMaskData, LayerRawData, LayerRawDataChannel};
 use crate::psd::{GlobalLayerMaskInfo, Psd, ReadOptions};
 use crate::types::{ChannelID, ColorMode, Compression, PixelData, SectionDividerType};
@@ -549,8 +552,10 @@ fn read_layer_record<R: Read + Seek>(
     let blend_sig = String::from_utf8_lossy(&blend.blend_mode).to_string();
     layer.blend_mode = Some(to_blend_mode(&blend_sig)?);
     layer.opacity = Some(blend.opacity as f64 / 255.0);
-    layer.transparency_protected = Some((blend.flags & 0x01) != 0);
-    layer.hidden = Some((blend.flags & 0x02) != 0);
+    let blend_flags = LayerBlendFlags::from_bits_retain(blend.flags);
+    layer.transparency_protected =
+        Some(blend_flags.contains(LayerBlendFlags::TRANSPARENCY_PROTECTED));
+    layer.hidden = Some(blend_flags.contains(LayerBlendFlags::HIDDEN));
 
     // Read extra data
     reader.read_section(1, |reader, end_offset| {
@@ -625,7 +630,7 @@ fn read_layer_mask_data<R: Read + Seek>(
 
         let prefix: LayerMaskPrefixRecord =
             decode_be(&reader.read_bytes(18)?, "layer mask prefix")?;
-        let flags = prefix.flags;
+        let flags = LayerMaskStateBits::from_bits_retain(prefix.flags);
 
         let mut mask = LayerMaskData {
             top: Some(prefix.top),
@@ -633,9 +638,11 @@ fn read_layer_mask_data<R: Read + Seek>(
             bottom: Some(prefix.bottom),
             right: Some(prefix.right),
             default_color: Some(prefix.default_color),
-            disabled: Some((flags & 0x02) != 0),
-            position_relative_to_layer: Some((flags & 0x01) != 0),
-            from_vector_data: Some((flags & 0x08) != 0),
+            disabled: Some(flags.contains(LayerMaskStateBits::DISABLED)),
+            position_relative_to_layer: Some(
+                flags.contains(LayerMaskStateBits::POSITION_RELATIVE_TO_LAYER),
+            ),
+            from_vector_data: Some(flags.contains(LayerMaskStateBits::FROM_VECTOR_DATA)),
             ..Default::default()
         };
 
@@ -643,21 +650,29 @@ fn read_layer_mask_data<R: Read + Seek>(
         let remaining = reader.bytes_left(end_offset) as usize;
         if remaining >= 18 {
             // Check for mask parameters flag (bit 4 in flags byte)
-            if (flags & 0x10) != 0 {
+            if flags.contains(LayerMaskStateBits::HAS_PARAMETERS) {
                 let _real_flags = reader.read_u8()?;
                 let _real_default = reader.read_u8()?;
                 reader.skip_bytes(16)?; // real mask rect (4×i32)
-                let param_flags = reader.read_u8()?;
-                if (param_flags & 0x01) != 0 && reader.bytes_left(end_offset) > 0 {
+                let param_flags = LayerMaskParameterFlags::from_bits_retain(reader.read_u8()?);
+                if param_flags.contains(LayerMaskParameterFlags::USER_MASK_DENSITY)
+                    && reader.bytes_left(end_offset) > 0
+                {
                     mask.user_mask_density = Some(reader.read_u8()? as f64);
                 }
-                if (param_flags & 0x02) != 0 && reader.bytes_left(end_offset) >= 8 {
+                if param_flags.contains(LayerMaskParameterFlags::USER_MASK_FEATHER)
+                    && reader.bytes_left(end_offset) >= 8
+                {
                     mask.user_mask_feather = Some(reader.read_f64()?);
                 }
-                if (param_flags & 0x04) != 0 && reader.bytes_left(end_offset) > 0 {
+                if param_flags.contains(LayerMaskParameterFlags::VECTOR_MASK_DENSITY)
+                    && reader.bytes_left(end_offset) > 0
+                {
                     mask.vector_mask_density = Some(reader.read_u8()? as f64);
                 }
-                if (param_flags & 0x08) != 0 && reader.bytes_left(end_offset) >= 8 {
+                if param_flags.contains(LayerMaskParameterFlags::VECTOR_MASK_FEATHER)
+                    && reader.bytes_left(end_offset) >= 8
+                {
                     mask.vector_mask_feather = Some(reader.read_f64()?);
                 }
             }

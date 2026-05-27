@@ -6,6 +6,11 @@
 
 use crate::error::Result;
 use crate::psd::Psd;
+use quick_xml::escape::unescape;
+use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::{Reader, Writer};
+use quick_xml::XmlVersion;
+use std::io::Cursor;
 
 /// Apply read-side document resource postprocess: map low-level ImageResources fields
 /// onto typed Psd fields.
@@ -138,23 +143,40 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
 // ── XML helpers (porting TS document-postprocess.ts behavior) ────────────────
 
 /// Parse variables XML into typed VariableSet vectors.
-/// TS uses simple regex-based extraction from the XML string.
 fn parse_variables_xml(xml: &str) -> Vec<crate::psd::VariableSet> {
     let mut variables = Vec::new();
-    let mut pos = 0;
-    let search = "<variable ";
-    while pos < xml.len() {
-        if let Some(start) = xml[pos..].find(search) {
-            let abs_start = pos + start;
-            if let Some(end) = xml[abs_start..].find("/>") {
-                let tag = &xml[abs_start..abs_start + end];
-                let var_name = extract_xml_attr(tag, "varName");
-                let trait_name = extract_xml_attr(tag, "trait");
-                let doc_ref = extract_xml_attr(tag, "docRef");
-                let placement_method = extract_xml_attr(tag, "placementMethod");
-                let align = extract_xml_attr(tag, "align");
-                let valign = extract_xml_attr(tag, "valign");
-                let clip = extract_xml_attr(tag, "clip");
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) if e.name().as_ref() == b"variable" => {
+                let mut var_name = None;
+                let mut trait_name = None;
+                let mut doc_ref = None;
+                let mut placement_method = None;
+                let mut align = None;
+                let mut valign = None;
+                let mut clip = None;
+
+                for attr in e.attributes().with_checks(false).flatten() {
+                    let key = attr.key.as_ref();
+                    let value = attr
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .ok()
+                        .map(|v| v.into_owned());
+                    match key {
+                        b"varName" => var_name = value,
+                        b"trait" => trait_name = value,
+                        b"docRef" => doc_ref = value,
+                        b"placementMethod" => placement_method = value,
+                        b"align" => align = value,
+                        b"valign" => valign = value,
+                        b"clip" => clip = value,
+                        _ => {}
+                    }
+                }
+
                 variables.push(crate::psd::VariableSet {
                     var_name,
                     trait_name,
@@ -164,12 +186,9 @@ fn parse_variables_xml(xml: &str) -> Vec<crate::psd::VariableSet> {
                     valign,
                     clip,
                 });
-                pos = abs_start + end + 2;
-            } else {
-                break;
             }
-        } else {
-            break;
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
         }
     }
     variables
@@ -177,54 +196,93 @@ fn parse_variables_xml(xml: &str) -> Vec<crate::psd::VariableSet> {
 
 /// Build variables XML from typed VariableSet vectors.
 fn build_variables_xml(variables: &[crate::psd::VariableSet]) -> String {
-    let mut xml = String::from("<variableSets><variableSet><variables>");
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    writer
+        .write_event(Event::Start(BytesStart::new("variableSets")))
+        .expect("write variableSets start");
+    writer
+        .write_event(Event::Start(BytesStart::new("variableSet")))
+        .expect("write variableSet start");
+    writer
+        .write_event(Event::Start(BytesStart::new("variables")))
+        .expect("write variables start");
+
     for v in variables {
-        xml.push_str("<variable");
+        let mut tag = BytesStart::new("variable");
         if let Some(ref name) = v.var_name {
-            xml.push_str(&format!(" varName=\"{}\"", escape_xml(name)));
+            tag.push_attribute(("varName", name.as_str()));
         }
         if let Some(ref trait_name) = v.trait_name {
-            xml.push_str(&format!(" trait=\"{}\"", escape_xml(trait_name)));
+            tag.push_attribute(("trait", trait_name.as_str()));
         }
         if let Some(ref doc_ref) = v.doc_ref {
-            xml.push_str(&format!(" docRef=\"{}\"", escape_xml(doc_ref)));
+            tag.push_attribute(("docRef", doc_ref.as_str()));
         }
         if let Some(ref pm) = v.placement_method {
-            xml.push_str(&format!(" placementMethod=\"{}\"", escape_xml(pm)));
+            tag.push_attribute(("placementMethod", pm.as_str()));
         }
         if let Some(ref a) = v.align {
-            xml.push_str(&format!(" align=\"{}\"", escape_xml(a)));
+            tag.push_attribute(("align", a.as_str()));
         }
         if let Some(ref v) = v.valign {
-            xml.push_str(&format!(" valign=\"{}\"", escape_xml(v)));
+            tag.push_attribute(("valign", v.as_str()));
         }
         if let Some(ref c) = v.clip {
-            xml.push_str(&format!(" clip=\"{}\"", escape_xml(c)));
+            tag.push_attribute(("clip", c.as_str()));
         }
-        xml.push_str("/>");
+        writer
+            .write_event(Event::Empty(tag))
+            .expect("write variable entry");
     }
-    xml.push_str("</variables></variableSet></variableSets>");
-    xml
+    writer
+        .write_event(Event::End(BytesEnd::new("variables")))
+        .expect("write variables end");
+    writer
+        .write_event(Event::End(BytesEnd::new("variableSet")))
+        .expect("write variableSet end");
+    writer
+        .write_event(Event::End(BytesEnd::new("variableSets")))
+        .expect("write variableSets end");
+
+    String::from_utf8(writer.into_inner().into_inner()).expect("utf8 xml")
 }
 
 /// Parse data sets XML into typed table: first row is header, subsequent rows are values.
 fn parse_data_sets_xml(xml: &str) -> Vec<Vec<String>> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
     let mut table = vec![Vec::new()];
-    let mut pos = 0;
-    while let Some(rec_start) = xml[pos..].find("<sampleDataSet>") {
-        let abs = pos + rec_start;
-        if let Some(rec_end) = xml[abs..].find("</sampleDataSet>") {
-            let record_xml = &xml[abs + "<sampleDataSet>".len()..abs + rec_end];
-            let cells = extract_tagged_cells(record_xml);
-            if !cells.is_empty() {
-                if table[0].is_empty() {
-                    table[0] = cells.iter().map(|(name, _)| name.clone()).collect();
-                }
-                table.push(cells.into_iter().map(|(_, value)| value).collect());
+    let mut current_cells: Vec<(String, String)> = Vec::new();
+    let mut in_sample = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) if e.name().as_ref() == b"sampleDataSet" => {
+                in_sample = true;
+                current_cells.clear();
             }
-            pos = abs + rec_end + "</sampleDataSet>".len();
-        } else {
-            break;
+            Ok(Event::End(e)) if e.name().as_ref() == b"sampleDataSet" => {
+                if !current_cells.is_empty() {
+                    if table[0].is_empty() {
+                        table[0] = current_cells.iter().map(|(name, _)| name.clone()).collect();
+                    }
+                    table.push(
+                        current_cells
+                            .iter()
+                            .map(|(_, value)| value.clone())
+                            .collect(),
+                    );
+                }
+                in_sample = false;
+            }
+            Ok(Event::Start(e)) if in_sample => {
+                let end_name = e.name().as_ref().to_vec();
+                let tag_name = String::from_utf8_lossy(&end_name).to_string();
+                let value = read_element_text(&mut reader, &end_name);
+                current_cells.push((tag_name, value));
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
         }
     }
     table
@@ -232,70 +290,99 @@ fn parse_data_sets_xml(xml: &str) -> Vec<Vec<String>> {
 
 /// Build data sets XML from typed table.
 fn build_data_sets_xml(table: &[Vec<String>]) -> String {
-    let mut xml = String::from("<sampleDataSets>");
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    writer
+        .write_event(Event::Start(BytesStart::new("sampleDataSets")))
+        .expect("write sampleDataSets start");
     if let Some(header) = table.first() {
         for record in table.iter().skip(1) {
-            xml.push_str("<sampleDataSet>");
+            writer
+                .write_event(Event::Start(BytesStart::new("sampleDataSet")))
+                .expect("write sampleDataSet start");
             for (index, tag_name) in header.iter().enumerate() {
                 let value = record.get(index).cloned().unwrap_or_default();
-                xml.push_str(&format!(
-                    "<{}>{}</{}>",
-                    tag_name,
-                    escape_xml(&value),
-                    tag_name
-                ));
+                writer
+                    .write_event(Event::Start(BytesStart::new(tag_name.as_str())))
+                    .expect("write cell start");
+                writer
+                    .write_event(Event::Text(BytesText::new(&value)))
+                    .expect("write cell text");
+                writer
+                    .write_event(Event::End(BytesEnd::new(tag_name.as_str())))
+                    .expect("write cell end");
             }
-            xml.push_str("</sampleDataSet>");
+            writer
+                .write_event(Event::End(BytesEnd::new("sampleDataSet")))
+                .expect("write sampleDataSet end");
         }
     }
-    xml.push_str("</sampleDataSets>");
-    xml
+    writer
+        .write_event(Event::End(BytesEnd::new("sampleDataSets")))
+        .expect("write sampleDataSets end");
+    String::from_utf8(writer.into_inner().into_inner()).expect("utf8 xml")
 }
 
-fn escape_xml(value: &str) -> String {
+fn decode_xml_text(text: BytesText<'_>) -> String {
+    let decoded = text.decode().map(|value| value.into_owned()).unwrap_or_default();
+    unescape(&decoded)
+        .map(|value| value.into_owned())
+        .unwrap_or(decoded)
+}
+
+fn read_element_text(reader: &mut Reader<&[u8]>, end_name: &[u8]) -> String {
+    let mut value = String::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Text(text)) => value.push_str(&decode_xml_text(text)),
+            Ok(Event::GeneralRef(reference)) => {
+                value.push_str(match reference.as_ref() {
+                    b"amp" => "&",
+                    b"lt" => "<",
+                    b"gt" => ">",
+                    b"quot" => "\"",
+                    b"apos" => "'",
+                    _ => "",
+                });
+            }
+            Ok(Event::End(end)) if end.name().as_ref() == end_name => break,
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+
     value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
 
-fn extract_xml_attr(tag: &str, attr: &str) -> Option<String> {
-    let pattern = format!("{}=\"", attr);
-    if let Some(start) = tag.find(&pattern) {
-        let val_start = start + pattern.len();
-        if let Some(end) = tag[val_start..].find('"') {
-            return Some(tag[val_start..val_start + end].to_string());
-        }
-    }
-    None
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn extract_tagged_cells(xml: &str) -> Vec<(String, String)> {
-    let mut cols = Vec::new();
-    let mut pos = 0;
-    while let Some(cs) = xml[pos..].find('<') {
-        let abs = pos + cs;
-        if abs + 1 >= xml.len() || xml[abs + 1..].starts_with('/') {
-            pos = abs + 1;
-            continue;
-        }
-        if let Some(tag_end) = xml[abs + 1..].find('>') {
-            let name = &xml[abs + 1..abs + 1 + tag_end];
-            let close_tag = format!("</{}>", name);
-            let content_start = abs + 1 + tag_end + 1;
-            if let Some(close_offset) = xml[content_start..].find(&close_tag) {
-                cols.push((
-                    name.to_string(),
-                    xml[content_start..content_start + close_offset].to_string(),
-                ));
-                pos = content_start + close_offset + close_tag.len();
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
+    #[test]
+    fn parse_variables_xml_decodes_entities() {
+        let xml = r#"<variableSets><variableSet><variables><variable varName="A&amp;B" trait="x&lt;y" docRef="&quot;doc&quot;" clip="c&gt;d"/></variables></variableSet></variableSets>"#;
+
+        let parsed = parse_variables_xml(xml);
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].var_name.as_deref(), Some("A&B"));
+        assert_eq!(parsed[0].trait_name.as_deref(), Some("x<y"));
+        assert_eq!(parsed[0].doc_ref.as_deref(), Some("\"doc\""));
+        assert_eq!(parsed[0].clip.as_deref(), Some("c>d"));
     }
-    cols
+
+    #[test]
+    fn parse_data_sets_xml_decodes_entities() {
+        let xml = r#"<sampleDataSets><sampleDataSet><name>A&amp;B</name><value>&lt;ok&gt;</value></sampleDataSet></sampleDataSets>"#;
+
+        let parsed = parse_data_sets_xml(xml);
+
+        assert_eq!(
+            parsed,
+            vec![
+                vec!["name".to_string(), "value".to_string()],
+                vec!["A&B".to_string(), "<ok>".to_string()],
+            ]
+        );
+    }
 }

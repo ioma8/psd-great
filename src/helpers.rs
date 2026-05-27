@@ -5,7 +5,56 @@
 use crate::compression;
 use crate::error::{PsdError, Result};
 use crate::types::{BlendMode, ChannelID, PixelData};
+use bitflags::bitflags;
 use std::collections::HashMap;
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct LayerBlendFlags: u8 {
+        const TRANSPARENCY_PROTECTED = 0x01;
+        const HIDDEN = 0x02;
+        const PHOTOSHOP_5 = 0x08;
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct LayerMaskStateBits: u8 {
+        const POSITION_RELATIVE_TO_LAYER = 0x01;
+        const DISABLED = 0x02;
+        const FROM_VECTOR_DATA = 0x08;
+        const HAS_PARAMETERS = 0x10;
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct LayerMaskParameterFlags: u8 {
+        const USER_MASK_DENSITY = 0x01;
+        const USER_MASK_FEATHER = 0x02;
+        const VECTOR_MASK_DENSITY = 0x04;
+        const VECTOR_MASK_FEATHER = 0x08;
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct ProtectedFlagsBits: u32 {
+        const TRANSPARENCY = 0x01;
+        const COMPOSITE = 0x02;
+        const POSITION = 0x04;
+        const ARTBOARDS = 0x08;
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct VectorMaskFlagsBits: u32 {
+        const INVERT = 0x01;
+        const NOT_LINK = 0x02;
+        const DISABLE = 0x04;
+    }
+}
 
 lazy_static::lazy_static! {
     /// Map from blend mode strings to BlendMode enum
