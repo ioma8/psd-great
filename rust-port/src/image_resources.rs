@@ -896,6 +896,42 @@ pub fn write_image_resources(
         write_resource(writer, 1069, &|w| w.write_layer_selection_ids(ids))?;
     }
     
+    // Write alpha names (1006)
+    if let Some(ref names) = resources.alpha_names {
+        write_resource(writer, 1006, &|w| {
+            for name in names {
+                w.write_u8(name.len() as u8)?;
+                w.write_bytes(name.as_bytes())?;
+            }
+            Ok(())
+        })?;
+    }
+
+    // Write alpha unicode names (1045)
+    if let Some(ref names) = resources.alpha_unicode_names {
+        write_resource(writer, 1045, &|w| {
+            for name in names {
+                w.write_unicode_string(name)?;
+            }
+            Ok(())
+        })?;
+    }
+
+    // Write alpha identifiers (1053)
+    if let Some(ref ids) = resources.alpha_identifiers {
+        write_resource(writer, 1053, &|w| {
+            for &id in ids {
+                w.write_u32(id)?;
+            }
+            Ok(())
+        })?;
+    }
+
+    // Write ICC profile (1039)
+    if let Some(ref profile) = resources.icc_profile {
+        write_resource(writer, 1039, &|w| w.write_bytes(profile))?;
+    }
+
     // Write descriptor resources (1065, 1074, 1075)
     for (&id, desc) in &resources.descriptor_resources {
         write_resource(writer, id, &|w| {
@@ -993,6 +1029,20 @@ mod tests {
         let read_grid_guides = resources.grid_and_guides.unwrap();
         assert_eq!(read_grid_guides.grid.horizontal, grid_guides.grid.horizontal);
         assert_eq!(read_grid_guides.guides.len(), grid_guides.guides.len());
+    }
+
+    #[test]
+    fn icc_profile_roundtrip() {
+        let mut res = ImageResources::default();
+        res.icc_profile = Some(vec![0x01, 0x02, 0x03, 0x04]);
+        let mut w = PsdWriter::new(256);
+        write_image_resources(&mut w, &res).unwrap();
+        let buf = w.into_buffer();
+        let buf_len = buf.len();
+        let cursor = std::io::Cursor::new(buf);
+        let mut reader = PsdReader::new(cursor, Default::default());
+        let read_res = read_image_resources(&mut reader, buf_len).unwrap();
+        assert_eq!(read_res.icc_profile, Some(vec![0x01, 0x02, 0x03, 0x04]));
     }
 
     #[test]
