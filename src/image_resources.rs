@@ -11,7 +11,7 @@ use crate::binrw_support::{
 use crate::descriptor::Descriptor;
 use crate::error::{PsdError, Result};
 use crate::reader::PsdReader;
-use crate::types::{BlendMode, Color, LayerCompCapturedInfo, PsdIntCode, PsdU16Code, PsdU32Code};
+use crate::types::{BlendMode, Color, Fraction, LayerCompCapturedInfo, Point, PsdIntCode, PsdU16Code, PsdU32Code, RenderingIntent};
 use crate::writer::PsdWriter;
 use std::collections::HashMap;
 use std::io::{Read, Seek};
@@ -241,15 +241,6 @@ pub struct PrintInformation {
     pub proof_setup: Option<ProofSetup>,
 }
 
-/// Rendering intent
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderingIntent {
-    Perceptual,
-    Saturation,
-    RelativeColorimetric,
-    AbsoluteColorimetric,
-}
-
 /// Proof setup
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProofSetup {
@@ -409,13 +400,6 @@ pub struct Timeline {
     pub has_motion: bool,
 }
 
-/// Fraction
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Fraction {
-    pub numerator: i32,
-    pub denominator: i32,
-}
-
 /// Onion skins
 #[derive(Debug, Clone, PartialEq)]
 pub struct OnionSkins {
@@ -437,13 +421,6 @@ pub struct CountGroup {
     pub font_size: i32,
     pub visible: bool,
     pub points: Vec<Point>,
-}
-
-/// Point
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Point {
-    pub x: f64,
-    pub y: f64,
 }
 
 /// URL entry

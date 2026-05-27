@@ -19,8 +19,8 @@ use crate::reader::PsdReader;
 use crate::text::UnitsBounds;
 use crate::types::Color;
 use crate::types::{
-    BlendMode, PixelData, PsdIntCode, PsdStringCode, PsdU32Code, RGB, SectionDividerType, Units,
-    UnitsValue,
+    BlendMode, PixelData, Point, PsdIntCode, PsdStringCode, PsdU32Code, RGB, SectionDividerType,
+    Units, UnitsValue,
 };
 use crate::writer::PsdWriter;
 use std::collections::HashMap;
@@ -39,18 +39,22 @@ fn palette_colors_to_bytes(colors: &[RGB]) -> Vec<u8> {
 /// Layer additional information
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LayerAdditionalInfo {
-    /// Unicode layer name
-    pub unicode_name: Option<String>,
+    /// Layer name
+    pub name: Option<String>,
     /// Layer ID
-    pub layer_id: Option<u32>,
+    pub id: Option<i32>,
+    /// Layer mask data
+    pub mask: Option<crate::layer::LayerMaskData>,
+    /// Real layer mask data
+    pub real_mask: Option<crate::layer::LayerMaskData>,
     /// Layer color
-    pub layer_color: Option<LayerColor>,
+    pub layer_color: Option<crate::types::LayerColor>,
     /// Section divider (layer group)
     pub section_divider: Option<SectionDivider>,
     /// Blend clipped elements
-    pub blend_clipped: Option<bool>,
+    pub blend_clipped_elements: Option<bool>,
     /// Blend interior elements
-    pub blend_interior: Option<bool>,
+    pub blend_interior_elements: Option<bool>,
     /// Knockout mode
     pub knockout: Option<bool>,
     /// Protected flags
@@ -66,7 +70,7 @@ pub struct LayerAdditionalInfo {
     /// Vector mask data
     pub vector_mask: Option<VectorMask>,
     /// Layer effects
-    pub layer_effects: Option<LayerEffects>,
+    pub effects: Option<LayerEffects>,
     /// Placed layer (smart object)
     pub placed_layer: Option<PlacedLayer>,
     /// Artboard data
@@ -242,38 +246,6 @@ pub struct HighDepthLayerInfo {
     pub layers: Vec<Layer>,
 }
 
-/// Layer color label
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LayerColor {
-    None = 0,
-    Red = 1,
-    Orange = 2,
-    Yellow = 3,
-    Green = 4,
-    Blue = 5,
-    Violet = 6,
-    Gray = 7,
-}
-
-impl LayerColor {
-    pub fn from_u16(value: u16) -> Result<Self> {
-        match value {
-            0 => Ok(LayerColor::None),
-            1 => Ok(LayerColor::Red),
-            2 => Ok(LayerColor::Orange),
-            3 => Ok(LayerColor::Yellow),
-            4 => Ok(LayerColor::Green),
-            5 => Ok(LayerColor::Blue),
-            6 => Ok(LayerColor::Violet),
-            7 => Ok(LayerColor::Gray),
-            _ => Err(PsdError::InvalidFormat(format!(
-                "Invalid layer color: {}",
-                value
-            ))),
-        }
-    }
-}
-
 /// Section divider (layer group info)
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionDivider {
@@ -354,13 +326,6 @@ pub struct PathPoint {
     pub forward: Point,
     pub backward: Point,
     pub linked: bool,
-}
-
-/// 2D Point
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Point {
-    pub x: f64,
-    pub y: f64,
 }
 
 /// Bounds rectangle
@@ -1214,20 +1179,35 @@ impl<R: Read + Seek> PsdReader<R> {
 
     /// Read unicode layer name (luni)
     fn read_unicode_layer_name(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        info.unicode_name = Some(self.read_unicode_string()?);
+        info.name = Some(self.read_unicode_string()?);
         Ok(())
     }
 
     /// Read layer ID (lyid)
     fn read_layer_id(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        info.layer_id = Some(self.read_u32()?);
+        info.id = Some(self.read_u32()? as i32);
         Ok(())
     }
 
     /// Read layer color (lclr)
     fn read_layer_color(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
         let record: LayerColorRecord = decode_be(&self.read_bytes(8)?, "layer color")?;
-        info.layer_color = Some(LayerColor::from_u16(record.color_value)?);
+        info.layer_color = Some(match record.color_value {
+            0 => crate::types::LayerColor::None,
+            1 => crate::types::LayerColor::Red,
+            2 => crate::types::LayerColor::Orange,
+            3 => crate::types::LayerColor::Yellow,
+            4 => crate::types::LayerColor::Green,
+            5 => crate::types::LayerColor::Blue,
+            6 => crate::types::LayerColor::Violet,
+            7 => crate::types::LayerColor::Gray,
+            value => {
+                return Err(PsdError::InvalidFormat(format!(
+                    "Invalid layer color: {}",
+                    value
+                )))
+            }
+        });
         Ok(())
     }
 
@@ -1283,14 +1263,14 @@ impl<R: Read + Seek> PsdReader<R> {
 
     /// Read blend clipped elements (clbl)
     fn read_blend_clipped(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        info.blend_clipped =
+        info.blend_clipped_elements =
             Some(decode_be::<U8BoolRecord>(&self.read_bytes(1)?, "blend clipped")?.value != 0);
         Ok(())
     }
 
     /// Read blend interior elements (infx)
     fn read_blend_interior(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        info.blend_interior =
+        info.blend_interior_elements =
             Some(decode_be::<U8BoolRecord>(&self.read_bytes(1)?, "blend interior")?.value != 0);
         Ok(())
     }
@@ -1621,7 +1601,7 @@ impl<R: Read + Seek> PsdReader<R> {
             None
         };
 
-        info.layer_effects = Some(LayerEffects {
+        info.effects = Some(LayerEffects {
             version,
             descriptor,
         });
@@ -1989,20 +1969,30 @@ impl PsdWriter {
 
         match key {
             "luni" => {
-                if let Some(ref name) = info.unicode_name {
+                if let Some(ref name) = info.name {
                     temp_writer.write_unicode_string(name)?;
                 }
             }
             "lyid" => {
-                if let Some(id) = info.layer_id {
-                    temp_writer.write_u32(id)?;
+                if let Some(id) = info.id {
+                    temp_writer.write_u32(id as u32)?;
                 }
             }
             "lclr" => {
                 if let Some(color) = info.layer_color {
+                    let color_value = match color {
+                        crate::types::LayerColor::None => 0,
+                        crate::types::LayerColor::Red => 1,
+                        crate::types::LayerColor::Orange => 2,
+                        crate::types::LayerColor::Yellow => 3,
+                        crate::types::LayerColor::Green => 4,
+                        crate::types::LayerColor::Blue => 5,
+                        crate::types::LayerColor::Violet => 6,
+                        crate::types::LayerColor::Gray => 7,
+                    };
                     temp_writer.write_bytes(&encode_be(
                         &LayerColorRecord {
-                            color_value: color as u16,
+                            color_value,
                             padding: [0; 6],
                         },
                         "layer color",
@@ -2049,7 +2039,7 @@ impl PsdWriter {
                 }
             }
             "clbl" => {
-                if let Some(blend_clipped) = info.blend_clipped {
+                if let Some(blend_clipped) = info.blend_clipped_elements {
                     temp_writer.write_bytes(&encode_be(
                         &U8BoolRecord {
                             value: u8::from(blend_clipped),
@@ -2059,7 +2049,7 @@ impl PsdWriter {
                 }
             }
             "infx" => {
-                if let Some(blend_interior) = info.blend_interior {
+                if let Some(blend_interior) = info.blend_interior_elements {
                     temp_writer.write_bytes(&encode_be(
                         &U8BoolRecord {
                             value: u8::from(blend_interior),
@@ -2321,7 +2311,7 @@ impl PsdWriter {
                 }
             }
             "lrFX" | "lfx2" => {
-                if let Some(ref le) = info.layer_effects {
+                if let Some(ref le) = info.effects {
                     if key == "lfx2" && le.descriptor.is_none() {
                         return Ok(0);
                     }
@@ -2876,7 +2866,7 @@ mod tests {
     #[test]
     fn test_layer_id_roundtrip() {
         let mut info = LayerAdditionalInfo::default();
-        info.layer_id = Some(12345);
+        info.id = Some(12345);
 
         let mut writer = PsdWriter::new(128);
         let length = writer.write_additional_info("lyid", &info).unwrap();
@@ -2892,13 +2882,13 @@ mod tests {
             .read_additional_info("lyid", length, &mut read_info)
             .unwrap();
 
-        assert_eq!(read_info.layer_id, Some(12345));
+        assert_eq!(read_info.id, Some(12345));
     }
 
     #[test]
     fn test_layer_color_roundtrip() {
         let mut info = LayerAdditionalInfo::default();
-        info.layer_color = Some(LayerColor::Blue);
+        info.layer_color = Some(crate::types::LayerColor::Blue);
 
         let mut writer = PsdWriter::new(128);
         let length = writer.write_additional_info("lclr", &info).unwrap();
@@ -2914,7 +2904,7 @@ mod tests {
             .read_additional_info("lclr", length, &mut read_info)
             .unwrap();
 
-        assert_eq!(read_info.layer_color, Some(LayerColor::Blue));
+        assert_eq!(read_info.layer_color, Some(crate::types::LayerColor::Blue));
     }
 
     #[test]
@@ -2944,8 +2934,8 @@ mod tests {
     #[test]
     fn test_small_bool_and_name_source_roundtrip() {
         let mut info = LayerAdditionalInfo::default();
-        info.blend_clipped = Some(true);
-        info.blend_interior = Some(false);
+        info.blend_clipped_elements = Some(true);
+        info.blend_interior_elements = Some(false);
         info.knockout = Some(true);
         info.name_source = Some("abcd".to_string());
 
@@ -2973,8 +2963,8 @@ mod tests {
             .read_additional_info("lnsr", lnsr_len, &mut read_info)
             .unwrap();
 
-        assert_eq!(read_info.blend_clipped, Some(true));
-        assert_eq!(read_info.blend_interior, Some(false));
+        assert_eq!(read_info.blend_clipped_elements, Some(true));
+        assert_eq!(read_info.blend_interior_elements, Some(false));
         assert_eq!(read_info.knockout, Some(true));
         assert_eq!(read_info.name_source.as_deref(), Some("abcd"));
     }

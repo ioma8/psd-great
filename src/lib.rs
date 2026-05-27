@@ -57,9 +57,10 @@ pub use effects::{
 };
 pub use error::{PsdError, Result};
 pub use helpers::{from_blend_mode, has_alpha, to_blend_mode};
+pub use additional_info::LayerAdditionalInfo;
 pub use image_resources::ImageResources;
 pub use layer::{
-    AdjustmentLayer, BezierKnot, BezierPath, Layer, LayerAdditionalInfo, LayerMaskData,
+    AdjustmentLayer, BezierKnot, BezierPath, Layer, LayerMaskData,
     LayerVectorMask, LinkedFile, PatternInfo, PlacedLayer, VectorContent,
 };
 pub use psd::{Annotation, GlobalLayerMaskInfo, Psd, ReadOptions, WriteOptions};
@@ -71,8 +72,8 @@ pub use types::{
     AntiAlias, BlendMode, BooleanOperation, ChannelID, Color, ColorMode, Compression, Fraction,
     GradientStyle, Grayscale, InterpolationMethod, Justification, LayerColor,
     LayerCompCapturedInfo, Orientation, PixelData, Point, PsdIntCode, PsdStringCode, PsdU16Code,
-    PsdU32Code, SectionDividerType, Units, UnitsValue, WarpStyle, CMYK, FRGB, HSB, LAB, RGB,
-    RGBA,
+    PsdU32Code, RenderingIntent, SectionDividerType, Units, UnitsValue, WarpStyle, CMYK, FRGB,
+    HSB, LAB, RGB, RGBA,
 };
 pub use writer::{write_psd, PsdWriter};
 

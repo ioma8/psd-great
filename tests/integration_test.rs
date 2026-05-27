@@ -339,6 +339,20 @@ fn test_different_color_modes() {
 }
 
 #[test]
+fn test_canonical_shared_types_are_constructible_from_public_api() {
+    let point = Point { x: 1.0, y: 2.0 };
+    let fraction = Fraction {
+        numerator: 1,
+        denominator: 24,
+    };
+    let rendering_intent = RenderingIntent::Perceptual;
+
+    assert_eq!(point.x, 1.0);
+    assert_eq!(fraction.denominator, 24);
+    assert_eq!(rendering_intent, RenderingIntent::Perceptual);
+}
+
+#[test]
 fn test_no_remaining_duplicate_public_model_type_names() {
     let source_files = [
         ("src/additional_info.rs", include_str!("../src/additional_info.rs")),
@@ -371,11 +385,17 @@ fn test_no_remaining_duplicate_public_model_type_names() {
     for name in audited_names {
         let mut hits = Vec::new();
         for (path, contents) in &source_files {
-            let needle_struct = format!("pub struct {}", name);
-            let needle_enum = format!("pub enum {}", name);
-            let needle_type = format!("pub type {}", name);
+            // Use regex-like word boundary matching to avoid false positives
+            // (e.g. "PlacedLayer" should not match "PlacedLayerType")
+            let needle_struct = format!("pub struct {name} ");
+            let needle_struct_semi = format!("pub struct {name}}}");
+            let needle_enum = format!("pub enum {name} ");
+            let needle_enum_semi = format!("pub enum {name}}}");
+            let needle_type = format!("pub type {name} ");
             if contents.contains(&needle_struct)
+                || contents.contains(&needle_struct_semi)
                 || contents.contains(&needle_enum)
+                || contents.contains(&needle_enum_semi)
                 || contents.contains(&needle_type)
             {
                 hits.push(*path);
