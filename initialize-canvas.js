@@ -1,1 +1,0 @@
-require('./dist/initializeCanvas.js');
