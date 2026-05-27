@@ -339,6 +339,44 @@ fn test_different_color_modes() {
 }
 
 #[test]
+fn test_canonical_tagged_block_types_are_used_by_layer_additional_info() {
+    let divider = psd_great::additional_info::SectionDivider {
+        divider_type: SectionDividerType::OpenFolder,
+        blend_mode: None,
+        sub_type: None,
+    };
+    let stroke = psd_great::additional_info::VectorStroke {
+        version: 16,
+        descriptor: psd_great::descriptor::Descriptor {
+            name: String::new(),
+            class_id: "null".to_string(),
+            items: std::collections::HashMap::new(),
+        },
+    };
+    let placed = psd_great::additional_info::PlacedLayer {
+        id: "id".to_string(),
+        page: None,
+        total_pages: None,
+        anti_alias_policy: None,
+        placed_layer_type: None,
+        transform: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        warp: None,
+        placed: None,
+    };
+
+    let info = LayerAdditionalInfo {
+        section_divider: Some(divider),
+        vector_stroke: Some(stroke),
+        placed_layer: Some(placed),
+        ..Default::default()
+    };
+
+    assert!(info.section_divider.is_some());
+    assert!(info.vector_stroke.is_some());
+    assert!(info.placed_layer.is_some());
+}
+
+#[test]
 fn test_adjustment_layer_comes_from_canonical_module() {
     // This will use the canonical AdjustmentLayer from adjustments.rs
     // once the duplicate in layer.rs is removed

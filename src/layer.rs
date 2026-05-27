@@ -450,66 +450,7 @@ pub struct LinkedFileInfo {
     pub relative_path: String,
 }
 
-/// Placed layer filter
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlacedLayerFilter {
-    pub enabled: bool,
-    #[serde(rename = "validAtPosition")]
-    pub valid_at_position: bool,
-    #[serde(rename = "maskEnabled")]
-    pub mask_enabled: bool,
-    #[serde(rename = "maskLinked")]
-    pub mask_linked: bool,
-    #[serde(rename = "maskExtendWithWhite")]
-    pub mask_extend_with_white: bool,
-    pub list: Vec<Filter>,
-}
 
-/// Filter
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Filter {
-    pub name: String,
-    pub opacity: f64,
-    #[serde(rename = "blendMode")]
-    pub blend_mode: BlendMode,
-    pub enabled: bool,
-    #[serde(rename = "hasOptions")]
-    pub has_options: bool,
-    #[serde(rename = "foregroundColor")]
-    pub foreground_color: Color,
-    #[serde(rename = "backgroundColor")]
-    pub background_color: Color,
-}
-
-/// Placed layer
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlacedLayer {
-    pub id: String,
-    pub placed: Option<PsdStringCode>,
-    #[serde(rename = "type")]
-    pub layer_type: PlacedLayerType,
-    #[serde(rename = "pageNumber")]
-    pub page_number: Option<i32>,
-    #[serde(rename = "totalPages")]
-    pub total_pages: Option<i32>,
-    #[serde(rename = "frameStep")]
-    pub frame_step: Option<Fraction>,
-    pub duration: Option<Fraction>,
-    #[serde(rename = "frameCount")]
-    pub frame_count: Option<i32>,
-    pub transform: Vec<f64>,
-    #[serde(rename = "nonAffineTransform")]
-    pub non_affine_transform: Option<Vec<f64>>,
-    pub width: Option<f64>,
-    pub height: Option<f64>,
-    pub resolution: Option<UnitsValue>,
-    pub warp: Option<crate::text::Warp>,
-    pub crop: Option<f64>,
-    pub comp: Option<i32>,
-    #[serde(rename = "compInfo")]
-    pub comp_info: Option<CompInfo>,
-    pub filter: Option<PlacedLayerFilter>,
-}
 
 /// Key descriptor item
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -662,37 +603,7 @@ pub struct Timeline {
     pub tracks: Option<Vec<TimelineTrack>>,
 }
 
-/// Vector stroke content
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct VectorStroke {
-    #[serde(rename = "strokeEnabled")]
-    pub stroke_enabled: Option<bool>,
-    #[serde(rename = "fillEnabled")]
-    pub fill_enabled: Option<bool>,
-    #[serde(rename = "lineWidth")]
-    pub line_width: Option<UnitsValue>,
-    #[serde(rename = "lineDashOffset")]
-    pub line_dash_offset: Option<UnitsValue>,
-    #[serde(rename = "miterLimit")]
-    pub miter_limit: Option<f64>,
-    #[serde(rename = "lineCapType")]
-    pub line_cap_type: Option<LineCapType>,
-    #[serde(rename = "lineJoinType")]
-    pub line_join_type: Option<LineJoinType>,
-    #[serde(rename = "lineAlignment")]
-    pub line_alignment: Option<LineAlignment>,
-    #[serde(rename = "scaleLock")]
-    pub scale_lock: Option<bool>,
-    #[serde(rename = "strokeAdjust")]
-    pub stroke_adjust: Option<bool>,
-    #[serde(rename = "lineDashSet")]
-    pub line_dash_set: Option<Vec<UnitsValue>>,
-    #[serde(rename = "blendMode")]
-    pub blend_mode: Option<BlendMode>,
-    pub opacity: Option<f64>,
-    pub content: Option<VectorContent>,
-    pub resolution: Option<f64>,
-}
+
 
 /// Protected flags
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -703,15 +614,7 @@ pub struct Protected {
     pub artboards: Option<bool>,
 }
 
-/// Section divider
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SectionDivider {
-    #[serde(rename = "type")]
-    pub divider_type: SectionDividerType,
-    pub key: Option<PsdStringCode>,
-    #[serde(rename = "subType")]
-    pub sub_type: Option<PsdIntCode>,
-}
+
 
 /// Filter mask
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
