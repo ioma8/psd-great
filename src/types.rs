@@ -1,11 +1,9 @@
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::Deref;
 
 macro_rules! string_code_type {
     ($name:ident) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-        #[serde(transparent)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
         pub struct $name(pub String);
 
         impl From<&str> for $name {
@@ -44,8 +42,7 @@ macro_rules! string_code_type {
 
 macro_rules! int_code_type {
     ($name:ident, $ty:ty) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-        #[serde(transparent)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
         pub struct $name(pub $ty);
     };
 }
@@ -56,8 +53,7 @@ int_code_type!(PsdU32Code, u32);
 int_code_type!(PsdU16Code, u16);
 
 /// Blend mode types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BlendMode {
     PassThrough,
     Normal,
@@ -90,7 +86,7 @@ pub enum BlendMode {
 }
 
 /// Color mode types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum ColorMode {
     Bitmap = 0,
@@ -120,7 +116,7 @@ impl ColorMode {
 }
 
 /// Section divider types for layer groups
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum SectionDividerType {
     Other = 0,
@@ -130,7 +126,7 @@ pub enum SectionDividerType {
 }
 
 /// RGBA color (values from 0 to 255)
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RGBA {
     pub r: u8,
     pub g: u8,
@@ -139,7 +135,7 @@ pub struct RGBA {
 }
 
 /// RGB color (values from 0 to 255)
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RGB {
     pub r: u8,
     pub g: u8,
@@ -147,7 +143,7 @@ pub struct RGB {
 }
 
 /// FRGB color (floating point RGB, values from 0 to 1, can be above 1, can be negative)
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FRGB {
     pub fr: f64,
     pub fg: f64,
@@ -155,7 +151,7 @@ pub struct FRGB {
 }
 
 /// HSB color (values from 0 to 1)
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HSB {
     pub h: f64,
     pub s: f64,
@@ -163,7 +159,7 @@ pub struct HSB {
 }
 
 /// CMYK color (values from 0 to 255)
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CMYK {
     pub c: u8,
     pub m: u8,
@@ -172,7 +168,7 @@ pub struct CMYK {
 }
 
 /// LAB color (l from 0 to 1; a and b from -1 to 1)
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LAB {
     pub l: f64,
     pub a: f64,
@@ -180,14 +176,13 @@ pub struct LAB {
 }
 
 /// Grayscale color (values from 0 to 255)
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Grayscale {
     pub k: u8,
 }
 
 /// Generic color type that can represent any color format
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Color {
     RGBA(RGBA),
     RGB(RGB),
@@ -199,7 +194,7 @@ pub enum Color {
 }
 
 /// Units for measurements
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Units {
     Pixels,
     Points,
@@ -212,31 +207,28 @@ pub enum Units {
 }
 
 /// Value with units
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UnitsValue {
     pub units: Units,
     pub value: f64,
 }
 
 /// Text gridding type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextGridding {
     None,
     Round,
 }
 
 /// Orientation type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
     Horizontal,
     Vertical,
 }
 
 /// Anti-aliasing mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AntiAlias {
     None,
     Sharp,
@@ -244,25 +236,19 @@ pub enum AntiAlias {
     Strong,
     Smooth,
     Platform,
-    #[serde(rename = "platformLCD")]
     PlatformLCD,
 }
 
 /// Warp style
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WarpStyle {
     None,
     Arc,
-    #[serde(rename = "arcLower")]
     ArcLower,
-    #[serde(rename = "arcUpper")]
     ArcUpper,
     Arch,
     Bulge,
-    #[serde(rename = "shellLower")]
     ShellLower,
-    #[serde(rename = "shellUpper")]
     ShellUpper,
     Flag,
     Wave,
@@ -277,8 +263,7 @@ pub enum WarpStyle {
 }
 
 /// Bevel style
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BevelStyle {
     OuterBevel,
     InnerBevel,
@@ -288,8 +273,7 @@ pub enum BevelStyle {
 }
 
 /// Bevel technique
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BevelTechnique {
     Smooth,
     ChiselHard,
@@ -297,32 +281,28 @@ pub enum BevelTechnique {
 }
 
 /// Bevel direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BevelDirection {
     Up,
     Down,
 }
 
 /// Glow technique
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlowTechnique {
     Softer,
     Precise,
 }
 
 /// Glow source
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlowSource {
     Edge,
     Center,
 }
 
 /// Gradient style
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GradientStyle {
     Linear,
     Radial,
@@ -332,8 +312,7 @@ pub enum GradientStyle {
 }
 
 /// Text justification
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Justification {
     Left,
     Right,
@@ -345,8 +324,7 @@ pub enum Justification {
 }
 
 /// Line cap type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineCapType {
     Butt,
     Round,
@@ -354,8 +332,7 @@ pub enum LineCapType {
 }
 
 /// Line join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineJoinType {
     Miter,
     Round,
@@ -363,8 +340,7 @@ pub enum LineJoinType {
 }
 
 /// Line alignment
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineAlignment {
     Inside,
     Center,
@@ -372,8 +348,7 @@ pub enum LineAlignment {
 }
 
 /// Interpolation method
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterpolationMethod {
     Classic,
     Perceptual,
@@ -382,8 +357,7 @@ pub enum InterpolationMethod {
 }
 
 /// Boolean operation for vector paths
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BooleanOperation {
     Exclude,
     Combine,
@@ -392,8 +366,7 @@ pub enum BooleanOperation {
 }
 
 /// Rendering intent
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderingIntent {
     Perceptual,
     Saturation,
@@ -402,8 +375,7 @@ pub enum RenderingIntent {
 }
 
 /// Layer color label
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerColor {
     None,
     Red,
@@ -416,7 +388,7 @@ pub enum LayerColor {
 }
 
 /// Channel ID
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i16)]
 pub enum ChannelID {
     Color0 = 0,
@@ -444,7 +416,7 @@ impl ChannelID {
 }
 
 /// Compression type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum Compression {
     RawData = 0,
@@ -469,7 +441,7 @@ impl Compression {
 }
 
 /// Layer composition captured info flags
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum LayerCompCapturedInfo {
     None = 0,
@@ -479,8 +451,7 @@ pub enum LayerCompCapturedInfo {
 }
 
 /// Placed layer type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlacedLayerType {
     Unknown,
     Vector,
@@ -489,16 +460,14 @@ pub enum PlacedLayerType {
 }
 
 /// Timeline key interpolation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineKeyInterpolation {
     Linear,
     Hold,
 }
 
 /// Timeline track type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineTrackType {
     Opacity,
     Style,
@@ -508,21 +477,21 @@ pub enum TimelineTrackType {
 }
 
 /// Point coordinate
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
     pub x: f64,
     pub y: f64,
 }
 
 /// Fraction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fraction {
     pub numerator: i32,
     pub denominator: i32,
 }
 
 /// Pixel data container
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PixelData {
     pub data: Vec<u8>,
     pub width: usize,

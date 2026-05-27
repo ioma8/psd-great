@@ -435,8 +435,6 @@ dependencies = [
  "lazy_static",
  "pretty_assertions",
  "quick-xml",
- "serde",
- "serde_json",
  "thiserror",
 ]
 

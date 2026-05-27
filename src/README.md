@@ -94,23 +94,19 @@ TypeScript → Rust:
 - `T | undefined` → `Option<T>`
 - `T1 | T2` → `enum` with variants (for discriminated unions)
 - `interface` → `struct`
-- `type` (union types) → `enum` with `#[serde(untagged)]`
+- `type` (union types) → `enum`
 
 ### Rust Idioms
 
-1. **Derive Macros**: All structs use `#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]`
-2. **Naming**: Snake_case for struct fields (with `#[serde(rename)]` to match JSON keys)
+1. **Derive Macros**: Public model structs derive only the traits they actually need
+2. **Naming**: Snake_case for Rust fields and types
 3. **Enums**: Used for fixed sets of values (e.g., `BlendMode`, `ColorMode`)
 4. **Option<T>**: Used for all optional fields
 5. **Documentation**: Doc comments (`///`) on public types
 
-### Serialization
+### Data Model
 
-All types support serde serialization/deserialization with:
-- `#[serde(rename = "camelCase")]` for field names matching TypeScript
-- `#[serde(untagged)]` for union types that don't have explicit discriminators
-- `#[serde(tag = "type")]` for discriminated unions
-- `#[serde(flatten)]` for embedding additional info
+The crate exposes a single canonical typed PSD model. It is a parser/writer API, not a JSON model layer.
 
 ## Usage Example
 
@@ -167,9 +163,9 @@ let layer = Layer {
     ..Default::default()
 };
 
-// Serialize to JSON
-let json = serde_json::to_string_pretty(&psd).unwrap();
-println!("{}", json);
+// Write PSD bytes
+let bytes = write_psd(&psd, &WriteOptions::default()).unwrap();
+println!("{}", bytes.len());
 ```
 
 ## Testing
@@ -183,7 +179,7 @@ The test suite includes:
 - Basic type creation and validation
 - Layer structure creation
 - PSD document creation
-- Serialization/deserialization
+- Typed parser/writer model coverage
 - Effect structures
 
 ## Completeness
