@@ -339,6 +339,24 @@ fn test_different_color_modes() {
 }
 
 #[test]
+fn test_canonical_image_resource_types_are_public() {
+    // Test that image_resource types are used canonically
+    let resources = ImageResources {
+        resolution_info: Some(psd_great::image_resources::ResolutionInfo {
+            horizontal_res: 300.0,
+            horizontal_res_unit: psd_great::image_resources::ResolutionUnit::PixelsPerInch,
+            width_unit: psd_great::image_resources::MeasurementUnit::Inches,
+            vertical_res: 300.0,
+            vertical_res_unit: psd_great::image_resources::ResolutionUnit::PixelsPerInch,
+            height_unit: psd_great::image_resources::MeasurementUnit::Inches,
+        }),
+        ..Default::default()
+    };
+
+    assert!(resources.resolution_info.is_some());
+}
+
+#[test]
 fn test_canonical_tagged_block_types_are_used_by_layer_additional_info() {
     let divider = psd_great::additional_info::SectionDivider {
         divider_type: SectionDividerType::OpenFolder,

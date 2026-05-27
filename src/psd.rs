@@ -1,4 +1,5 @@
-use crate::layer::{Layer, LayerAdditionalInfo, LinkedFile};
+use crate::additional_info::LayerAdditionalInfo;
+use crate::layer::{Layer, LinkedFile};
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 
@@ -76,23 +77,6 @@ pub struct GridAndGuidesInformation {
     pub guides: Option<Vec<GuideInfo>>,
 }
 
-/// Resolution info
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResolutionInfo {
-    #[serde(rename = "horizontalResolution")]
-    pub horizontal_resolution: f64,
-    #[serde(rename = "horizontalResolutionUnit")]
-    pub horizontal_resolution_unit: PsdStringCode,
-    #[serde(rename = "widthUnit")]
-    pub width_unit: PsdStringCode,
-    #[serde(rename = "verticalResolution")]
-    pub vertical_resolution: f64,
-    #[serde(rename = "verticalResolutionUnit")]
-    pub vertical_resolution_unit: PsdStringCode,
-    #[serde(rename = "heightUnit")]
-    pub height_unit: PsdStringCode,
-}
-
 /// Thumbnail raw data
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThumbnailRaw {
@@ -101,97 +85,7 @@ pub struct ThumbnailRaw {
     pub data: Vec<u8>,
 }
 
-/// Print scale
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PrintScale {
-    pub style: Option<PsdStringCode>,
-    pub x: Option<f64>,
-    pub y: Option<f64>,
-    pub scale: Option<f64>,
-}
 
-/// Proof setup builtin
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProofSetupBuiltin {
-    pub builtin: String,
-}
-
-/// Proof setup profile
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProofSetupProfile {
-    pub profile: String,
-    #[serde(rename = "renderingIntent")]
-    pub rendering_intent: Option<RenderingIntent>,
-    #[serde(rename = "blackPointCompensation")]
-    pub black_point_compensation: Option<bool>,
-    #[serde(rename = "paperWhite")]
-    pub paper_white: Option<bool>,
-}
-
-/// Proof setup
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ProofSetup {
-    Builtin(ProofSetupBuiltin),
-    Profile(ProofSetupProfile),
-}
-
-/// Print information
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PrintInformation {
-    #[serde(rename = "printerManagesColors")]
-    pub printer_manages_colors: Option<bool>,
-    #[serde(rename = "printerName")]
-    pub printer_name: Option<String>,
-    #[serde(rename = "printerProfile")]
-    pub printer_profile: Option<String>,
-    #[serde(rename = "printSixteenBit")]
-    pub print_sixteen_bit: Option<bool>,
-    #[serde(rename = "renderingIntent")]
-    pub rendering_intent: Option<RenderingIntent>,
-    #[serde(rename = "hardProof")]
-    pub hard_proof: Option<bool>,
-    #[serde(rename = "blackPointCompensation")]
-    pub black_point_compensation: Option<bool>,
-    #[serde(rename = "proofSetup")]
-    pub proof_setup: Option<ProofSetup>,
-}
-
-/// Print flags
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PrintFlags {
-    pub labels: Option<bool>,
-    #[serde(rename = "cropMarks")]
-    pub crop_marks: Option<bool>,
-    #[serde(rename = "colorBars")]
-    pub color_bars: Option<bool>,
-    #[serde(rename = "registrationMarks")]
-    pub registration_marks: Option<bool>,
-    pub negative: Option<bool>,
-    pub flip: Option<bool>,
-    pub interpolate: Option<bool>,
-    pub caption: Option<bool>,
-    #[serde(rename = "printFlags")]
-    pub print_flags: Option<bool>,
-}
-
-/// Onion skins
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OnionSkins {
-    pub enabled: bool,
-    #[serde(rename = "framesBefore")]
-    pub frames_before: i32,
-    #[serde(rename = "framesAfter")]
-    pub frames_after: i32,
-    #[serde(rename = "frameSpacing")]
-    pub frame_spacing: i32,
-    #[serde(rename = "minOpacity")]
-    pub min_opacity: f64,
-    #[serde(rename = "maxOpacity")]
-    pub max_opacity: f64,
-    #[serde(rename = "blendMode")]
-    pub blend_mode: BlendMode,
-}
 
 /// Audio clip frame reader
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -239,29 +133,6 @@ pub struct AudioClipGroup {
     pub audio_clips: Vec<AudioClip>,
 }
 
-/// Timeline information
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TimelineInformation {
-    pub enabled: bool,
-    #[serde(rename = "frameStep")]
-    pub frame_step: Fraction,
-    #[serde(rename = "frameRate")]
-    pub frame_rate: f64,
-    pub time: Fraction,
-    pub duration: Fraction,
-    #[serde(rename = "workInTime")]
-    pub work_in_time: Fraction,
-    #[serde(rename = "workOutTime")]
-    pub work_out_time: Fraction,
-    pub repeats: i32,
-    #[serde(rename = "hasMotion")]
-    pub has_motion: bool,
-    #[serde(rename = "globalTracks")]
-    pub global_tracks: Vec<crate::layer::TimelineTrack>,
-    #[serde(rename = "audioClipGroups")]
-    pub audio_clip_groups: Option<Vec<AudioClipGroup>>,
-}
-
 /// Sheet timeline options
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SheetTimelineOptions {
@@ -296,81 +167,7 @@ pub struct CountInformation {
     pub points: Vec<Point>,
 }
 
-/// Slice bounds
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SliceBounds {
-    pub left: f64,
-    pub top: f64,
-    pub right: f64,
-    pub bottom: f64,
-}
 
-/// Slice
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Slice {
-    pub id: i32,
-    #[serde(rename = "groupId")]
-    pub group_id: i32,
-    pub origin: PsdStringCode,
-    #[serde(rename = "associatedLayerId")]
-    pub associated_layer_id: i32,
-    pub name: Option<String>,
-    #[serde(rename = "type")]
-    pub slice_type: PsdStringCode,
-    pub bounds: SliceBounds,
-    pub url: String,
-    pub target: String,
-    pub message: String,
-    #[serde(rename = "altTag")]
-    pub alt_tag: String,
-    #[serde(rename = "cellTextIsHTML")]
-    pub cell_text_is_html: bool,
-    #[serde(rename = "cellText")]
-    pub cell_text: String,
-    #[serde(rename = "horizontalAlignment")]
-    pub horizontal_alignment: PsdStringCode,
-    #[serde(rename = "verticalAlignment")]
-    pub vertical_alignment: PsdStringCode,
-    #[serde(rename = "backgroundColorType")]
-    pub background_color_type: PsdStringCode,
-    #[serde(rename = "backgroundColor")]
-    pub background_color: RGBA,
-    #[serde(rename = "topOutset")]
-    pub top_outset: Option<f64>,
-    #[serde(rename = "leftOutset")]
-    pub left_outset: Option<f64>,
-    #[serde(rename = "bottomOutset")]
-    pub bottom_outset: Option<f64>,
-    #[serde(rename = "rightOutset")]
-    pub right_outset: Option<f64>,
-}
-
-/// Slices info
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SlicesInfo {
-    pub bounds: SliceBounds,
-    #[serde(rename = "groupName")]
-    pub group_name: String,
-    pub slices: Vec<Slice>,
-}
-
-/// Layer comp info
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LayerCompInfo {
-    pub id: i32,
-    pub name: String,
-    pub comment: Option<String>,
-    #[serde(rename = "capturedInfo")]
-    pub captured_info: LayerCompCapturedInfo,
-}
-
-/// Layer comps
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LayerComps {
-    pub list: Vec<LayerCompInfo>,
-    #[serde(rename = "lastApplied")]
-    pub last_applied: Option<i32>,
-}
 
 /// Global layer mask info
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -421,71 +218,6 @@ pub struct AnnotationLocation {
 pub enum AnnotationData {
     Text(String),
     Sound(Vec<u8>),
-}
-
-/// Image resources
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ImageResources {
-    #[serde(rename = "layerState")]
-    pub layer_state: Option<u16>,
-    #[serde(rename = "layerSelectionIds")]
-    pub layer_selection_ids: Option<Vec<i32>>,
-    #[serde(rename = "versionInfo")]
-    pub version_info: Option<VersionInfo>,
-    #[serde(rename = "alphaIdentifiers")]
-    pub alpha_identifiers: Option<Vec<i32>>,
-    #[serde(rename = "alphaChannelNames")]
-    pub alpha_channel_names: Option<Vec<String>>,
-    #[serde(rename = "globalAngle")]
-    pub global_angle: Option<f64>,
-    #[serde(rename = "globalAltitude")]
-    pub global_altitude: Option<f64>,
-    #[serde(rename = "pixelAspectRatio")]
-    pub pixel_aspect_ratio: Option<PixelAspectRatio>,
-    #[serde(rename = "urlsList")]
-    pub urls_list: Option<Vec<UrlsListItem>>,
-    #[serde(rename = "gridAndGuidesInformation")]
-    pub grid_and_guides_information: Option<GridAndGuidesInformation>,
-    #[serde(rename = "resolutionInfo")]
-    pub resolution_info: Option<ResolutionInfo>,
-    #[serde(rename = "thumbnailRaw")]
-    pub thumbnail_raw: Option<ThumbnailRaw>,
-    #[serde(rename = "captionDigest")]
-    pub caption_digest: Option<String>,
-    #[serde(rename = "xmpMetadata")]
-    pub xmp_metadata: Option<String>,
-    #[serde(rename = "printScale")]
-    pub print_scale: Option<PrintScale>,
-    #[serde(rename = "printInformation")]
-    pub print_information: Option<PrintInformation>,
-    #[serde(rename = "backgroundColor")]
-    pub background_color: Option<Color>,
-    #[serde(rename = "idsSeedNumber")]
-    pub ids_seed_number: Option<u32>,
-    #[serde(rename = "printFlags")]
-    pub print_flags: Option<PrintFlags>,
-    #[serde(rename = "iccUntaggedProfile")]
-    pub icc_untagged_profile: Option<bool>,
-    #[serde(rename = "pathSelectionState")]
-    pub path_selection_state: Option<Vec<String>>,
-    #[serde(rename = "imageReadyVariables")]
-    pub image_ready_variables: Option<String>,
-    #[serde(rename = "imageReadyDataSets")]
-    pub image_ready_data_sets: Option<String>,
-    pub animations: Option<Animations>,
-    #[serde(rename = "onionSkins")]
-    pub onion_skins: Option<OnionSkins>,
-    #[serde(rename = "timelineInformation")]
-    pub timeline_information: Option<TimelineInformation>,
-    #[serde(rename = "sheetDisclosure")]
-    pub sheet_disclosure: Option<SheetDisclosure>,
-    #[serde(rename = "countInformation")]
-    pub count_information: Option<Vec<CountInformation>>,
-    pub slices: Option<Vec<SlicesInfo>>,
-    #[serde(rename = "layerComps")]
-    pub layer_comps: Option<LayerComps>,
-    pub copyrighted: Option<bool>,
-    pub url: Option<String>,
 }
 
 /// Artboards info
@@ -560,54 +292,31 @@ pub struct ColorModeSectionData {
 }
 
 /// Main PSD document structure
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Psd {
     pub width: u32,
     pub height: u32,
     pub channels: Option<u16>,
-    #[serde(rename = "bitsPerChannel")]
     pub bits_per_channel: Option<u8>,
-    #[serde(rename = "colorMode")]
     pub color_mode: Option<ColorMode>,
     pub palette: Option<Vec<RGB>>,
     pub children: Option<Vec<Layer>>,
-    #[serde(rename = "imageData")]
     pub image_data: Option<PixelData>,
-    #[serde(skip)]
     pub image_resources: Option<crate::image_resources::ImageResources>,
-    #[serde(skip)]
-    pub tagged_blocks: crate::additional_info::LayerAdditionalInfo,
-    #[serde(rename = "linkedFiles")]
     pub linked_files: Option<Vec<LinkedFile>>,
     pub artboards: Option<ArtboardsInfo>,
-    #[serde(rename = "globalLayerMaskInfo")]
     pub global_layer_mask_info: Option<GlobalLayerMaskInfo>,
     pub annotations: Option<Vec<Annotation>>,
-
-    #[serde(flatten)]
     pub additional_info: LayerAdditionalInfo,
-
-    /// Generic color mode section payload for non-indexed modes.
-    #[serde(rename = "colorModeData")]
     pub color_mode_data: Option<ColorModeSectionData>,
-
     /// Document path selection descriptor (resource 3000)
-    #[serde(skip)]
     pub path_selection_descriptor: Option<crate::descriptor::Descriptor>,
-
-    #[serde(rename = "variableSets")]
     pub variable_sets: Option<Vec<VariableSet>>,
-    #[serde(rename = "dataSets")]
     pub data_sets: Option<Vec<Vec<String>>>,
-    #[serde(skip)]
     pub descriptor_1065: Option<crate::descriptor::Descriptor>,
-    #[serde(skip)]
     pub descriptor_1074: Option<crate::descriptor::Descriptor>,
-    #[serde(skip)]
     pub descriptor_1075: Option<crate::descriptor::Descriptor>,
-    #[serde(rename = "customPoints")]
     pub custom_points: Option<Vec<CustomPoint>>,
-    #[serde(rename = "displayInfo")]
     pub display_info: Option<DisplayInfo>,
 }
 
