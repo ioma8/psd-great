@@ -53,6 +53,8 @@ pub struct LayerAdditionalInfo {
     /// Adjustment layer data (brit/levl/curv/expA/blnc/phfl/hue2/selc/mixr/post/thrs/nvrt/grdm/blwh)
     /// Stored as (key, raw_bytes) so the original binary format is preserved.
     pub adjustment: Option<(String, Vec<u8>)>,
+    /// Raw bytes of Lr16 or Lr32 nested high-bit-depth layer section
+    pub high_depth_layer_data: Option<(String, Vec<u8>)>,
     /// Vector origination data
     pub vector_origination: Option<Vec<u8>>,
     /// Unknown sections (for preservation)
@@ -258,6 +260,10 @@ impl<R: Read + Seek> PsdReader<R> {
             "selc" | "mixr" | "post" | "thrs" | "nvrt" | "grdm" | "blwh" => {
                 let data = self.read_bytes(length)?;
                 info.adjustment = Some((key.to_string(), data));
+            }
+            "Lr16" | "Lr32" => {
+                let data = self.read_bytes(length)?;
+                info.high_depth_layer_data = Some((key.to_string(), data));
             }
             _ => {
                 // Store unknown sections
@@ -877,6 +883,13 @@ impl PsdWriter {
                     }
                 }
             }
+            "Lr16" | "Lr32" => {
+                if let Some((ref hd_key, ref data)) = info.high_depth_layer_data {
+                    if hd_key == key {
+                        temp_writer.write_bytes(data)?;
+                    }
+                }
+            }
             _ => {
                 // Write unknown sections
                 if let Some(data) = info.unknown.get(key) {
@@ -941,7 +954,7 @@ pub fn write_layer_additional_info(
     let sections = vec![
         "luni", "lyid", "lclr", "lsct", "clbl", "infx", "knko", "lspf", "lnsr",
         "TySh", "SoCo", "GdFl", "PtFl", "vstk", "vmsk", "vogk", "lfx2", "lrFX",
-        "PlLd", "SoLd", "artb", "sn2P", "shmd",
+        "PlLd", "SoLd", "artb", "sn2P", "shmd", "Lr16", "Lr32",
     ];
     
     for key in sections {
@@ -1032,6 +1045,21 @@ mod tests {
         reader.read_additional_info("lclr", length, &mut read_info).unwrap();
         
         assert_eq!(read_info.layer_color, Some(LayerColor::Blue));
+    }
+
+    #[test]
+    fn lr16_raw_roundtrip() {
+        let payload = vec![0xde, 0xad, 0xbe, 0xef];
+        let mut info = LayerAdditionalInfo::default();
+        info.high_depth_layer_data = Some(("Lr16".to_string(), payload.clone()));
+
+        let mut w = PsdWriter::new(64);
+        write_layer_additional_info(&mut w, &info).unwrap();
+        let buf = w.into_buffer();
+
+        assert!(buf.windows(4).any(|w| w == b"Lr16"));
+        // Confirm payload is present
+        assert!(buf.windows(4).any(|w| w == [0xde, 0xad, 0xbe, 0xef]));
     }
 
     #[test]
