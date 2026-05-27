@@ -250,7 +250,8 @@ impl<R: Read + Seek> PsdReader<R> {
             "lnsr" => self.read_name_source(info)?,
             "TySh" => self.read_text_layer(info, length)?,
             "SoCo" | "GdFl" | "PtFl" => self.read_vector_fill(info, key)?,
-            "vscg" | "vstk" => self.read_vector_stroke(info, length)?,
+            "vstk" => self.read_vector_stroke(info, length)?,
+            "vscg" => self.read_vscg(info, length)?,
             "vmsk" | "vsms" => self.read_vector_mask(info, length)?,
             "vogk" => self.read_vector_origination(info, length)?,
             "lrFX" | "lfx2" => self.read_layer_effects(info, key, length)?,
@@ -461,16 +462,20 @@ impl<R: Read + Seek> PsdReader<R> {
         Ok(())
     }
 
-    /// Read vector stroke (vscg/vstk)
+    /// Read vector stroke (vstk): u32 version + raw descriptor (no inner version)
     fn read_vector_stroke(&mut self, info: &mut LayerAdditionalInfo, _length: usize) -> Result<()> {
         let version = self.read_u32()?;
-        let descriptor = self.read_version_and_descriptor()?;
-        
-        info.vector_stroke = Some(VectorStroke {
-            version,
-            descriptor,
-        });
-        
+        let descriptor = self.read_descriptor_structure()?;
+        info.vector_stroke = Some(VectorStroke { version, descriptor });
+        Ok(())
+    }
+
+    /// Read vscg: 4-byte wrapped key + u32 version + raw descriptor
+    fn read_vscg(&mut self, info: &mut LayerAdditionalInfo, _length: usize) -> Result<()> {
+        let _wrapped_key = self.read_signature()?; // always "vstk" in practice
+        let version = self.read_u32()?;
+        let descriptor = self.read_descriptor_structure()?;
+        info.vector_stroke = Some(VectorStroke { version, descriptor });
         Ok(())
     }
 
@@ -799,7 +804,7 @@ impl PsdWriter {
             "vscg" | "vstk" => {
                 if let Some(ref vs) = info.vector_stroke {
                     temp_writer.write_u32(vs.version)?;
-                    temp_writer.write_version_and_descriptor(16, &vs.descriptor)?;
+                    temp_writer.write_descriptor_structure(&vs.descriptor)?;
                 }
             }
             "vmsk" | "vsms" => {
@@ -1022,6 +1027,28 @@ pub fn write_layer_additional_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vstk_descriptor_roundtrip() {
+        use crate::descriptor::{Descriptor, DescriptorValue};
+        let mut desc = Descriptor { name: String::new(), class_id: "vstk".to_string(), items: std::collections::HashMap::new() };
+        desc.items.insert("strokeStyleVersion".to_string(), DescriptorValue::Integer(2));
+
+        let mut info = LayerAdditionalInfo::default();
+        info.vector_stroke = Some(VectorStroke { version: 1, descriptor: desc.clone() });
+
+        let mut w = PsdWriter::new(256);
+        let len = w.write_additional_info("vstk", &info).unwrap();
+        let buf = w.into_buffer();
+
+        let cursor = std::io::Cursor::new(buf);
+        let mut reader = PsdReader::new(cursor, Default::default());
+        let mut read_info = LayerAdditionalInfo::default();
+        reader.read_additional_info("vstk", len, &mut read_info).unwrap();
+
+        let vs = read_info.vector_stroke.unwrap();
+        assert!(vs.descriptor.items.contains_key("strokeStyleVersion"));
+    }
 
     #[test]
     fn test_layer_id_roundtrip() {
