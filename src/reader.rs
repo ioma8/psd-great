@@ -338,7 +338,6 @@ pub fn read_psd<R: Read + Seek>(mut reader: R, options: ReadOptions) -> Result<P
         image_data: None,
         children: None,
         image_resources: None,
-        tagged_blocks: Default::default(),
         linked_files: None,
         artboards: None,
         global_layer_mask_info: None,
@@ -465,7 +464,7 @@ fn read_layer_and_mask_info<R: Read + Seek>(
         }
 
         if reader.bytes_left(end_offset) > 0 {
-            psd.tagged_blocks = crate::additional_info::read_layer_additional_info(
+            psd.additional_info = crate::additional_info::read_layer_additional_info(
                 reader,
                 reader.bytes_left(end_offset),
             )?;
@@ -570,13 +569,24 @@ fn read_layer_record<R: Read + Seek>(
         }
 
         // Read layer name
-        layer.additional_info.name = Some(reader.read_pascal_string(4)?);
+        let pascal_name = reader.read_pascal_string(4)?;
 
         // Read tagged blocks (additional layer info)
         let remaining = reader.bytes_left(end_offset) as usize;
         if remaining > 0 {
-            layer.tagged_blocks =
-                crate::additional_info::read_layer_additional_info(reader, remaining)?;
+            let existing_mask = layer.additional_info.mask.take();
+            let existing_real_mask = layer.additional_info.real_mask.take();
+            let mut info = crate::additional_info::read_layer_additional_info(reader, remaining)?;
+            if info.mask.is_none() {
+                info.mask = existing_mask;
+            }
+            if info.real_mask.is_none() {
+                info.real_mask = existing_real_mask;
+            }
+            layer.additional_info = info;
+        }
+        if layer.additional_info.name.is_none() {
+            layer.additional_info.name = Some(pascal_name);
         }
 
         Ok(())
@@ -924,11 +934,9 @@ fn read_layer_channel_raw_data<R: Read + Seek>(
 
 /// Build layer hierarchy from flat layer list
 fn build_layer_hierarchy(psd: &mut Psd, layers: Vec<Layer>) -> Result<()> {
-    psd.children = Some(Vec::new());
+    let mut stack: Vec<Vec<Layer>> = vec![Vec::new()];
 
-    let mut stack: Vec<&mut Vec<Layer>> = vec![psd.children.as_mut().unwrap()];
-
-    for layer in layers.into_iter().rev() {
+    for mut layer in layers.into_iter().rev() {
         let section_type = layer
             .additional_info
             .section_divider
@@ -937,27 +945,27 @@ fn build_layer_hierarchy(psd: &mut Psd, layers: Vec<Layer>) -> Result<()> {
             .unwrap_or(SectionDividerType::Other);
 
         match section_type {
-            SectionDividerType::OpenFolder | SectionDividerType::ClosedFolder => {
-                let current = stack.last_mut().unwrap();
-                current.insert(0, layer);
-
-                // Push new group onto stack
-                let last_idx = current.len() - 1;
-                let last_layer = &mut current[last_idx];
-                if last_layer.children.is_none() {
-                    last_layer.children = Some(Vec::new());
-                }
-            }
             SectionDividerType::BoundingSectionDivider => {
-                stack.pop();
+                stack.push(Vec::new());
+            }
+            SectionDividerType::OpenFolder | SectionDividerType::ClosedFolder => {
+                let children = if stack.len() > 1 {
+                    stack.pop().unwrap()
+                } else {
+                    Vec::new()
+                };
+                if !children.is_empty() {
+                    layer.children = Some(children);
+                }
+                stack.last_mut().unwrap().insert(0, layer);
             }
             SectionDividerType::Other => {
-                let current = stack.last_mut().unwrap();
-                current.insert(0, layer);
+                stack.last_mut().unwrap().insert(0, layer);
             }
         }
     }
 
+    psd.children = Some(stack.pop().unwrap_or_default());
     Ok(())
 }
 

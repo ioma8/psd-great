@@ -37,11 +37,7 @@ fn main() {
         psd.children.as_ref().map(|c| c.len()).unwrap_or(0)
     );
 
-    // Demonstrate serialization
-    let json = serde_json::to_string_pretty(&psd).unwrap();
-    println!("\n📄 JSON representation (first 500 chars):");
-    println!("{}", &json[..json.len().min(500)]);
-    if json.len() > 500 {
-        println!("... (truncated)");
-    }
+    // Demonstrate writing the document
+    let bytes = write_psd(&psd, &WriteOptions::default()).unwrap();
+    println!("\n💾 PSD bytes written: {}", bytes.len());
 }

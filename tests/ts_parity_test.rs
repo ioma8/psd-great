@@ -1038,7 +1038,7 @@ mod document_tagged_blocks_parity {
                 width: 1,
                 height: 1,
             }),
-            tagged_blocks: TaggedBlockInfo {
+            additional_info: TaggedBlockInfo {
                 metadata: Some(Metadata {
                     entries: vec![MetadataEntry {
                         key: "cust".to_string(),
@@ -1062,7 +1062,7 @@ mod document_tagged_blocks_parity {
         .unwrap();
 
         let metadata = reparsed
-            .tagged_blocks
+            .additional_info
             .metadata
             .expect("expected document shmd metadata");
         assert_eq!(metadata.entries.len(), 1);
@@ -1191,7 +1191,7 @@ mod remaining_tagged_block_parity {
         layer.blend_mode = Some(BlendMode::Normal);
         layer.opacity = Some(1.0);
         layer.additional_info.name = Some("Text".to_string());
-        layer.tagged_blocks.text = Some(psd_great::additional_info::TextLayerData {
+        layer.additional_info.text = Some(psd_great::additional_info::TextLayerData {
             transform: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             text: "Hello".to_string(),
             text_version: 50,
@@ -1228,7 +1228,7 @@ mod remaining_tagged_block_parity {
         )
         .expect("read");
         assert!(
-            reparsed.tagged_blocks.text_engine.is_some(),
+            reparsed.additional_info.text_engine.is_some(),
             "expected synthesized Txt2"
         );
     }
@@ -1243,7 +1243,7 @@ mod remaining_tagged_block_parity {
         layer.blend_mode = Some(BlendMode::Normal);
         layer.opacity = Some(1.0);
         layer.additional_info.name = Some("Annotated".to_string());
-        layer.tagged_blocks.annotations = Some(vec![psd_great::additional_info::AnnotationItem {
+        layer.additional_info.annotations = Some(vec![psd_great::additional_info::AnnotationItem {
             x: 10,
             y: 20,
             color_l: 1,
@@ -1273,7 +1273,7 @@ mod remaining_tagged_block_parity {
         .expect("read");
         let reparsed_layer = reparsed.children.unwrap().into_iter().next().unwrap();
         let annotations = reparsed_layer
-            .tagged_blocks
+            .additional_info
             .annotations
             .expect("expected annotations");
         assert_eq!(annotations.len(), 1, "should have one annotation");
@@ -1295,7 +1295,8 @@ mod remaining_tagged_block_parity {
             layer.blend_mode = Some(BlendMode::Normal);
             layer.opacity = Some(1.0);
             layer.additional_info.name = Some("Linked".to_string());
-            layer.tagged_blocks.linked_files = Some(psd_great::additional_info::LinkedFilesBlock {
+            layer.additional_info.linked_files =
+                Some(psd_great::additional_info::LinkedFilesBlock {
                 key: psd_great::PsdStringCode::from(*test_key),
                 items: vec![psd_great::LinkedFile {
                     id: "id".to_string(),
@@ -1338,7 +1339,7 @@ mod remaining_tagged_block_parity {
             };
             assert_eq!(
                 reparsed_layer
-                    .tagged_blocks
+                    .additional_info
                     .linked_files
                     .as_ref()
                     .map(|b| b.key.as_ref()),
@@ -1511,7 +1512,7 @@ mod remaining_tagged_block_parity {
             psd_great::descriptor::DescriptorValue::DataBytes(serialized_engine_data),
         );
 
-        layer.tagged_blocks.text = Some(psd_great::additional_info::TextLayerData {
+        layer.additional_info.text = Some(psd_great::additional_info::TextLayerData {
             transform: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             text: "Hello".to_string(),
             text_version: 50,
@@ -1548,7 +1549,7 @@ mod remaining_tagged_block_parity {
         )
         .expect("read");
 
-        let txt2 = reparsed.tagged_blocks.text_engine.expect("Txt2");
+        let txt2 = reparsed.additional_info.text_engine.expect("Txt2");
         let map = match txt2.data {
             psd_great::engine_data::EngineValue::Object(map) => map,
             _ => panic!("expected object"),

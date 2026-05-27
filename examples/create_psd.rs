@@ -1,9 +1,9 @@
 //! Example: Create a simple PSD from scratch
 //!
 //! This example demonstrates how to create a new PSD document programmatically
-//! with layers, effects, and write it to a file.
+//! with layers and write it to a file.
 
-use psd_great::layer::SectionDivider;
+use psd_great::additional_info::SectionDivider;
 use psd_great::*;
 use std::env;
 use std::fs::File;
@@ -56,35 +56,6 @@ fn main() -> Result<()> {
         ..Default::default()
     });
 
-    // Create a layer with a drop shadow effect
-    let shadow_effect = LayerEffectShadow {
-        present: Some(true),
-        show_in_dialog: None,
-        enabled: Some(true),
-        blend_mode: Some(BlendMode::Multiply),
-        color: Some(Color::RGBA(RGBA {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 255,
-        })),
-        opacity: Some(0.75),
-        angle: Some(120.0),
-        distance: Some(UnitsValue {
-            units: Units::Pixels,
-            value: 10.0,
-        }),
-        size: Some(UnitsValue {
-            units: Units::Pixels,
-            value: 5.0,
-        }),
-        use_global_light: Some(true),
-        antialiased: Some(true),
-        contour: None,
-        choke: None,
-        layer_conceals: None,
-    };
-
     layers.push(Layer {
         top: Some(100),
         left: Some(100),
@@ -96,23 +67,9 @@ fn main() -> Result<()> {
         hidden: Some(false),
         clipping: Some(0),
         additional_info: LayerAdditionalInfo {
-            name: Some("Layer with Shadow".to_string()),
+            name: Some("Foreground Layer".to_string()),
             id: Some(2),
             layer_color: Some(LayerColor::Blue),
-            effects: Some(LayerEffectsInfo {
-                disabled: Some(false),
-                scale: Some(100.0),
-                drop_shadow: Some(vec![shadow_effect]),
-                inner_shadow: None,
-                outer_glow: None,
-                inner_glow: None,
-                bevel: None,
-                solid_fill: None,
-                satin: None,
-                stroke: None,
-                gradient_overlay: None,
-                pattern_overlay: None,
-            }),
             ..Default::default()
         },
         ..Default::default()
@@ -127,7 +84,7 @@ fn main() -> Result<()> {
             id: Some(3),
             section_divider: Some(SectionDivider {
                 divider_type: SectionDividerType::OpenFolder,
-                key: None,
+                blend_mode: None,
                 sub_type: None,
             }),
             layer_color: Some(LayerColor::Green),

@@ -133,69 +133,11 @@ fn extract_layer_info(layer: &Layer, depth: usize) -> LayerInfo {
     let has_image_data = layer.image_data.is_some();
 
     let (has_effects, effects_summary) = if let Some(ref effects) = layer.additional_info.effects {
-        let mut summary = Vec::new();
-
-        if let Some(ref shadows) = effects.drop_shadow {
-            if !shadows.is_empty() && shadows[0].enabled.unwrap_or(false) {
-                summary.push("Drop Shadow".to_string());
-            }
+        let mut summary = vec![format!("Version {}", effects.version)];
+        if effects.descriptor.is_some() {
+            summary.push("Descriptor".to_string());
         }
-
-        if let Some(ref shadows) = effects.inner_shadow {
-            if !shadows.is_empty() && shadows[0].enabled.unwrap_or(false) {
-                summary.push("Inner Shadow".to_string());
-            }
-        }
-
-        if let Some(ref glow) = effects.outer_glow {
-            if glow.enabled.unwrap_or(false) {
-                summary.push("Outer Glow".to_string());
-            }
-        }
-
-        if let Some(ref glow) = effects.inner_glow {
-            if glow.enabled.unwrap_or(false) {
-                summary.push("Inner Glow".to_string());
-            }
-        }
-
-        if let Some(ref bevel) = effects.bevel {
-            if bevel.enabled.unwrap_or(false) {
-                summary.push("Bevel & Emboss".to_string());
-            }
-        }
-
-        if let Some(ref satin) = effects.satin {
-            if satin.enabled.unwrap_or(false) {
-                summary.push("Satin".to_string());
-            }
-        }
-
-        if let Some(ref stroke) = effects.stroke {
-            if !stroke.is_empty() && stroke[0].enabled.unwrap_or(false) {
-                summary.push("Stroke".to_string());
-            }
-        }
-
-        if let Some(ref overlay) = effects.solid_fill {
-            if !overlay.is_empty() && overlay[0].enabled.unwrap_or(false) {
-                summary.push("Color Overlay".to_string());
-            }
-        }
-
-        if let Some(ref overlay) = effects.gradient_overlay {
-            if !overlay.is_empty() && overlay[0].enabled.unwrap_or(false) {
-                summary.push("Gradient Overlay".to_string());
-            }
-        }
-
-        if let Some(ref overlay) = effects.pattern_overlay {
-            if overlay.enabled.unwrap_or(false) {
-                summary.push("Pattern Overlay".to_string());
-            }
-        }
-
-        (!summary.is_empty(), summary)
+        (true, summary)
     } else {
         (false, Vec::new())
     };

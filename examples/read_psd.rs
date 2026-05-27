@@ -130,7 +130,16 @@ fn print_layers(layers: &[Layer], indent: usize) {
 
         // Print effects
         if let Some(ref effects) = layer.additional_info.effects {
-            print_layer_effects(effects, indent + 1);
+            println!(
+                "{}    Effects descriptor: version {}{}",
+                prefix,
+                effects.version,
+                if effects.descriptor.is_some() {
+                    " with descriptor"
+                } else {
+                    ""
+                }
+            );
         }
 
         // Print text data
@@ -148,52 +157,6 @@ fn print_layers(layers: &[Layer], indent: usize) {
         if let Some(ref children) = layer.children {
             print_layers(children, indent + 1);
         }
-    }
-}
-
-fn print_layer_effects(effects: &LayerEffectsInfo, indent: usize) {
-    let prefix = "  ".repeat(indent);
-    println!("{}✨ Effects:", prefix);
-
-    if effects.disabled == Some(true) {
-        println!("{}  (disabled)", prefix);
-    }
-
-    if let Some(ref shadows) = effects.drop_shadow {
-        for shadow in shadows {
-            if shadow.enabled == Some(true) {
-                println!("{}  • Drop Shadow", prefix);
-                if let Some(angle) = shadow.angle {
-                    println!("{}    Angle: {}°", prefix, angle);
-                }
-                if let Some(ref distance) = shadow.distance {
-                    println!(
-                        "{}    Distance: {}{:?}",
-                        prefix, distance.value, distance.units
-                    );
-                }
-            }
-        }
-    }
-
-    if let Some(ref glow) = effects.outer_glow {
-        if glow.enabled == Some(true) {
-            println!("{}  • Outer Glow", prefix);
-        }
-    }
-
-    if let Some(ref glow) = effects.inner_glow {
-        if glow.enabled == Some(true) {
-            println!("{}  • Inner Glow", prefix);
-        }
-    }
-
-    if effects.bevel.is_some() {
-        println!("{}  • Bevel & Emboss", prefix);
-    }
-
-    if effects.stroke.is_some() {
-        println!("{}  • Stroke", prefix);
     }
 }
 

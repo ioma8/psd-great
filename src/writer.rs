@@ -442,7 +442,7 @@ fn write_layer_and_mask_info(
         write_global_layer_mask_info(writer, psd.global_layer_mask_info.as_ref())?;
 
         // Write document-level tagged blocks
-        crate::additional_info::write_layer_additional_info(writer, &psd.tagged_blocks)?;
+        crate::additional_info::write_layer_additional_info(writer, &psd.additional_info)?;
 
         Ok(())
     })
@@ -662,7 +662,7 @@ fn write_layer_record(
         writer.write_pascal_string(name, 4)?;
 
         // Write tagged blocks (additional layer info)
-        crate::additional_info::write_layer_additional_info(writer, &layer.tagged_blocks)?;
+        crate::additional_info::write_layer_additional_info(writer, &layer.additional_info)?;
 
         Ok(())
     })?;
@@ -1033,7 +1033,7 @@ fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
 
     if let Some(ref mut layers) = psd.children {
         for layer in layers.iter_mut() {
-            if let Some(ref mut text) = layer.tagged_blocks.text {
+            if let Some(ref mut text) = layer.additional_info.text {
                 // Inject TextIndex into the text descriptor
                 let text_index = text_objects.len() as i32;
                 if let Some(ref mut desc) = text.text_data {
@@ -1114,11 +1114,7 @@ fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
     }
 
     if !text_objects.is_empty() {
-        let existing = psd
-            .tagged_blocks
-            .text_engine
-            .as_ref()
-            .map(|b| b.data.clone());
+        let existing = psd.additional_info.text_engine.as_ref().map(|b| b.data.clone());
         let mut synthesized = match existing {
             Some(EngineValue::Object(map)) => map,
             _ => HashMap::new(),
@@ -1137,7 +1133,7 @@ fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
                 .or_insert(doc_resources);
         }
 
-        psd.tagged_blocks.text_engine = Some(crate::additional_info::TextEngineBlock {
+        psd.additional_info.text_engine = Some(crate::additional_info::TextEngineBlock {
             data: EngineValue::Object(synthesized),
         });
     }
