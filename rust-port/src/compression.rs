@@ -183,73 +183,141 @@ pub fn compress_zip(input: &[u8]) -> Result<Vec<u8>> {
         .map_err(|e| PsdError::Compression(format!("ZIP compression finish failed: {}", e)))
 }
 
-/// Decompress ZIP with prediction
+/// Decompress ZIP-with-prediction for a single PSD channel.
 ///
-/// Prediction is used to improve compression by storing differences between adjacent pixels.
+/// `depth` is bits per sample: 8, 16, or 32. Data arrives one channel at a time.
 pub fn decompress_zip_with_prediction(
     input: &[u8],
     width: usize,
     height: usize,
-    channels: usize,
+    depth: u16,
 ) -> Result<Vec<u8>> {
-    let output_size = width * height * channels;
-    let mut data = decompress_zip(input, output_size)?;
-    
-    // Reverse prediction
-    reverse_prediction(&mut data, width, height, channels);
-    
+    let bytes_per_sample = match depth {
+        8  => 1usize,
+        16 => 2,
+        32 => 4,
+        _  => return Err(PsdError::Compression(format!("Unsupported depth: {}", depth))),
+    };
+    let expected = width * height * bytes_per_sample;
+    let mut data = decompress_zip(input, expected)?;
+
+    match depth {
+        8 => {
+            for row in 0..height {
+                let start = row * width;
+                for x in 1..width {
+                    data[start + x] = data[start + x].wrapping_add(data[start + x - 1]);
+                }
+            }
+        }
+        16 => {
+            for row in 0..height {
+                let value_start = row * width;
+                for vi in (value_start + 1)..(value_start + width) {
+                    let bi = vi * 2;
+                    let pi = bi - 2;
+                    let delta = ((data[bi] as u16) << 8) | data[bi + 1] as u16;
+                    let prev  = ((data[pi] as u16) << 8) | data[pi + 1] as u16;
+                    let val   = delta.wrapping_add(prev);
+                    data[bi]     = (val >> 8) as u8;
+                    data[bi + 1] = (val & 0xff) as u8;
+                }
+            }
+        }
+        32 => {
+            let row_bytes = width * 4;
+            let mut reordered = vec![0u8; row_bytes];
+            for row in 0..height {
+                let row_off = row * row_bytes;
+                reordered.copy_from_slice(&data[row_off..row_off + row_bytes]);
+                // Undo 8-bit delta per plane
+                for plane in 0..4usize {
+                    let base = plane * width;
+                    for i in 1..width {
+                        reordered[base + i] = reordered[base + i].wrapping_add(reordered[base + i - 1]);
+                    }
+                }
+                // De-interleave: planes → pixels
+                for pixel in 0..width {
+                    let dst = row_off + pixel * 4;
+                    data[dst]     = reordered[pixel];
+                    data[dst + 1] = reordered[width + pixel];
+                    data[dst + 2] = reordered[width * 2 + pixel];
+                    data[dst + 3] = reordered[width * 3 + pixel];
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
     Ok(data)
 }
 
-/// Compress data using ZIP with prediction
+/// Compress a single PSD channel with ZIP-with-prediction.
+///
+/// `depth` is bits per sample: 8, 16, or 32.
 pub fn compress_zip_with_prediction(
     input: &[u8],
     width: usize,
     height: usize,
-    channels: usize,
+    depth: u16,
 ) -> Result<Vec<u8>> {
-    let mut data = input.to_vec();
-    
-    // Apply prediction
-    apply_prediction(&mut data, width, height, channels);
-    
-    compress_zip(&data)
-}
+    match depth {
+        8 | 16 | 32 => {}
+        _ => return Err(PsdError::Compression(format!("Unsupported depth: {}", depth))),
+    }
+    let mut predicted = input.to_vec();
 
-/// Apply prediction filter to improve compression
-fn apply_prediction(data: &mut [u8], width: usize, height: usize, channels: usize) {
-    for y in 0..height {
-        for c in 0..channels {
-            let row_start = y * width * channels + c;
-            
-            for x in (1..width).rev() {
-                let pos = row_start + x * channels;
-                let prev_pos = row_start + (x - 1) * channels;
-                
-                if pos < data.len() && prev_pos < data.len() {
-                    data[pos] = data[pos].wrapping_sub(data[prev_pos]);
+    match depth {
+        8 => {
+            // Right-to-left byte delta per row
+            for row in 0..height {
+                let start = row * width;
+                for x in (1..width).rev() {
+                    predicted[start + x] = predicted[start + x].wrapping_sub(predicted[start + x - 1]);
                 }
             }
         }
-    }
-}
-
-/// Reverse prediction filter after decompression
-fn reverse_prediction(data: &mut [u8], width: usize, height: usize, channels: usize) {
-    for y in 0..height {
-        for c in 0..channels {
-            let row_start = y * width * channels + c;
-            
-            for x in 1..width {
-                let pos = row_start + x * channels;
-                let prev_pos = row_start + (x - 1) * channels;
-                
-                if pos < data.len() && prev_pos < data.len() {
-                    data[pos] = data[pos].wrapping_add(data[prev_pos]);
+        16 => {
+            // Right-to-left big-endian u16 delta per row
+            for row in 0..height {
+                let value_start = row * width;
+                for vi in (value_start + 1..value_start + width).rev() {
+                    let bi = vi * 2;
+                    let pi = bi - 2;
+                    let cur  = ((predicted[bi] as u16) << 8) | predicted[bi + 1] as u16;
+                    let prev = ((predicted[pi] as u16) << 8) | predicted[pi + 1] as u16;
+                    let delta = cur.wrapping_sub(prev);
+                    predicted[bi]     = (delta >> 8) as u8;
+                    predicted[bi + 1] = (delta & 0xff) as u8;
                 }
             }
         }
+        32 => {
+            let row_bytes = width * 4;
+            let mut reordered = vec![0u8; row_bytes];
+            for row in 0..height {
+                let row_off = row * row_bytes;
+                // Pixels → byte-planes
+                for pixel in 0..width {
+                    let src = row_off + pixel * 4;
+                    reordered[pixel]             = predicted[src];
+                    reordered[width + pixel]     = predicted[src + 1];
+                    reordered[width * 2 + pixel] = predicted[src + 2];
+                    reordered[width * 3 + pixel] = predicted[src + 3];
+                }
+                // Right-to-left 8-bit delta per plane
+                for plane in 0..4usize {
+                    let base = plane * width;
+                    for i in (1..width).rev() {
+                        reordered[base + i] = reordered[base + i].wrapping_sub(reordered[base + i - 1]);
+                    }
+                }
+                predicted[row_off..row_off + row_bytes].copy_from_slice(&reordered);
+            }
+        }
+        _ => unreachable!(),
     }
+    compress_zip(&predicted)
 }
 
 #[cfg(test)]
@@ -294,13 +362,29 @@ mod tests {
     }
 
     #[test]
-    fn test_prediction() {
-        let mut data = vec![10, 20, 30, 40, 50];
-        let original = data.clone();
-        
-        apply_prediction(&mut data, 5, 1, 1);
-        reverse_prediction(&mut data, 5, 1, 1);
-        
-        assert_eq!(data, original);
+    fn zip_prediction_8bit_roundtrip() {
+        let data: Vec<u8> = vec![10, 20, 30, 40, 50, 60, 70, 80];
+        let compressed = compress_zip_with_prediction(&data, 4, 2, 8).unwrap();
+        let recovered = decompress_zip_with_prediction(&compressed, 4, 2, 8).unwrap();
+        assert_eq!(recovered, data);
+    }
+
+    #[test]
+    fn zip_prediction_16bit_roundtrip() {
+        // 3 big-endian u16 values: 256, 512, 768
+        let data: Vec<u8> = vec![0x01, 0x00, 0x02, 0x00, 0x03, 0x00];
+        let compressed = compress_zip_with_prediction(&data, 3, 1, 16).unwrap();
+        let recovered = decompress_zip_with_prediction(&compressed, 3, 1, 16).unwrap();
+        assert_eq!(recovered, data);
+    }
+
+    #[test]
+    fn zip_prediction_32bit_roundtrip() {
+        // 2 IEEE-754 floats: 1.0f32 and 2.0f32 (big-endian bytes)
+        let data: Vec<u8> = vec![0x3f, 0x80, 0x00, 0x00,
+                                  0x40, 0x00, 0x00, 0x00];
+        let compressed = compress_zip_with_prediction(&data, 2, 1, 32).unwrap();
+        let recovered = decompress_zip_with_prediction(&compressed, 2, 1, 32).unwrap();
+        assert_eq!(recovered, data);
     }
 }
