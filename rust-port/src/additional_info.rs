@@ -212,10 +212,18 @@ pub struct ArtboardData {
     pub background_type: Option<i32>,
 }
 
-/// Metadata
+/// Single entry inside a shmd block
 #[derive(Debug, Clone, PartialEq)]
+pub struct MetadataEntry {
+    pub key: String,
+    pub copy_on_sheet_change: bool,
+    pub data: Vec<u8>,
+}
+
+/// Metadata (shmd block — zero or more tagged entries)
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Metadata {
-    pub descriptor: Descriptor,
+    pub entries: Vec<MetadataEntry>,
 }
 
 impl<R: Read + Seek> PsdReader<R> {
@@ -242,7 +250,7 @@ impl<R: Read + Seek> PsdReader<R> {
             "PlLd" | "SoLd" => self.read_placed_layer(info, key, length)?,
             "artb" | "artd" => self.read_artboard(info, key, length)?,
             "sn2P" => self.read_using_aligned_rendering(info)?,
-            "shmd" | "cust" => self.read_metadata(info, length)?,
+            "shmd" => self.read_metadata(info, length)?,
             _ => {
                 // Store unknown sections
                 let data = self.read_bytes(length)?;
@@ -643,12 +651,20 @@ impl<R: Read + Seek> PsdReader<R> {
         Ok(())
     }
 
-    /// Read metadata (shmd/cust)
+    /// Read metadata (shmd)
     fn read_metadata(&mut self, info: &mut LayerAdditionalInfo, _length: usize) -> Result<()> {
-        let _count = self.read_u32()?;
-        let descriptor = self.read_version_and_descriptor()?;
-        
-        info.metadata = Some(Metadata { descriptor });
+        let count = self.read_u32()?;
+        let mut entries = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let _sig = self.read_signature()?; // "8BIM"
+            let key = self.read_signature()?;
+            let copy_on_sheet_change = self.read_u8()? != 0;
+            self.skip_bytes(3)?;
+            let data_length = self.read_u32()? as usize;
+            let data = self.read_bytes(data_length)?;
+            entries.push(MetadataEntry { key, copy_on_sheet_change, data });
+        }
+        info.metadata = Some(Metadata { entries });
         Ok(())
     }
 }
@@ -717,6 +733,19 @@ impl PsdWriter {
                     temp_writer.write_signature(source)?;
                 }
             }
+            "shmd" => {
+                if let Some(ref metadata) = info.metadata {
+                    temp_writer.write_u32(metadata.entries.len() as u32)?;
+                    for entry in &metadata.entries {
+                        temp_writer.write_signature("8BIM")?;
+                        temp_writer.write_signature(&entry.key)?;
+                        temp_writer.write_u8(if entry.copy_on_sheet_change { 1 } else { 0 })?;
+                        temp_writer.write_zeros(3)?;
+                        temp_writer.write_u32(entry.data.len() as u32)?;
+                        temp_writer.write_bytes(&entry.data)?;
+                    }
+                }
+            }
             _ => {
                 // Write unknown sections
                 if let Some(data) = info.unknown.get(key) {
@@ -779,7 +808,7 @@ pub fn write_layer_additional_info(
     info: &LayerAdditionalInfo,
 ) -> Result<()> {
     let sections = vec![
-        "luni", "lyid", "lclr", "lsct", "clbl", "infx", "knko", "lspf", "lnsr",
+        "luni", "lyid", "lclr", "lsct", "clbl", "infx", "knko", "lspf", "lnsr", "shmd",
     ];
     
     for key in sections {
@@ -859,6 +888,44 @@ mod tests {
         reader.read_additional_info("lclr", length, &mut read_info).unwrap();
         
         assert_eq!(read_info.layer_color, Some(LayerColor::Blue));
+    }
+
+    #[test]
+    fn test_shmd_roundtrip() {
+        let mut info = LayerAdditionalInfo::default();
+        info.metadata = Some(Metadata {
+            entries: vec![
+                MetadataEntry {
+                    key: "mlst".to_string(),
+                    copy_on_sheet_change: false,
+                    data: vec![0x01, 0x02, 0x03, 0x04],
+                },
+                MetadataEntry {
+                    key: "cust".to_string(),
+                    copy_on_sheet_change: true,
+                    data: vec![0xAB, 0xCD],
+                },
+            ],
+        });
+
+        let mut writer = PsdWriter::new(256);
+        let length = writer.write_additional_info("shmd", &info).unwrap();
+
+        let buffer = writer.into_buffer();
+        let cursor = std::io::Cursor::new(buffer);
+        let mut reader = PsdReader::new(cursor, Default::default());
+
+        let mut read_info = LayerAdditionalInfo::default();
+        reader.read_additional_info("shmd", length, &mut read_info).unwrap();
+
+        let meta = read_info.metadata.unwrap();
+        assert_eq!(meta.entries.len(), 2);
+        assert_eq!(meta.entries[0].key, "mlst");
+        assert_eq!(meta.entries[0].copy_on_sheet_change, false);
+        assert_eq!(meta.entries[0].data, vec![0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(meta.entries[1].key, "cust");
+        assert_eq!(meta.entries[1].copy_on_sheet_change, true);
+        assert_eq!(meta.entries[1].data, vec![0xAB, 0xCD]);
     }
 
     #[test]
