@@ -746,6 +746,121 @@ impl PsdWriter {
                     }
                 }
             }
+            "TySh" => {
+                if let Some(ref text) = info.text {
+                    temp_writer.write_i16(1)?; // version
+                    for &v in &text.transform {
+                        temp_writer.write_f64(v)?;
+                    }
+                    temp_writer.write_i16(50)?; // text version
+                    if let Some(ref td) = text.text_data {
+                        temp_writer.write_version_and_descriptor(text.descriptor_version, td)?;
+                    }
+                    temp_writer.write_i16(text.warp_version as i16)?;
+                    if let Some(ref wd) = text.warp_data {
+                        temp_writer.write_version_and_descriptor(1, wd)?;
+                    }
+                    temp_writer.write_f32(text.left)?;
+                    temp_writer.write_f32(text.top)?;
+                    temp_writer.write_f32(text.right)?;
+                    temp_writer.write_f32(text.bottom)?;
+                }
+            }
+            "SoCo" | "GdFl" | "PtFl" => {
+                if let Some(ref vf) = info.vector_fill {
+                    temp_writer.write_version_and_descriptor(16, &vf.data)?;
+                }
+            }
+            "vscg" | "vstk" => {
+                if let Some(ref vs) = info.vector_stroke {
+                    temp_writer.write_u32(vs.version)?;
+                    temp_writer.write_version_and_descriptor(16, &vs.descriptor)?;
+                }
+            }
+            "vmsk" | "vsms" => {
+                if let Some(ref vm) = info.vector_mask {
+                    temp_writer.write_u32(vm.version)?;
+                    let flags = (vm.invert as u32)
+                        | ((vm.not_link as u32) << 1)
+                        | ((vm.disable as u32) << 2);
+                    temp_writer.write_u32(flags)?;
+                    for path in &vm.paths {
+                        // Subpath length record
+                        let selector = match path.path_type {
+                            PathType::Closed => 0u16,
+                            PathType::Open => 3u16,
+                        };
+                        temp_writer.write_u16(selector)?;
+                        temp_writer.write_u16(path.points.len() as u16)?;
+                        temp_writer.write_zeros(22)?;
+                        // Bezier knot records
+                        for point in &path.points {
+                            temp_writer.write_u16(if point.linked { 1 } else { 2 })?;
+                            temp_writer.write_fixed_point_path_32(point.backward.y)?;
+                            temp_writer.write_fixed_point_path_32(point.backward.x)?;
+                            temp_writer.write_fixed_point_path_32(point.anchor.y)?;
+                            temp_writer.write_fixed_point_path_32(point.anchor.x)?;
+                            temp_writer.write_fixed_point_path_32(point.forward.y)?;
+                            temp_writer.write_fixed_point_path_32(point.forward.x)?;
+                        }
+                    }
+                }
+            }
+            "vogk" => {
+                if let Some(ref data) = info.vector_origination {
+                    temp_writer.write_bytes(data)?;
+                }
+            }
+            "lrFX" | "lfx2" => {
+                if let Some(ref le) = info.layer_effects {
+                    temp_writer.write_u32(le.version)?;
+                    if key == "lfx2" {
+                        if let Some(ref desc) = le.descriptor {
+                            temp_writer.write_version_and_descriptor(16, desc)?;
+                        }
+                    }
+                }
+            }
+            "PlLd" | "SoLd" => {
+                if let Some(ref pl) = info.placed_layer {
+                    temp_writer.write_signature(if key == "PlLd" { "plcL" } else { "sold" })?;
+                    temp_writer.write_u32(3)?; // version
+                    let id_bytes = pl.id.as_bytes();
+                    temp_writer.write_bytes(id_bytes)?;
+                    // Pad id to 32 bytes
+                    if id_bytes.len() < 32 {
+                        temp_writer.write_zeros(32 - id_bytes.len())?;
+                    }
+                    temp_writer.write_i32(pl.page.unwrap_or(0))?;
+                    temp_writer.write_i32(pl.total_pages.unwrap_or(0))?;
+                    temp_writer.write_i32(pl.anti_alias_policy.unwrap_or(0))?;
+                    temp_writer.write_i32(pl.placed_layer_type.unwrap_or(0))?;
+                    for &v in &pl.transform {
+                        temp_writer.write_f64(v)?;
+                    }
+                    if let Some(ref warp) = pl.warp {
+                        temp_writer.write_version_and_descriptor(16, warp)?;
+                    }
+                }
+            }
+            "artb" | "artd" => {
+                if let Some(ref ab) = info.artboard {
+                    use crate::descriptor::{Descriptor, DescriptorValue};
+                    let mut rect_desc = Descriptor { name: String::new(), class_id: "Rct1".to_string(), items: std::collections::HashMap::new() };
+                    rect_desc.items.insert("Top ".to_string(), DescriptorValue::Double(ab.rect.top));
+                    rect_desc.items.insert("Left".to_string(), DescriptorValue::Double(ab.rect.left));
+                    rect_desc.items.insert("Btom".to_string(), DescriptorValue::Double(ab.rect.bottom));
+                    rect_desc.items.insert("Rght".to_string(), DescriptorValue::Double(ab.rect.right));
+                    let mut desc = Descriptor { name: String::new(), class_id: "artd".to_string(), items: std::collections::HashMap::new() };
+                    desc.items.insert("artboardRect".to_string(), DescriptorValue::Descriptor(rect_desc));
+                    temp_writer.write_version_and_descriptor(16, &desc)?;
+                }
+            }
+            "sn2P" => {
+                if let Some(using) = info.using_aligned_rendering {
+                    temp_writer.write_u8(if using { 1 } else { 0 })?;
+                }
+            }
             _ => {
                 // Write unknown sections
                 if let Some(data) = info.unknown.get(key) {
@@ -808,7 +923,9 @@ pub fn write_layer_additional_info(
     info: &LayerAdditionalInfo,
 ) -> Result<()> {
     let sections = vec![
-        "luni", "lyid", "lclr", "lsct", "clbl", "infx", "knko", "lspf", "lnsr", "shmd",
+        "luni", "lyid", "lclr", "lsct", "clbl", "infx", "knko", "lspf", "lnsr",
+        "TySh", "SoCo", "GdFl", "PtFl", "vstk", "vmsk", "vogk", "lfx2", "lrFX",
+        "PlLd", "SoLd", "artb", "sn2P", "shmd",
     ];
     
     for key in sections {
