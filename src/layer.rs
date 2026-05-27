@@ -587,9 +587,9 @@ pub struct EffectParams {
     pub zoom_origin: f64,
 }
 
-/// Timeline
+/// Animation timeline data (animation model, distinct from the resource-level Timeline)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Timeline {
+pub struct AnimationTimeline {
     pub start: Fraction,
     pub duration: Fraction,
     #[serde(rename = "inTime")]

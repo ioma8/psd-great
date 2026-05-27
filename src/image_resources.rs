@@ -346,7 +346,7 @@ pub struct Slice {
     pub associated_layer_id: u32,
     pub name: String,
     pub slice_type: PsdU32Code,
-    pub bounds: Bounds,
+    pub bounds: SliceBounds,
     pub url: String,
     pub target: String,
     pub message: String,
@@ -361,9 +361,9 @@ pub struct Slice {
     pub source_type: Option<PsdU32Code>,
 }
 
-/// Bounds rectangle
+/// Rectangle bounds for slices (integer pixel coordinates)
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Bounds {
+pub struct SliceBounds {
     pub top: i32,
     pub left: i32,
     pub bottom: i32,
@@ -501,7 +501,7 @@ impl<R: Read + Seek> PsdReader<R> {
                 associated_layer_id,
                 name,
                 slice_type: PsdU32Code(slice_type),
-                bounds: Bounds {
+                bounds: SliceBounds {
                     top,
                     left,
                     bottom,
@@ -1559,7 +1559,7 @@ mod tests {
                 associated_layer_id: 3,
                 name: "slice".to_string(),
                 slice_type: PsdU32Code(1),
-                bounds: Bounds {
+                bounds: SliceBounds {
                     top: 10,
                     left: 20,
                     bottom: 30,
