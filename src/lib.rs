@@ -59,8 +59,9 @@ pub use error::{PsdError, Result};
 pub use helpers::{from_blend_mode, has_alpha, to_blend_mode};
 pub use additional_info::LayerAdditionalInfo;
 pub use image_resources::ImageResources;
+pub use adjustments::AdjustmentLayer;
 pub use layer::{
-    AdjustmentLayer, BezierKnot, BezierPath, Layer, LayerMaskData,
+    BezierKnot, BezierPath, Layer, LayerMaskData,
     LayerVectorMask, LinkedFile, PatternInfo, PlacedLayer, VectorContent,
 };
 pub use psd::{Annotation, GlobalLayerMaskInfo, Psd, ReadOptions, WriteOptions};

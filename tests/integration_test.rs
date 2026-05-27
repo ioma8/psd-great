@@ -339,6 +339,17 @@ fn test_different_color_modes() {
 }
 
 #[test]
+fn test_adjustment_layer_comes_from_canonical_module() {
+    // This will use the canonical AdjustmentLayer from adjustments.rs
+    // once the duplicate in layer.rs is removed
+    let adjustment = adjustments::AdjustmentLayer::Invert;
+    match adjustment {
+        adjustments::AdjustmentLayer::Invert => {}
+        _ => panic!("wrong adjustment layer variant"),
+    }
+}
+
+#[test]
 fn test_canonical_shared_types_are_constructible_from_public_api() {
     let point = Point { x: 1.0, y: 2.0 };
     let fraction = Fraction {

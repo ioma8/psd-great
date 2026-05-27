@@ -1,5 +1,4 @@
 use crate::effects::LayerEffectsInfo;
-use crate::text::LayerTextData;
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 
@@ -398,26 +397,7 @@ pub struct SelectiveColorAdjustment {
 }
 
 /// Adjustment layer types
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum AdjustmentLayer {
-    Brightness(BrightnessAdjustment),
-    Levels(LevelsAdjustment),
-    Curves(CurvesAdjustment),
-    Exposure(ExposureAdjustment),
-    Vibrance(VibranceAdjustment),
-    HueSaturation(HueSaturationAdjustment),
-    ColorBalance(ColorBalanceAdjustment),
-    BlackAndWhite(BlackAndWhiteAdjustment),
-    PhotoFilter(PhotoFilterAdjustment),
-    ChannelMixer(ChannelMixerAdjustment),
-    ColorLookup(ColorLookupAdjustment),
-    Invert(InvertAdjustment),
-    Posterize(PosterizeAdjustment),
-    Threshold(ThresholdAdjustment),
-    GradientMap(GradientMapAdjustment),
-    SelectiveColor(SelectiveColorAdjustment),
-}
+
 
 /// Linked file
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -947,80 +927,6 @@ pub struct LayerRawData {
     pub large: bool,
 }
 
-/// Layer additional info
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct LayerAdditionalInfo {
-    pub name: Option<String>,
-    #[serde(rename = "nameSource")]
-    pub name_source: Option<String>,
-    pub id: Option<i32>,
-    pub version: Option<i32>,
-    pub mask: Option<LayerMaskData>,
-    #[serde(rename = "realMask")]
-    pub real_mask: Option<LayerMaskData>,
-    #[serde(rename = "blendClippedElements")]
-    pub blend_clipped_elements: Option<bool>,
-    #[serde(rename = "blendInteriorElements")]
-    pub blend_interior_elements: Option<bool>,
-    pub knockout: Option<bool>,
-    #[serde(rename = "layerMaskAsGlobalMask")]
-    pub layer_mask_as_global_mask: Option<bool>,
-    pub protected: Option<Protected>,
-    #[serde(rename = "layerColor")]
-    pub layer_color: Option<LayerColor>,
-    #[serde(rename = "referencePoint")]
-    pub reference_point: Option<Point>,
-    #[serde(rename = "sectionDivider")]
-    pub section_divider: Option<SectionDivider>,
-    #[serde(rename = "filterMask")]
-    pub filter_mask: Option<FilterMask>,
-    pub effects: Option<LayerEffectsInfo>,
-    pub text: Option<LayerTextData>,
-    pub patterns: Option<Vec<PatternInfo>>,
-    #[serde(rename = "vectorFill")]
-    pub vector_fill: Option<VectorContent>,
-    #[serde(rename = "vectorStroke")]
-    pub vector_stroke: Option<VectorStroke>,
-    #[serde(rename = "vectorMask")]
-    pub vector_mask: Option<LayerVectorMask>,
-    #[serde(rename = "usingAlignedRendering")]
-    pub using_aligned_rendering: Option<bool>,
-    pub timestamp: Option<f64>,
-    #[serde(rename = "pathList")]
-    pub path_list: Option<Vec<serde_json::Value>>,
-    pub adjustment: Option<AdjustmentLayer>,
-    #[serde(rename = "placedLayer")]
-    pub placed_layer: Option<PlacedLayer>,
-    #[serde(rename = "vectorOrigination")]
-    pub vector_origination: Option<VectorOrigination>,
-    #[serde(rename = "compositorUsed")]
-    pub compositor_used: Option<CompositorUsed>,
-    pub artboard: Option<Artboard>,
-    #[serde(rename = "fillOpacity")]
-    pub fill_opacity: Option<f64>,
-    #[serde(rename = "transparencyShapesLayer")]
-    pub transparency_shapes_layer: Option<bool>,
-    #[serde(rename = "channelBlendingRestrictions")]
-    pub channel_blending_restrictions: Option<Vec<i32>>,
-    #[serde(rename = "animationFrames")]
-    pub animation_frames: Option<Vec<AnimationFrame>>,
-    #[serde(rename = "animationFrameFlags")]
-    pub animation_frame_flags: Option<AnimationFrameFlags>,
-    pub timeline: Option<Timeline>,
-    #[serde(rename = "filterEffectsMasks")]
-    pub filter_effects_masks: Option<Vec<FilterEffectsMask>>,
-    pub comps: Option<Comps>,
-    #[serde(rename = "userMask")]
-    pub user_mask: Option<UserMask>,
-    #[serde(rename = "blendingRanges")]
-    pub blending_ranges: Option<BlendingRanges>,
-    pub vowv: Option<i32>,
-    #[serde(rename = "pixelSource")]
-    pub pixel_source: Option<PixelSource>,
-    #[serde(rename = "engineData")]
-    pub engine_data: Option<String>,
-}
-
 /// Vector origination
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VectorOrigination {
@@ -1029,44 +935,26 @@ pub struct VectorOrigination {
 }
 
 /// Layer structure
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Layer {
     pub top: Option<i32>,
     pub left: Option<i32>,
     pub bottom: Option<i32>,
     pub right: Option<i32>,
-    #[serde(rename = "blendMode")]
     pub blend_mode: Option<BlendMode>,
     pub opacity: Option<f64>,
-    #[serde(rename = "transparencyProtected")]
     pub transparency_protected: Option<bool>,
-    #[serde(rename = "effectsOpen")]
     pub effects_open: Option<bool>,
     pub hidden: Option<bool>,
     pub clipping: Option<u16>,
-    #[serde(rename = "resourceVisible")]
     pub resource_visible: Option<bool>,
-    #[serde(rename = "imageData")]
     pub image_data: Option<PixelData>,
-    #[serde(rename = "rawData")]
     pub raw_data: Option<LayerRawData>,
     pub children: Option<Vec<Layer>>,
     pub opened: Option<bool>,
-    #[serde(rename = "linkGroup")]
     pub link_group: Option<i32>,
-    #[serde(rename = "linkGroupEnabled")]
     pub link_group_enabled: Option<bool>,
-
-    #[serde(flatten)]
-    pub additional_info: LayerAdditionalInfo,
-
-    /// Parsed tagged blocks from the PSD extra data section.
-    /// Used internally for round-trip fidelity of all layer metadata.
-    #[serde(skip)]
-    pub tagged_blocks: crate::additional_info::LayerAdditionalInfo,
-
-    /// Low-level layer extra-data blending ranges.
-    #[serde(skip)]
+    pub additional_info: crate::additional_info::LayerAdditionalInfo,
     pub blending_ranges_data: Option<LayerBlendingRangesData>,
 }
 
