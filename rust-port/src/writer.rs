@@ -408,7 +408,7 @@ fn write_color_mode_data(writer: &mut PsdWriter, psd: &Psd) -> Result<()> {
                 writer.write_u8(entry.b)?;
             }
         } else if let Some(ref data) = psd.color_mode_data {
-            writer.write_bytes(data)?;
+            writer.write_bytes(&data.bytes)?;
         }
         Ok(())
     })
@@ -648,8 +648,8 @@ fn write_layer_record(
 
         // Write blending ranges
         writer.write_section(1, false, |writer| {
-            if let Some(ref bytes) = layer.blending_ranges_raw {
-                writer.write_bytes(bytes)?;
+            if let Some(ref ranges) = layer.blending_ranges_data {
+                writer.write_bytes(&serialize_layer_blending_ranges(ranges))?;
             }
             Ok(())
         })?;
@@ -992,6 +992,24 @@ fn extract_channel_data_from_rgba(
     out
 }
 
+fn serialize_layer_blending_ranges(ranges: &crate::layer::LayerBlendingRangesData) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut write_pair = |pair: &crate::layer::LayerBlendingRangePair| {
+        out.push(pair.src_black);
+        out.push(pair.src_white);
+        out.push(pair.dst_black);
+        out.push(pair.dst_white);
+    };
+
+    if let Some(ref pair) = ranges.composite_gray {
+        write_pair(pair);
+    }
+    for pair in &ranges.channels {
+        write_pair(pair);
+    }
+    out
+}
+
 /// Apply resource prewrite: map psd.path_selection_descriptor to resource 3000
 fn apply_resource_prewrite(psd: &mut Psd) {
     if let Some(ref descriptor) = psd.path_selection_descriptor.clone() {
@@ -1026,7 +1044,7 @@ fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
                 let mut paragraph_run_array = Vec::new();
 
                 if let Some(ref text_desc) = text.text_data {
-                    if let Some(crate::descriptor::DescriptorValue::RawData(engine_bytes)) =
+                    if let Some(crate::descriptor::DescriptorValue::DataBytes(engine_bytes)) =
                         text_desc.items.get("EngineData")
                     {
                         if let Ok(EngineValue::Object(engine_map)) =

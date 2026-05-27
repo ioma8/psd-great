@@ -226,7 +226,7 @@ fn read_vector_mask_paths(
                     open: false,
                     operation: Some(BooleanOperation::Combine),
                     knots,
-                    fill_rule: "nonzero".to_string(),
+                    fill_rule: crate::types::PsdStringCode::from("nonzero"),
                 });
             }
             3 => {
@@ -246,7 +246,7 @@ fn read_vector_mask_paths(
                     open: true,
                     operation: Some(BooleanOperation::Combine),
                     knots,
-                    fill_rule: "nonzero".to_string(),
+                    fill_rule: crate::types::PsdStringCode::from("nonzero"),
                 });
             }
             _ => {

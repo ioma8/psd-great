@@ -1,7 +1,7 @@
 //! Document resource postprocess/prewrite mirroring TS document-postprocess.ts and resource-postprocess.ts.
 //!
 //! Maps typed PSD document fields (e.g., variable_sets, data_sets, display_info,
-//! custom_points) to/from the low-level image resource storage (XML strings, raw bytes,
+//! custom_points) to/from the low-level image resource storage (XML strings, typed resources,
 //! descriptor resources).
 
 use crate::error::Result;
@@ -20,12 +20,12 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
         }
 
         // Map resource visibility from resource 1072
-        if let (Some(bytes), Some(layers)) = (
-            resources.resource_visibility.as_ref(),
+        if let (Some(visibility), Some(layers)) = (
+            resources.resource_visibility_typed.as_ref(),
             psd.children.as_mut(),
         ) {
-            for (layer, value) in layers.iter_mut().zip(bytes.iter()) {
-                layer.resource_visible = Some(*value == 1);
+            for (layer, value) in layers.iter_mut().zip(visibility.values.iter()) {
+                layer.resource_visible = Some(*value);
             }
         }
 
@@ -50,14 +50,17 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
             psd.descriptor_1075 = Some(desc.clone());
         }
 
-        // Map custom points raw bytes → typed custom_points
-        if let Some(bytes) = resources.custom_points.as_ref() {
-            psd.custom_points = Some(parse_custom_points(bytes));
+        if let Some(points) = resources.custom_points_typed.as_ref() {
+            psd.custom_points = Some(points.points.clone());
         }
 
-        // Map display info raw bytes → typed display_info
-        if let Some(bytes) = resources.display_info.as_ref() {
-            psd.display_info = parse_display_info(bytes);
+        if let Some(info) = resources.display_info_typed.as_ref() {
+            psd.display_info = Some(crate::psd::DisplayInfo {
+                h_res_unit: info.h_res_unit,
+                v_res_unit: info.v_res_unit,
+                width_unit: info.width_unit,
+                height_unit: info.height_unit,
+            });
         }
     }
     Ok(())
@@ -81,18 +84,13 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
 
     // Map resource visibility from layers → resource 1072
     if let Some(layers) = psd.children.as_ref() {
-        let values: Vec<u8> = layers
+        let values: Vec<bool> = layers
             .iter()
-            .map(|layer| {
-                if layer.resource_visible == Some(false) {
-                    0
-                } else {
-                    1
-                }
-            })
+            .map(|layer| layer.resource_visible != Some(false))
             .collect();
-        if values.iter().any(|value| *value == 0) {
-            resources.resource_visibility = Some(values);
+        if values.iter().any(|value| !*value) {
+            resources.resource_visibility_typed =
+                Some(crate::image_resources::ResourceVisibility { values });
         }
     }
 
@@ -117,14 +115,21 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
         resources.descriptor_resources.insert(1075, desc.clone());
     }
 
-    // Map typed custom_points → raw bytes
     if let Some(points) = psd.custom_points.as_ref() {
-        resources.custom_points = Some(build_custom_points(points));
+        resources.custom_points_typed = Some(crate::image_resources::CustomPointsResource {
+            version: 3,
+            points: points.clone(),
+        });
     }
 
-    // Map typed display_info → raw bytes
     if let Some(info) = psd.display_info.as_ref() {
-        resources.display_info = Some(build_display_info(info));
+        resources.display_info_typed = Some(crate::image_resources::DisplayInfoResource {
+            version: 1,
+            h_res_unit: info.h_res_unit,
+            v_res_unit: info.v_res_unit,
+            width_unit: info.width_unit,
+            height_unit: info.height_unit,
+        });
     }
 
     Ok(())
@@ -293,100 +298,4 @@ fn extract_tagged_cells(xml: &str) -> Vec<(String, String)> {
         }
     }
     cols
-}
-
-// ── Custom points helpers ────────────────────────────────────────────────────
-
-/// Parse custom points from raw bytes (version 3, 14 bytes per point).
-fn parse_custom_points(bytes: &[u8]) -> Vec<crate::psd::CustomPoint> {
-    let mut points = Vec::new();
-    if bytes.len() < 8 {
-        return points;
-    }
-    let version = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-    let count = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
-    let mut offset = 8;
-    for _ in 0..count {
-        if offset + 14 > bytes.len() {
-            break;
-        }
-        let y_raw = i32::from_be_bytes([
-            bytes[offset + 2],
-            bytes[offset + 3],
-            bytes[offset + 4],
-            bytes[offset + 5],
-        ]);
-        let x_raw = i32::from_be_bytes([
-            bytes[offset + 6],
-            bytes[offset + 7],
-            bytes[offset + 8],
-            bytes[offset + 9],
-        ]);
-        points.push(crate::psd::CustomPoint {
-            x: x_raw as f64 / 65536.0,
-            y: if version >= 2 {
-                y_raw as f64 / 65536.0
-            } else {
-                i16::from_be_bytes([bytes[offset + 2], bytes[offset + 3]]) as f64
-            },
-        });
-        offset += 14;
-    }
-    points
-}
-
-/// Build custom points raw bytes (14 bytes per point, fixed16.16).
-fn build_custom_points(points: &[crate::psd::CustomPoint]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(8 + points.len() * 14);
-    bytes.extend_from_slice(&3u32.to_be_bytes());
-    bytes.extend_from_slice(&(points.len() as u32).to_be_bytes());
-    for point in points {
-        let y_fixed = (point.y * 65536.0) as i32;
-        let x_fixed = (point.x * 65536.0) as i32;
-        bytes.extend_from_slice(&14i16.to_be_bytes());
-        bytes.extend_from_slice(&y_fixed.to_be_bytes());
-        bytes.extend_from_slice(&x_fixed.to_be_bytes());
-        bytes.extend_from_slice(&(-1i16).to_be_bytes());
-        bytes.extend_from_slice(&8i16.to_be_bytes());
-    }
-    bytes
-}
-
-// ── Display info helpers ─────────────────────────────────────────────────────
-
-/// Parse display info from raw bytes (28 bytes, TS-shaped).
-fn parse_display_info(bytes: &[u8]) -> Option<crate::psd::DisplayInfo> {
-    if bytes.len() < 28 {
-        return None;
-    }
-    Some(crate::psd::DisplayInfo {
-        h_res_unit: u16::from_be_bytes([bytes[2], bytes[3]]),
-        v_res_unit: u16::from_be_bytes([bytes[6], bytes[7]]),
-        width_unit: u16::from_be_bytes([bytes[10], bytes[11]]),
-        height_unit: u16::from_be_bytes([bytes[14], bytes[15]]),
-    })
-}
-
-/// Build display info raw bytes (28 bytes, TS-shaped).
-fn build_display_info(info: &crate::psd::DisplayInfo) -> Vec<u8> {
-    let mut bytes = vec![0u8; 28];
-    bytes[0] = 0;
-    bytes[1] = 1;
-    bytes[2] = (info.h_res_unit >> 8) as u8;
-    bytes[3] = (info.h_res_unit & 0xFF) as u8;
-    bytes[4] = 0;
-    bytes[5] = 1;
-    bytes[6] = (info.v_res_unit >> 8) as u8;
-    bytes[7] = (info.v_res_unit & 0xFF) as u8;
-    bytes[8] = 0;
-    bytes[9] = 1;
-    bytes[10] = (info.width_unit >> 8) as u8;
-    bytes[11] = (info.width_unit & 0xFF) as u8;
-    bytes[12] = 0;
-    bytes[13] = 1;
-    bytes[14] = (info.height_unit >> 8) as u8;
-    bytes[15] = (info.height_unit & 0xFF) as u8;
-    bytes[16] = 0;
-    bytes[17] = 1;
-    bytes
 }

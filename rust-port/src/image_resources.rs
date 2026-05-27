@@ -11,7 +11,7 @@ use crate::binrw_support::{
 use crate::descriptor::Descriptor;
 use crate::error::{PsdError, Result};
 use crate::reader::PsdReader;
-use crate::types::Color;
+use crate::types::{BlendMode, Color, LayerCompCapturedInfo, PsdIntCode, PsdU16Code, PsdU32Code};
 use crate::writer::PsdWriter;
 use std::collections::HashMap;
 use std::io::{Read, Seek};
@@ -48,11 +48,11 @@ pub struct ImageResources {
     /// Layer clipping values (resource 1026)
     pub clipping: Option<Vec<u16>>,
     /// Resource visibility (resource 1072)
-    pub resource_visibility: Option<Vec<u8>>,
-    /// Custom points raw bytes (resource 1073)
-    pub custom_points: Option<Vec<u8>>,
-    /// Display info raw bytes (resource 1036)
-    pub display_info: Option<Vec<u8>>,
+    pub resource_visibility_typed: Option<ResourceVisibility>,
+    /// Custom points (resource 1073)
+    pub custom_points_typed: Option<CustomPointsResource>,
+    /// Display info (resource 1036)
+    pub display_info_typed: Option<DisplayInfoResource>,
     /// Layer selection IDs
     pub layer_selection_ids: Option<Vec<u32>>,
     /// Alpha channel names
@@ -97,6 +97,26 @@ pub struct PathResourceRecord {
     pub closed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResourceVisibility {
+    pub values: Vec<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CustomPointsResource {
+    pub version: u32,
+    pub points: Vec<crate::psd::CustomPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisplayInfoResource {
+    pub version: u16,
+    pub h_res_unit: PsdU16Code,
+    pub v_res_unit: PsdU16Code,
+    pub width_unit: PsdU16Code,
+    pub height_unit: PsdU16Code,
+}
+
 /// Resolution information
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolutionInfo {
@@ -123,6 +143,89 @@ pub enum MeasurementUnit {
     Points = 3,
     Picas = 4,
     Columns = 5,
+}
+
+fn parse_display_info_resource(bytes: &[u8]) -> Option<DisplayInfoResource> {
+    if bytes.len() < 18 {
+        return None;
+    }
+    Some(DisplayInfoResource {
+        version: u16::from_be_bytes([bytes[0], bytes[1]]),
+        h_res_unit: PsdU16Code(u16::from_be_bytes([bytes[2], bytes[3]])),
+        v_res_unit: PsdU16Code(u16::from_be_bytes([bytes[6], bytes[7]])),
+        width_unit: PsdU16Code(u16::from_be_bytes([bytes[10], bytes[11]])),
+        height_unit: PsdU16Code(u16::from_be_bytes([bytes[14], bytes[15]])),
+    })
+}
+
+fn build_display_info_resource(info: &DisplayInfoResource) -> Vec<u8> {
+    let mut bytes = vec![0u8; 28];
+    bytes[0..2].copy_from_slice(&info.version.to_be_bytes());
+    bytes[2..4].copy_from_slice(&info.h_res_unit.0.to_be_bytes());
+    bytes[4..6].copy_from_slice(&1u16.to_be_bytes());
+    bytes[6..8].copy_from_slice(&info.v_res_unit.0.to_be_bytes());
+    bytes[8..10].copy_from_slice(&1u16.to_be_bytes());
+    bytes[10..12].copy_from_slice(&info.width_unit.0.to_be_bytes());
+    bytes[12..14].copy_from_slice(&1u16.to_be_bytes());
+    bytes[14..16].copy_from_slice(&info.height_unit.0.to_be_bytes());
+    bytes[16..18].copy_from_slice(&1u16.to_be_bytes());
+    bytes
+}
+
+fn parse_custom_points_resource(bytes: &[u8]) -> CustomPointsResource {
+    if bytes.len() < 8 {
+        return CustomPointsResource {
+            version: 0,
+            points: Vec::new(),
+        };
+    }
+    let version = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let count = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    let mut points = Vec::new();
+    let mut offset = 8;
+    for _ in 0..count {
+        if offset + 14 > bytes.len() {
+            break;
+        }
+        let y_raw = i32::from_be_bytes([
+            bytes[offset + 2],
+            bytes[offset + 3],
+            bytes[offset + 4],
+            bytes[offset + 5],
+        ]);
+        let x_raw = i32::from_be_bytes([
+            bytes[offset + 6],
+            bytes[offset + 7],
+            bytes[offset + 8],
+            bytes[offset + 9],
+        ]);
+        points.push(crate::psd::CustomPoint {
+            x: x_raw as f64 / 65536.0,
+            y: if version >= 2 {
+                y_raw as f64 / 65536.0
+            } else {
+                i16::from_be_bytes([bytes[offset + 2], bytes[offset + 3]]) as f64
+            },
+        });
+        offset += 14;
+    }
+    CustomPointsResource { version, points }
+}
+
+fn build_custom_points_resource(points: &CustomPointsResource) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(8 + points.points.len() * 14);
+    bytes.extend_from_slice(&points.version.to_be_bytes());
+    bytes.extend_from_slice(&(points.points.len() as u32).to_be_bytes());
+    for point in &points.points {
+        let y_fixed = (point.y * 65536.0) as i32;
+        let x_fixed = (point.x * 65536.0) as i32;
+        bytes.extend_from_slice(&14i16.to_be_bytes());
+        bytes.extend_from_slice(&y_fixed.to_be_bytes());
+        bytes.extend_from_slice(&x_fixed.to_be_bytes());
+        bytes.extend_from_slice(&(-1i16).to_be_bytes());
+        bytes.extend_from_slice(&8i16.to_be_bytes());
+    }
+    bytes
 }
 
 /// Print information
@@ -248,23 +351,23 @@ pub struct Slices {
 pub struct Slice {
     pub id: u32,
     pub group_id: u32,
-    pub origin: u32,
+    pub origin: PsdU32Code,
     pub associated_layer_id: u32,
     pub name: String,
-    pub slice_type: u32,
+    pub slice_type: PsdU32Code,
     pub bounds: Bounds,
     pub url: String,
     pub target: String,
     pub message: String,
     pub alt_tag: String,
     pub cell_text: String,
-    pub horizontal_align: i32,
-    pub vertical_align: i32,
+    pub horizontal_align: PsdIntCode,
+    pub vertical_align: PsdIntCode,
     pub alpha: u8,
     pub bg_color: [u8; 4],
-    pub cell_is_html: i32,
+    pub cell_is_html: bool,
     pub source_id: Option<u32>,
-    pub source_type: Option<u32>,
+    pub source_type: Option<PsdU32Code>,
 }
 
 /// Bounds rectangle
@@ -289,7 +392,7 @@ pub struct LayerComp {
     pub id: i32,
     pub name: String,
     pub comment: Option<String>,
-    pub captured_info: i32,
+    pub captured_info: LayerCompCapturedInfo,
 }
 
 /// Timeline
@@ -322,7 +425,7 @@ pub struct OnionSkins {
     pub frame_spacing: i32,
     pub min_opacity: f64,
     pub max_opacity: f64,
-    pub blend_mode: String,
+    pub blend_mode: BlendMode,
 }
 
 /// Count information group
@@ -417,10 +520,10 @@ impl<R: Read + Seek> PsdReader<R> {
             slices.push(Slice {
                 id,
                 group_id,
-                origin,
+                origin: PsdU32Code(origin),
                 associated_layer_id,
                 name,
-                slice_type,
+                slice_type: PsdU32Code(slice_type),
                 bounds: Bounds {
                     top,
                     left,
@@ -432,13 +535,13 @@ impl<R: Read + Seek> PsdReader<R> {
                 message,
                 alt_tag,
                 cell_text,
-                horizontal_align,
-                vertical_align,
+                horizontal_align: PsdIntCode(horizontal_align),
+                vertical_align: PsdIntCode(vertical_align),
                 alpha,
                 bg_color,
-                cell_is_html,
+                cell_is_html: cell_is_html != 0,
                 source_id,
-                source_type,
+                source_type: source_type.map(PsdU32Code),
             });
         }
         resources.slices = Some(Slices { version, slices });
@@ -982,7 +1085,8 @@ pub fn read_image_resources<R: Read + Seek>(
             1026 => reader.read_clipping(&mut resources, data_length)?,
             1032 => reader.read_grid_and_guides(&mut resources)?,
             1036 => {
-                resources.display_info = Some(reader.read_bytes(data_length)?);
+                let bytes = reader.read_bytes(data_length)?;
+                resources.display_info_typed = parse_display_info_resource(&bytes);
             }
             1034 => reader.read_copyright_flag(&mut resources)?,
             1035 => reader.read_url(&mut resources, data_length)?,
@@ -998,10 +1102,14 @@ pub fn read_image_resources<R: Read + Seek>(
             1039 => reader.read_icc_profile(&mut resources, data_length)?,
             1050 => reader.read_slices(&mut resources, data_length)?,
             1072 => {
-                resources.resource_visibility = Some(reader.read_bytes(data_length)?);
+                let bytes = reader.read_bytes(data_length)?;
+                resources.resource_visibility_typed = Some(ResourceVisibility {
+                    values: bytes.into_iter().map(|b| b == 1).collect(),
+                });
             }
             1073 => {
-                resources.custom_points = Some(reader.read_bytes(data_length)?);
+                let bytes = reader.read_bytes(data_length)?;
+                resources.custom_points_typed = Some(parse_custom_points_resource(&bytes));
             }
             1065 | 1074 | 1075 | 2999 | 3000 => {
                 let _version = decode_be::<U32ValueRecord>(
@@ -1136,16 +1244,28 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
         write_resource(writer, 1069, &|w| w.write_layer_selection_ids(ids))?;
     }
 
-    if let Some(ref bytes) = resources.display_info {
-        write_resource(writer, 1036, &|w| w.write_bytes(bytes))?;
+    if let Some(ref info) = resources.display_info_typed {
+        write_resource(writer, 1036, &|w| {
+            w.write_bytes(&build_display_info_resource(info))
+        })?;
     }
 
-    if let Some(ref bytes) = resources.resource_visibility {
-        write_resource(writer, 1072, &|w| w.write_bytes(bytes))?;
+    if let Some(ref visibility) = resources.resource_visibility_typed {
+        write_resource(writer, 1072, &|w| {
+            w.write_bytes(
+                &visibility
+                    .values
+                    .iter()
+                    .map(|v| if *v { 1 } else { 0 })
+                    .collect::<Vec<u8>>(),
+            )
+        })?;
     }
 
-    if let Some(ref bytes) = resources.custom_points {
-        write_resource(writer, 1073, &|w| w.write_bytes(bytes))?;
+    if let Some(ref points) = resources.custom_points_typed {
+        write_resource(writer, 1073, &|w| {
+            w.write_bytes(&build_custom_points_resource(points))
+        })?;
     }
 
     if let Some(ref slices) = resources.slices {
@@ -1165,10 +1285,10 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
             for slice in &slices.slices {
                 w.write_i32(slice.id as i32)?;
                 w.write_i32(slice.group_id as i32)?;
-                w.write_i32(slice.origin as i32)?;
+                w.write_i32(slice.origin.0 as i32)?;
                 w.write_i32(slice.associated_layer_id as i32)?;
                 w.write_slice_string(&slice.name)?;
-                w.write_i32(slice.slice_type as i32)?;
+                w.write_i32(slice.slice_type.0 as i32)?;
                 w.write_i32(slice.bounds.top)?;
                 w.write_i32(slice.bounds.left)?;
                 w.write_i32(slice.bounds.bottom)?;
@@ -1178,14 +1298,14 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
                 w.write_slice_string(&slice.message)?;
                 w.write_slice_string(&slice.alt_tag)?;
                 w.write_slice_string(&slice.cell_text)?;
-                w.write_i32(slice.horizontal_align)?;
-                w.write_i32(slice.vertical_align)?;
+                w.write_i32(slice.horizontal_align.0)?;
+                w.write_i32(slice.vertical_align.0)?;
                 w.write_u8(slice.alpha)?;
                 w.write_bytes(&slice.bg_color)?;
-                w.write_i32(slice.cell_is_html)?;
+                w.write_i32(i32::from(slice.cell_is_html))?;
                 if slices.version >= 7 {
                     w.write_u32(slice.source_id.unwrap_or(0))?;
-                    w.write_u32(slice.source_type.unwrap_or(0))?;
+                    w.write_u32(slice.source_type.unwrap_or(PsdU32Code(0)).0)?;
                 }
             }
             Ok(())
@@ -1458,10 +1578,10 @@ mod tests {
             slices: vec![Slice {
                 id: 1,
                 group_id: 2,
-                origin: 1,
+                origin: PsdU32Code(1),
                 associated_layer_id: 3,
                 name: "slice".to_string(),
-                slice_type: 1,
+                slice_type: PsdU32Code(1),
                 bounds: Bounds {
                     top: 10,
                     left: 20,
@@ -1473,13 +1593,13 @@ mod tests {
                 message: "msg".to_string(),
                 alt_tag: "alt".to_string(),
                 cell_text: "cell".to_string(),
-                horizontal_align: 3,
-                vertical_align: 5,
+                horizontal_align: PsdIntCode(3),
+                vertical_align: PsdIntCode(5),
                 alpha: 255,
                 bg_color: [1, 2, 3, 4],
-                cell_is_html: 1,
+                cell_is_html: true,
                 source_id: Some(9),
-                source_type: Some(10),
+                source_type: Some(PsdU32Code(10)),
             }],
         });
 

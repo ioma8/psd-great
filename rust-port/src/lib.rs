@@ -69,8 +69,9 @@ pub use text::{
 pub use types::{
     AntiAlias, BlendMode, BooleanOperation, ChannelID, Color, ColorMode, Compression, Fraction,
     GradientStyle, Grayscale, InterpolationMethod, Justification, LayerColor,
-    LayerCompCapturedInfo, Orientation, PixelData, Point, SectionDividerType, Units, UnitsValue,
-    WarpStyle, CMYK, FRGB, HSB, LAB, RGB, RGBA,
+    LayerCompCapturedInfo, Orientation, PixelData, Point, PsdIntCode, PsdStringCode, PsdU16Code,
+    PsdU32Code, SectionDividerType, Units, UnitsValue, WarpStyle, CMYK, FRGB, HSB, LAB, RGB,
+    RGBA,
 };
 pub use writer::{write_psd, PsdWriter};
 

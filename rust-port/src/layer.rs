@@ -63,7 +63,7 @@ pub struct BezierPath {
     pub operation: Option<BooleanOperation>,
     pub knots: Vec<BezierKnot>,
     #[serde(rename = "fillRule")]
-    pub fill_rule: String,
+    pub fill_rule: PsdStringCode,
 }
 
 /// Extra pattern info
@@ -425,17 +425,17 @@ pub struct LinkedFile {
     pub id: String,
     pub name: String,
     #[serde(rename = "type")]
-    pub file_type: Option<String>,
-    pub creator: Option<String>,
+    pub file_type: Option<PsdStringCode>,
+    pub creator: Option<PsdStringCode>,
     pub data: Option<Vec<u8>>,
     pub time: Option<String>,
     pub descriptor: Option<LinkedFileDescriptor>,
     #[serde(rename = "childDocumentID")]
-    pub child_document_id: Option<String>,
+    pub child_document_id: Option<PsdStringCode>,
     #[serde(rename = "assetModTime")]
     pub asset_mod_time: Option<f64>,
     #[serde(rename = "assetLockedState")]
-    pub asset_locked_state: Option<i32>,
+    pub asset_locked_state: Option<PsdIntCode>,
     #[serde(rename = "linkedFile")]
     pub linked_file: Option<LinkedFileInfo>,
 }
@@ -505,7 +505,7 @@ pub struct Filter {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlacedLayer {
     pub id: String,
-    pub placed: Option<String>,
+    pub placed: Option<PsdStringCode>,
     #[serde(rename = "type")]
     pub layer_type: PlacedLayerType,
     #[serde(rename = "pageNumber")]
@@ -537,7 +537,7 @@ pub struct KeyDescriptorItem {
     #[serde(rename = "keyShapeInvalidated")]
     pub key_shape_invalidated: Option<bool>,
     #[serde(rename = "keyOriginType")]
-    pub key_origin_type: Option<i32>,
+    pub key_origin_type: Option<PsdIntCode>,
     #[serde(rename = "keyOriginResolution")]
     pub key_origin_resolution: Option<f64>,
     #[serde(rename = "keyOriginRRectRadii")]
@@ -728,9 +728,9 @@ pub struct Protected {
 pub struct SectionDivider {
     #[serde(rename = "type")]
     pub divider_type: SectionDividerType,
-    pub key: Option<String>,
+    pub key: Option<PsdStringCode>,
     #[serde(rename = "subType")]
-    pub sub_type: Option<i32>,
+    pub sub_type: Option<PsdIntCode>,
 }
 
 /// Filter mask
@@ -780,7 +780,7 @@ pub struct Artboard {
     pub preset_name: Option<String>,
     pub color: Option<Color>,
     #[serde(rename = "backgroundType")]
-    pub background_type: Option<i32>,
+    pub background_type: Option<PsdIntCode>,
 }
 
 /// Rectangle
@@ -888,7 +888,7 @@ pub struct BlendRange {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PixelSource {
     #[serde(rename = "type")]
-    pub source_type: String,
+    pub source_type: PsdStringCode,
     pub origin: Point,
     pub interpretation: Interpretation,
     #[serde(rename = "frameReader")]
@@ -901,7 +901,7 @@ pub struct PixelSource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Interpretation {
     #[serde(rename = "interpretAlpha")]
-    pub interpret_alpha: String,
+    pub interpret_alpha: PsdStringCode,
     pub profile: Vec<u8>,
 }
 
@@ -1065,7 +1065,22 @@ pub struct Layer {
     #[serde(skip)]
     pub tagged_blocks: crate::additional_info::LayerAdditionalInfo,
 
-    /// Raw blending ranges data for round-trip preservation.
+    /// Low-level layer extra-data blending ranges.
     #[serde(skip)]
-    pub blending_ranges_raw: Option<Vec<u8>>,
+    pub blending_ranges_data: Option<LayerBlendingRangesData>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayerBlendingRangePair {
+    pub src_black: u8,
+    pub src_white: u8,
+    pub dst_black: u8,
+    pub dst_white: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayerBlendingRangesData {
+    #[serde(rename = "compositeGray")]
+    pub composite_gray: Option<LayerBlendingRangePair>,
+    pub channels: Vec<LayerBlendingRangePair>,
 }

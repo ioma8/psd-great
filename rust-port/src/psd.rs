@@ -66,7 +66,7 @@ pub struct GridInfo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuideInfo {
     pub location: f64,
-    pub direction: String,
+    pub direction: PsdStringCode,
 }
 
 /// Grid and guides information
@@ -82,15 +82,15 @@ pub struct ResolutionInfo {
     #[serde(rename = "horizontalResolution")]
     pub horizontal_resolution: f64,
     #[serde(rename = "horizontalResolutionUnit")]
-    pub horizontal_resolution_unit: String,
+    pub horizontal_resolution_unit: PsdStringCode,
     #[serde(rename = "widthUnit")]
-    pub width_unit: String,
+    pub width_unit: PsdStringCode,
     #[serde(rename = "verticalResolution")]
     pub vertical_resolution: f64,
     #[serde(rename = "verticalResolutionUnit")]
-    pub vertical_resolution_unit: String,
+    pub vertical_resolution_unit: PsdStringCode,
     #[serde(rename = "heightUnit")]
-    pub height_unit: String,
+    pub height_unit: PsdStringCode,
 }
 
 /// Thumbnail raw data
@@ -104,7 +104,7 @@ pub struct ThumbnailRaw {
 /// Print scale
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrintScale {
-    pub style: Option<String>,
+    pub style: Option<PsdStringCode>,
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub scale: Option<f64>,
@@ -311,12 +311,12 @@ pub struct Slice {
     pub id: i32,
     #[serde(rename = "groupId")]
     pub group_id: i32,
-    pub origin: String,
+    pub origin: PsdStringCode,
     #[serde(rename = "associatedLayerId")]
     pub associated_layer_id: i32,
     pub name: Option<String>,
     #[serde(rename = "type")]
-    pub slice_type: String,
+    pub slice_type: PsdStringCode,
     pub bounds: SliceBounds,
     pub url: String,
     pub target: String,
@@ -328,11 +328,11 @@ pub struct Slice {
     #[serde(rename = "cellText")]
     pub cell_text: String,
     #[serde(rename = "horizontalAlignment")]
-    pub horizontal_alignment: String,
+    pub horizontal_alignment: PsdStringCode,
     #[serde(rename = "verticalAlignment")]
-    pub vertical_alignment: String,
+    pub vertical_alignment: PsdStringCode,
     #[serde(rename = "backgroundColorType")]
-    pub background_color_type: String,
+    pub background_color_type: PsdStringCode,
     #[serde(rename = "backgroundColor")]
     pub background_color: RGBA,
     #[serde(rename = "topOutset")]
@@ -543,13 +543,20 @@ pub struct CustomPoint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DisplayInfo {
     #[serde(rename = "hResUnit")]
-    pub h_res_unit: u16,
+    pub h_res_unit: PsdU16Code,
     #[serde(rename = "vResUnit")]
-    pub v_res_unit: u16,
+    pub v_res_unit: PsdU16Code,
     #[serde(rename = "widthUnit")]
-    pub width_unit: u16,
+    pub width_unit: PsdU16Code,
     #[serde(rename = "heightUnit")]
-    pub height_unit: u16,
+    pub height_unit: PsdU16Code,
+}
+
+/// Generic color-mode section payload for non-indexed modes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct ColorModeSectionData {
+    pub bytes: Vec<u8>,
 }
 
 /// Main PSD document structure
@@ -580,9 +587,9 @@ pub struct Psd {
     #[serde(flatten)]
     pub additional_info: LayerAdditionalInfo,
 
-    /// Generic color mode data (preserved for non-Indexed modes)
+    /// Generic color mode section payload for non-indexed modes.
     #[serde(rename = "colorModeData")]
-    pub color_mode_data: Option<Vec<u8>>,
+    pub color_mode_data: Option<ColorModeSectionData>,
 
     /// Document path selection descriptor (resource 3000)
     #[serde(skip)]

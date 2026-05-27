@@ -1,4 +1,59 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::ops::Deref;
+
+macro_rules! string_code_type {
+    ($name:ident) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+        #[serde(transparent)]
+        pub struct $name(pub String);
+
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self(value.to_string())
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl Deref for $name {
+            type Target = str;
+
+            fn deref(&self) -> &Self::Target {
+                self.0.as_str()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+    };
+}
+
+macro_rules! int_code_type {
+    ($name:ident, $ty:ty) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+        #[serde(transparent)]
+        pub struct $name(pub $ty);
+    };
+}
+
+string_code_type!(PsdStringCode);
+int_code_type!(PsdIntCode, i32);
+int_code_type!(PsdU32Code, u32);
+int_code_type!(PsdU16Code, u16);
 
 /// Blend mode types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

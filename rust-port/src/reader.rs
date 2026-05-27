@@ -409,11 +409,13 @@ fn read_color_mode_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd
             }
 
             psd.palette = Some(palette);
-            psd.color_mode_data = Some(Vec::new());
+            psd.color_mode_data = Some(crate::psd::ColorModeSectionData { bytes: Vec::new() });
         } else {
             // Preserve generic color mode data
             let remaining = reader.bytes_left(end_offset);
-            psd.color_mode_data = Some(reader.read_bytes(remaining as usize)?);
+            psd.color_mode_data = Some(crate::psd::ColorModeSectionData {
+                bytes: reader.read_bytes(remaining as usize)?,
+            });
         }
 
         Ok(())
@@ -555,10 +557,11 @@ fn read_layer_record<R: Read + Seek>(
         // Read layer mask data
         read_layer_mask_data(reader, &mut layer)?;
 
-        // Read blending ranges (preserve raw bytes for round-trip)
+        // Read blending ranges
         let blending_len = reader.read_u32()? as usize;
         if blending_len > 0 && reader.bytes_left(end_offset) >= blending_len {
-            layer.blending_ranges_raw = Some(reader.read_bytes(blending_len)?);
+            let bytes = reader.read_bytes(blending_len)?;
+            layer.blending_ranges_data = parse_layer_blending_ranges(&bytes);
         }
 
         // Read layer name
@@ -1169,6 +1172,37 @@ fn normalize_channel_data(mut data: Vec<u8>, expected_len: usize) -> Vec<u8> {
         data.truncate(expected_len);
     }
     data
+}
+
+fn parse_layer_blending_ranges(bytes: &[u8]) -> Option<crate::layer::LayerBlendingRangesData> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut offset = 0;
+    let read_pair = |buf: &[u8], offset: &mut usize| -> Option<crate::layer::LayerBlendingRangePair> {
+        if *offset + 4 > buf.len() {
+            return None;
+        }
+        let pair = crate::layer::LayerBlendingRangePair {
+            src_black: buf[*offset],
+            src_white: buf[*offset + 1],
+            dst_black: buf[*offset + 2],
+            dst_white: buf[*offset + 3],
+        };
+        *offset += 4;
+        Some(pair)
+    };
+
+    let composite_gray = read_pair(bytes, &mut offset);
+    let mut channels = Vec::new();
+    while let Some(pair) = read_pair(bytes, &mut offset) {
+        channels.push(pair);
+    }
+
+    Some(crate::layer::LayerBlendingRangesData {
+        composite_gray,
+        channels,
+    })
 }
 
 #[cfg(test)]

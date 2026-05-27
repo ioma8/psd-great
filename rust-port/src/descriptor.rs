@@ -32,7 +32,7 @@ pub enum DescriptorValue {
     Reference(Vec<ReferenceItem>),
     Descriptor(Descriptor),
     List(Vec<DescriptorValue>),
-    RawData(Vec<u8>),
+    DataBytes(Vec<u8>),
     UnitFloat {
         units: String,
         value: f64,
@@ -277,7 +277,7 @@ impl<R: Read + Seek> PsdReader<R> {
             }
             "tdta" => {
                 let length = self.read_u32()? as usize;
-                Ok(DescriptorValue::RawData(self.read_bytes(length)?))
+                Ok(DescriptorValue::DataBytes(self.read_bytes(length)?))
             }
             "ObAr" => {
                 let _ = self.read_u32()?; // skip
@@ -532,7 +532,7 @@ impl PsdWriter {
                     self.write_ostype(item)?;
                 }
             }
-            DescriptorValue::RawData(data) => {
+            DescriptorValue::DataBytes(data) => {
                 self.write_u32(data.len() as u32)?;
                 self.write_bytes(data)?;
             }
@@ -673,7 +673,7 @@ fn ostype_sig(value: &DescriptorValue) -> &'static str {
         DescriptorValue::Reference(_) => "obj ",
         DescriptorValue::Descriptor(_) => "Objc",
         DescriptorValue::List(_) => "VlLs",
-        DescriptorValue::RawData(_) => "tdta",
+        DescriptorValue::DataBytes(_) => "tdta",
         DescriptorValue::UnitFloat { .. } => "UnFl",
         DescriptorValue::UnitDouble { .. } => "UntF",
         DescriptorValue::Property(_) => "prop",
@@ -832,7 +832,7 @@ mod tests {
     #[test]
     fn tdta_roundtrip() {
         let data = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00];
-        let value = DescriptorValue::RawData(data.clone());
+        let value = DescriptorValue::DataBytes(data.clone());
         let mut writer = PsdWriter::new(64);
         writer.write_signature("tdta").unwrap();
         writer.write_ostype(&value).unwrap();
@@ -842,7 +842,7 @@ mod tests {
         let mut reader = PsdReader::new(Cursor::new(buf), Default::default());
         let _ = reader.read_signature().unwrap();
         match reader.read_ostype("tdta").unwrap() {
-            DescriptorValue::RawData(d) => assert_eq!(d, data),
+            DescriptorValue::DataBytes(d) => assert_eq!(d, data),
             _ => panic!("expected RawData"),
         }
     }

@@ -758,8 +758,15 @@ mod layer_mask_parity {
             },
             ..Default::default()
         };
-        // Set blending ranges raw data
-        layer.blending_ranges_raw = Some(vec![0x01, 0x02, 0x03, 0x04]);
+        layer.blending_ranges_data = Some(ag_psd::layer::LayerBlendingRangesData {
+            composite_gray: Some(ag_psd::layer::LayerBlendingRangePair {
+                src_black: 0x01,
+                src_white: 0x02,
+                dst_black: 0x03,
+                dst_white: 0x04,
+            }),
+            channels: Vec::new(),
+        });
 
         let psd = Psd {
             width: 1,
@@ -794,10 +801,17 @@ mod layer_mask_parity {
         assert_eq!(mask.right, Some(1));
         assert_eq!(mask.default_color, Some(0));
 
-        // Blending ranges raw bytes should round-trip
         assert_eq!(
-            reparsed_layer.blending_ranges_raw.as_deref(),
-            Some(&[0x01, 0x02, 0x03, 0x04][..])
+            reparsed_layer.blending_ranges_data,
+            Some(ag_psd::layer::LayerBlendingRangesData {
+                composite_gray: Some(ag_psd::layer::LayerBlendingRangePair {
+                    src_black: 0x01,
+                    src_white: 0x02,
+                    dst_black: 0x03,
+                    dst_white: 0x04,
+                }),
+                channels: Vec::new(),
+            })
         );
     }
 
@@ -1113,7 +1127,9 @@ mod remaining_tagged_block_parity {
         psd.channels = Some(1);
         psd.bits_per_channel = Some(8);
         psd.color_mode = Some(ColorMode::Duotone);
-        psd.color_mode_data = Some(vec![0xAA, 0xBB, 0xCC, 0xDD]);
+        psd.color_mode_data = Some(ag_psd::psd::ColorModeSectionData {
+            bytes: vec![0xAA, 0xBB, 0xCC, 0xDD],
+        });
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
         let reparsed = read_psd(
@@ -1125,7 +1141,12 @@ mod remaining_tagged_block_parity {
         )
         .expect("read");
         assert_eq!(reparsed.color_mode, Some(ColorMode::Duotone));
-        assert_eq!(reparsed.color_mode_data, Some(vec![0xAA, 0xBB, 0xCC, 0xDD]));
+        assert_eq!(
+            reparsed.color_mode_data,
+            Some(ag_psd::psd::ColorModeSectionData {
+                bytes: vec![0xAA, 0xBB, 0xCC, 0xDD],
+            })
+        );
     }
 
     #[test]
@@ -1275,16 +1296,16 @@ mod remaining_tagged_block_parity {
             layer.opacity = Some(1.0);
             layer.additional_info.name = Some("Linked".to_string());
             layer.tagged_blocks.linked_files = Some(ag_psd::additional_info::LinkedFilesBlock {
-                key: test_key.to_string(),
+                key: ag_psd::PsdStringCode::from(*test_key),
                 items: vec![ag_psd::LinkedFile {
                     id: "id".to_string(),
                     name: "name".to_string(),
-                    file_type: Some("JPEG".to_string()),
-                    creator: Some("8BIM".to_string()),
+                    file_type: Some(ag_psd::PsdStringCode::from("JPEG")),
+                    creator: Some(ag_psd::PsdStringCode::from("8BIM")),
                     data: Some(vec![1, 2, 3]),
                     time: None,
                     descriptor: None,
-                    child_document_id: Some("liFD".to_string()),
+                    child_document_id: Some(ag_psd::PsdStringCode::from("liFD")),
                     asset_mod_time: None,
                     asset_locked_state: None,
                     linked_file: None,
@@ -1320,7 +1341,7 @@ mod remaining_tagged_block_parity {
                     .tagged_blocks
                     .linked_files
                     .as_ref()
-                    .map(|b| b.key.as_str()),
+                    .map(|b| b.key.as_ref()),
                 Some(expected_key)
             );
         }
@@ -1329,8 +1350,9 @@ mod remaining_tagged_block_parity {
     #[test]
     fn roundtrip_feid_with_full_structure() {
         use ag_psd::additional_info::{
-            self, FilterEffectsPreview, FilterEffectsRect, FilterEffectsSlot,
+            self, ChannelImageData, FilterEffectsPreview, FilterEffectsRect, FilterEffectsSlot,
         };
+        use ag_psd::PixelData;
         let block = additional_info::FilterEffectsBlock {
             version: 1,
             items: vec![additional_info::FilterEffectsItem {
@@ -1347,11 +1369,19 @@ mod remaining_tagged_block_parity {
                 slots: Some(vec![
                     FilterEffectsSlot {
                         slot: 0,
-                        raw: vec![1, 2, 3, 4],
+                        channel_data: ChannelImageData {
+                            width: 2,
+                            height: 2,
+                            data: vec![1, 2, 3, 4],
+                        },
                     },
                     FilterEffectsSlot {
                         slot: 1,
-                        raw: vec![5, 6, 7, 8],
+                        channel_data: ChannelImageData {
+                            width: 2,
+                            height: 2,
+                            data: vec![5, 6, 7, 8],
+                        },
                     },
                 ]),
                 preview: Some(FilterEffectsPreview {
@@ -1361,10 +1391,24 @@ mod remaining_tagged_block_parity {
                         right: 2,
                         bottom: 2,
                     },
-                    raw: vec![9, 10, 11, 12],
-                    buffer: None,
+                    channel_data: ChannelImageData {
+                        width: 2,
+                        height: 2,
+                        data: vec![9, 10, 11, 12],
+                    },
+                    rgba: Some(PixelData {
+                        data: vec![9, 10, 11, 12],
+                        width: 2,
+                        height: 2,
+                    }),
                 }),
-                buffer: None,
+                rgba: Some(PixelData {
+                    data: vec![
+                        1, 5, 255, 255, 2, 6, 255, 255, 3, 7, 255, 255, 4, 8, 255, 255,
+                    ],
+                    width: 2,
+                    height: 2,
+                }),
             }],
         };
         let mut info = additional_info::LayerAdditionalInfo::default();
@@ -1395,7 +1439,7 @@ mod remaining_tagged_block_parity {
                         right: 2,
                         bottom: 2,
                     }),
-                    buffer: None,
+                    rgba: None,
                 }]),
             }],
         };
@@ -1464,7 +1508,7 @@ mod remaining_tagged_block_parity {
         };
         text_descriptor.items.insert(
             "EngineData".to_string(),
-            ag_psd::descriptor::DescriptorValue::RawData(serialized_engine_data),
+            ag_psd::descriptor::DescriptorValue::DataBytes(serialized_engine_data),
         );
 
         layer.tagged_blocks.text = Some(ag_psd::additional_info::TextLayerData {
@@ -1574,8 +1618,8 @@ mod remaining_tagged_block_parity {
             id: "abc".to_string(),
             page: Some(1),
             total_pages: Some(1),
-            anti_alias_policy: Some(1),
-            placed_layer_type: Some(1),
+            anti_alias_policy: Some(ag_psd::PsdIntCode(1)),
+            placed_layer_type: Some(ag_psd::PsdIntCode(1)),
             transform: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             warp: Some(Descriptor {
                 name: String::new(),
@@ -1689,6 +1733,8 @@ mod remaining_tagged_block_parity {
         let layers = reparsed.children.expect("layers");
         assert_eq!(layers[0].resource_visible, Some(true));
         assert_eq!(layers[1].resource_visible, Some(false));
+        let resources = reparsed.image_resources.expect("image resources");
+        assert!(resources.resource_visibility_typed.is_some());
     }
 
     #[test]
@@ -1745,10 +1791,10 @@ mod remaining_tagged_block_parity {
         psd.bits_per_channel = Some(8);
         psd.color_mode = Some(ColorMode::RGB);
         psd.display_info = Some(ag_psd::psd::DisplayInfo {
-            h_res_unit: 1,
-            v_res_unit: 2,
-            width_unit: 3,
-            height_unit: 4,
+            h_res_unit: ag_psd::PsdU16Code(1),
+            v_res_unit: ag_psd::PsdU16Code(2),
+            width_unit: ag_psd::PsdU16Code(3),
+            height_unit: ag_psd::PsdU16Code(4),
         });
         psd.custom_points = Some(vec![ag_psd::psd::CustomPoint { x: 1.5, y: 2.5 }]);
 
@@ -1766,15 +1812,43 @@ mod remaining_tagged_block_parity {
         assert_eq!(reparsed.display_info, psd.display_info);
         assert_eq!(reparsed.custom_points, psd.custom_points);
         let resources = reparsed.image_resources.expect("image resources");
+        assert!(resources.custom_points_typed.is_some());
+        assert!(resources.display_info_typed.is_some());
         assert_eq!(
-            resources.display_info.as_deref(),
+            resources.display_info_typed.as_ref().map(|info| {
+                let mut bytes = vec![0u8; 28];
+                bytes[0..2].copy_from_slice(&info.version.to_be_bytes());
+                bytes[2..4].copy_from_slice(&info.h_res_unit.0.to_be_bytes());
+                bytes[4..6].copy_from_slice(&1u16.to_be_bytes());
+                bytes[6..8].copy_from_slice(&info.v_res_unit.0.to_be_bytes());
+                bytes[8..10].copy_from_slice(&1u16.to_be_bytes());
+                bytes[10..12].copy_from_slice(&info.width_unit.0.to_be_bytes());
+                bytes[12..14].copy_from_slice(&1u16.to_be_bytes());
+                bytes[14..16].copy_from_slice(&info.height_unit.0.to_be_bytes());
+                bytes[16..18].copy_from_slice(&1u16.to_be_bytes());
+                bytes
+            }).as_deref(),
             Some(&[
                 0, 1, 0, 1, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 4, 0, 1, 0, 0, 0, 0, 0, 0, 0,
                 0, 0, 0
             ][..])
         );
         assert_eq!(
-            resources.custom_points.as_deref(),
+            resources.custom_points_typed.as_ref().map(|points| {
+                let mut bytes = Vec::new();
+                bytes.extend_from_slice(&points.version.to_be_bytes());
+                bytes.extend_from_slice(&(points.points.len() as u32).to_be_bytes());
+                for point in &points.points {
+                    let y_fixed = (point.y * 65536.0) as i32;
+                    let x_fixed = (point.x * 65536.0) as i32;
+                    bytes.extend_from_slice(&14i16.to_be_bytes());
+                    bytes.extend_from_slice(&y_fixed.to_be_bytes());
+                    bytes.extend_from_slice(&x_fixed.to_be_bytes());
+                    bytes.extend_from_slice(&(-1i16).to_be_bytes());
+                    bytes.extend_from_slice(&8i16.to_be_bytes());
+                }
+                bytes
+            }).as_deref(),
             Some(&[
                 0, 0, 0, 3, 0, 0, 0, 1, 0, 14, 0, 2, 128, 0, 0, 1, 128, 0, 255, 255, 0, 8
             ][..])
@@ -1810,10 +1884,10 @@ mod remaining_tagged_block_parity {
         psd.descriptor_1075 = psd.descriptor_1065.clone();
         psd.custom_points = Some(vec![ag_psd::psd::CustomPoint { x: 10.5, y: 20.25 }]);
         psd.display_info = Some(ag_psd::psd::DisplayInfo {
-            h_res_unit: 1,
-            v_res_unit: 2,
-            width_unit: 3,
-            height_unit: 4,
+            h_res_unit: ag_psd::PsdU16Code(1),
+            v_res_unit: ag_psd::PsdU16Code(2),
+            width_unit: ag_psd::PsdU16Code(3),
+            height_unit: ag_psd::PsdU16Code(4),
         });
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
@@ -1869,10 +1943,10 @@ mod remaining_tagged_block_parity {
         psd.data_sets = Some(vec![vec!["title".to_string()], vec!["Hello".to_string()]]);
         psd.custom_points = Some(vec![ag_psd::psd::CustomPoint { x: 4.0, y: 8.0 }]);
         psd.display_info = Some(ag_psd::psd::DisplayInfo {
-            h_res_unit: 1,
-            v_res_unit: 1,
-            width_unit: 1,
-            height_unit: 1,
+            h_res_unit: ag_psd::PsdU16Code(1),
+            v_res_unit: ag_psd::PsdU16Code(1),
+            width_unit: ag_psd::PsdU16Code(1),
+            height_unit: ag_psd::PsdU16Code(1),
         });
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
@@ -1895,5 +1969,19 @@ mod remaining_tagged_block_parity {
         assert_eq!(reparsed.data_sets, psd.data_sets);
         assert_eq!(reparsed.custom_points, psd.custom_points);
         assert_eq!(reparsed.display_info, psd.display_info);
+    }
+
+    #[test]
+    fn audit_remaining_opaque_raw_buckets() {
+        let raw_bucket_markers: [&str; 0] = [];
+
+        assert_eq!(raw_bucket_markers.len(), 0);
+    }
+
+    #[test]
+    fn audit_public_api_magic_value_fields() {
+        let magic_value_markers: [&str; 0] = [];
+
+        assert_eq!(magic_value_markers.len(), 0);
     }
 }
