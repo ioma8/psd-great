@@ -17,7 +17,7 @@ use crate::types::{
 };
 use crate::writer::PsdWriter;
 use std::collections::HashMap;
-use std::io::{Read, Seek};
+use std::io::{Cursor, Read, Seek};
 
 /// Image resources structure
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -259,13 +259,17 @@ fn parse_color_samplers_resource(bytes: &[u8]) -> ColorSamplersResource {
                 horizontal,
                 vertical,
             },
-            _ => crate::psd::ColorSamplerPosition::V2 {
+            2 => crate::psd::ColorSamplerPosition::V2 {
+                horizontal,
+                vertical,
+            },
+            _ => crate::psd::ColorSamplerPosition::Unsupported {
+                version,
                 horizontal,
                 vertical,
             },
         };
         samplers.push(crate::psd::ColorSampler {
-            version,
             position,
             color_space: i16::from_be_bytes([bytes[offset + 8], bytes[offset + 9]]),
             depth: if version >= 2 {
@@ -279,29 +283,61 @@ fn parse_color_samplers_resource(bytes: &[u8]) -> ColorSamplersResource {
     ColorSamplersResource { version, samplers }
 }
 
-fn build_color_samplers_resource(samplers: &ColorSamplersResource) -> Vec<u8> {
+pub(crate) fn infer_color_sampler_version(
+    samplers: &[crate::psd::ColorSampler],
+) -> Result<Option<u32>> {
+    let Some(first) = samplers.first() else {
+        return Ok(None);
+    };
+
+    let version = first.position.version();
+    for sampler in samplers.iter().skip(1) {
+        let sampler_version = sampler.position.version();
+        if sampler_version != version {
+            return Err(PsdError::InvalidFormat(
+                "Color samplers resource must contain a single color sampler version".to_string(),
+            ));
+        }
+    }
+
+    Ok(Some(version))
+}
+
+fn build_color_samplers_resource(samplers: &ColorSamplersResource) -> Result<Vec<u8>> {
+    if let Some(version) = infer_color_sampler_version(&samplers.samplers)? {
+        if samplers.version != version {
+            return Err(PsdError::InvalidFormat(format!(
+                "Color sampler position version {version} does not match resource version {}",
+                samplers.version
+            )));
+        }
+    }
+
     let mut bytes = Vec::with_capacity(8 + samplers.samplers.len() * 12);
     bytes.extend_from_slice(&samplers.version.to_be_bytes());
     bytes.extend_from_slice(&(samplers.samplers.len() as u32).to_be_bytes());
     for sampler in &samplers.samplers {
-        let (horizontal, vertical) = match &sampler.position {
-            crate::psd::ColorSamplerPosition::V1 {
-                horizontal,
-                vertical,
-            }
-            | crate::psd::ColorSamplerPosition::V2 {
-                horizontal,
-                vertical,
-            } => (*horizontal, *vertical),
-        };
+        let version = sampler.position.version();
+        if version >= 2 && sampler.depth.is_none() {
+            return Err(PsdError::InvalidFormat(format!(
+                "Color sampler version {version} requires depth to serialize losslessly"
+            )));
+        }
+
+        let (horizontal, vertical) = sampler.position.coordinates();
         bytes.extend_from_slice(&horizontal.to_be_bytes());
         bytes.extend_from_slice(&vertical.to_be_bytes());
         bytes.extend_from_slice(&(sampler.color_space as u16).to_be_bytes());
         if samplers.version >= 2 {
-            bytes.extend_from_slice(&sampler.depth.unwrap_or(0).to_be_bytes());
+            bytes.extend_from_slice(
+                &sampler
+                    .depth
+                    .expect("validated depth for color sampler version >= 2")
+                    .to_be_bytes(),
+            );
         }
     }
-    bytes
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -310,7 +346,9 @@ pub(crate) fn parse_color_samplers_resource_for_test(bytes: &[u8]) -> ColorSampl
 }
 
 #[cfg(test)]
-pub(crate) fn build_color_samplers_resource_for_test(samplers: &ColorSamplersResource) -> Vec<u8> {
+pub(crate) fn build_color_samplers_resource_for_test(
+    samplers: &ColorSamplersResource,
+) -> Result<Vec<u8>> {
     build_color_samplers_resource(samplers)
 }
 
@@ -460,6 +498,116 @@ pub struct SliceBounds {
     pub right: i32,
 }
 
+fn next_bytes_start_legacy_slice_descriptor(bytes: &[u8], offset: usize, end: usize) -> bool {
+    let remaining = end.saturating_sub(offset);
+    if remaining < 20 {
+        return false;
+    }
+
+    let descriptor_version = u32::from_be_bytes(
+        bytes[offset..offset + 4]
+            .try_into()
+            .expect("slice descriptor version"),
+    );
+    if descriptor_version != 16 {
+        return false;
+    }
+
+    let mut cursor = offset + 4;
+    let name_len =
+        u32::from_be_bytes(bytes[cursor..cursor + 4].try_into().expect("name length")) as usize;
+    cursor += 4;
+
+    let Some(name_bytes) = name_len.checked_mul(2) else {
+        return false;
+    };
+    if cursor + name_bytes + 8 > end {
+        return false;
+    }
+    cursor += name_bytes;
+
+    let class_id_len = u32::from_be_bytes(
+        bytes[cursor..cursor + 4]
+            .try_into()
+            .expect("class id length"),
+    ) as usize;
+    cursor += 4;
+
+    let class_id_bytes = if class_id_len == 0 { 4 } else { class_id_len };
+    if cursor + class_id_bytes + 4 > end {
+        return false;
+    }
+
+    true
+}
+
+fn parse_legacy_slice<R: Read + Seek>(
+    reader: &mut PsdReader<R>,
+    bytes: &[u8],
+    end: u64,
+) -> Result<Slice> {
+    let id = reader.read_u32()?;
+    let group_id = reader.read_u32()?;
+    let origin = reader.read_u32()?;
+    let associated_layer_id = if origin == 1 { reader.read_u32()? } else { 0 };
+    let name = reader.read_unicode_string()?;
+    let slice_type = reader.read_u32()?;
+    let left = reader.read_i32()?;
+    let top = reader.read_i32()?;
+    let right = reader.read_i32()?;
+    let bottom = reader.read_i32()?;
+    let url = reader.read_unicode_string()?;
+    let target = reader.read_unicode_string()?;
+    let message = reader.read_unicode_string()?;
+    let alt_tag = reader.read_unicode_string()?;
+    let cell_is_html = reader.read_u8()? != 0;
+    let cell_text = reader.read_unicode_string()?;
+    let horizontal_align = reader.read_i32()?;
+    let vertical_align = reader.read_i32()?;
+    let alpha = reader.read_u8()?;
+    let bg_color = [
+        alpha,
+        reader.read_u8()?,
+        reader.read_u8()?,
+        reader.read_u8()?,
+    ];
+    let descriptor =
+        if next_bytes_start_legacy_slice_descriptor(bytes, reader.offset as usize, end as usize) {
+            reader.read_u32()?;
+            Some(reader.read_descriptor_structure()?)
+        } else {
+            None
+        };
+
+    Ok(Slice {
+        id,
+        group_id,
+        origin: PsdU32Code(origin),
+        associated_layer_id,
+        name,
+        slice_type: PsdU32Code(slice_type),
+        bounds: SliceBounds {
+            top,
+            left,
+            bottom,
+            right,
+        },
+        url,
+        target,
+        message,
+        alt_tag,
+        cell_text,
+        horizontal_align: PsdIntCode(horizontal_align),
+        vertical_align: PsdIntCode(vertical_align),
+        alpha,
+        bg_color,
+        cell_is_html,
+        source_id: None,
+        source_type: None,
+        descriptor,
+    })
+}
+
 /// Layer comps
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerComps {
@@ -525,17 +673,19 @@ pub struct UrlEntry {
 
 impl<R: Read + Seek> PsdReader<R> {
     fn read_slices(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
-        let start = self.offset;
         if length < 4 {
             self.skip_bytes(length)?;
             return Ok(());
         }
         let version = decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "slices version")?.value;
+        let payload = self.read_bytes(length.saturating_sub(4))?;
+        let mut reader = PsdReader::new(Cursor::new(payload.as_slice()), self.options.clone());
+        let payload_end = payload.len() as u64;
         if version == 7 || version == 8 {
             let _descriptor_version =
-                decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "slices descriptor version")?
+                decode_be::<U32ValueRecord>(&reader.read_bytes(4)?, "slices descriptor version")?
                     .value;
-            let descriptor = self.read_descriptor_structure()?;
+            let descriptor = reader.read_descriptor_structure()?;
             resources.slices = Some(Slices {
                 version,
                 bounds: None,
@@ -545,95 +695,26 @@ impl<R: Read + Seek> PsdReader<R> {
             });
             return Ok(());
         }
-        if length < 24 {
-            self.skip_bytes(length.saturating_sub(4))?;
+        if payload.len() < 20 {
             return Ok(());
         }
-        let top = self.read_i32()?;
-        let left = self.read_i32()?;
-        let bottom = self.read_i32()?;
-        let right = self.read_i32()?;
-        let group_name = self.read_unicode_string()?;
+        let top = reader.read_i32()?;
+        let left = reader.read_i32()?;
+        let bottom = reader.read_i32()?;
+        let right = reader.read_i32()?;
+        let group_name = reader.read_unicode_string()?;
         let count =
-            decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "slices count")?.value as usize;
-        let mut slices = Vec::new();
+            decode_be::<U32ValueRecord>(&reader.read_bytes(4)?, "slices count")?.value as usize;
+        let mut slices = Vec::with_capacity(count);
         for _ in 0..count {
-            if (self.offset - start) as usize + 16 > length {
+            if reader.bytes_left(payload_end) == 0 {
                 break;
             }
-            let id = self.read_i32()? as u32;
-            let group_id = self.read_i32()? as u32;
-            let origin = self.read_i32()? as u32;
-            let associated_layer_id = if origin == 1 {
-                self.read_i32()? as u32
-            } else {
-                0
-            };
-            let name = self.read_unicode_string()?;
-            if (self.offset - start) as usize + 20 > length {
-                break;
-            }
-            let slice_type = self.read_i32()? as u32;
-            let left = self.read_i32()?;
-            let top = self.read_i32()?;
-            let right = self.read_i32()?;
-            let bottom = self.read_i32()?;
-            let url = self.read_unicode_string()?;
-            let target = self.read_unicode_string()?;
-            let message = self.read_unicode_string()?;
-            let alt_tag = self.read_unicode_string()?;
-            let cell_is_html = self.read_u8()? != 0;
-            let cell_text = self.read_unicode_string()?;
-            if (self.offset - start) as usize + 13 > length {
-                break;
-            }
-            let horizontal_align = self.read_i32()?;
-            let vertical_align = self.read_i32()?;
-            let alpha = self.read_u8()?;
-            if (self.offset - start) as usize + 3 > length {
-                break;
-            }
-            let bg_color = [alpha, self.read_u8()?, self.read_u8()?, self.read_u8()?];
-            let mut source_id = None;
-            let mut source_type = None;
-            let mut descriptor = None;
-            if (self.offset - start) as usize + 8 <= length {
-                source_id = Some(self.read_u32()?);
-                source_type = Some(self.read_u32()?);
-            }
-            if (self.offset - start) as usize + 4 <= length {
-                let descriptor_version = self.read_u32()?;
-                if descriptor_version == 16 {
-                    descriptor = Some(self.read_descriptor_structure()?);
-                }
-            }
-            slices.push(Slice {
-                id,
-                group_id,
-                origin: PsdU32Code(origin),
-                associated_layer_id,
-                name,
-                slice_type: PsdU32Code(slice_type),
-                bounds: SliceBounds {
-                    top,
-                    left,
-                    bottom,
-                    right,
-                },
-                url,
-                target,
-                message,
-                alt_tag,
-                cell_text,
-                horizontal_align: PsdIntCode(horizontal_align),
-                vertical_align: PsdIntCode(vertical_align),
-                alpha,
-                bg_color,
-                cell_is_html,
-                source_id,
-                source_type: source_type.map(PsdU32Code),
-                descriptor,
-            });
+            slices.push(parse_legacy_slice(
+                &mut reader,
+                payload.as_slice(),
+                payload_end,
+            )?);
         }
         resources.slices = Some(Slices {
             version,
@@ -1375,7 +1456,7 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
 
     if let Some(ref points) = resources.color_samplers_typed {
         write_resource(writer, 1073, &|w| {
-            w.write_bytes(&build_color_samplers_resource(points))
+            w.write_bytes(&build_color_samplers_resource(points)?)
         })?;
     }
 
@@ -1432,12 +1513,6 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
                 w.write_u8(slice.bg_color[1])?;
                 w.write_u8(slice.bg_color[2])?;
                 w.write_u8(slice.bg_color[3])?;
-                if let Some(source_id) = slice.source_id {
-                    w.write_u32(source_id)?;
-                }
-                if let Some(source_type) = slice.source_type {
-                    w.write_u32(source_type.0)?;
-                }
                 if let Some(ref descriptor) = slice.descriptor {
                     w.write_u32(16)?;
                     w.write_descriptor_structure(descriptor)?;
@@ -1707,7 +1782,6 @@ mod tests {
         let resource = ColorSamplersResource {
             version: 2,
             samplers: vec![crate::psd::ColorSampler {
-                version: 2,
                 position: crate::psd::ColorSamplerPosition::V2 {
                     horizontal: 100,
                     vertical: 200,
@@ -1717,7 +1791,7 @@ mod tests {
             }],
         };
 
-        let bytes = build_color_samplers_resource_for_test(&resource);
+        let bytes = build_color_samplers_resource_for_test(&resource).unwrap();
         let reparsed = parse_color_samplers_resource_for_test(&bytes);
         assert_eq!(reparsed, resource);
     }
@@ -1727,7 +1801,6 @@ mod tests {
         let resource = ColorSamplersResource {
             version: 1,
             samplers: vec![crate::psd::ColorSampler {
-                version: 1,
                 position: crate::psd::ColorSamplerPosition::V1 {
                     horizontal: 123,
                     vertical: 456,
@@ -1737,7 +1810,7 @@ mod tests {
             }],
         };
 
-        let bytes = build_color_samplers_resource_for_test(&resource);
+        let bytes = build_color_samplers_resource_for_test(&resource).unwrap();
         let reparsed = parse_color_samplers_resource_for_test(&bytes);
 
         assert_eq!(reparsed, resource);
@@ -1749,7 +1822,6 @@ mod tests {
         let resource = ColorSamplersResource {
             version: 2,
             samplers: vec![crate::psd::ColorSampler {
-                version: 2,
                 position: crate::psd::ColorSamplerPosition::V2 {
                     horizontal: -32,
                     vertical: 4096,
@@ -1759,11 +1831,106 @@ mod tests {
             }],
         };
 
-        let bytes = build_color_samplers_resource_for_test(&resource);
+        let bytes = build_color_samplers_resource_for_test(&resource).unwrap();
         let reparsed = parse_color_samplers_resource_for_test(&bytes);
 
         assert_eq!(reparsed, resource);
         assert_eq!(bytes.len(), 20);
+    }
+
+    #[test]
+    fn color_sampler_resource_preserves_unsupported_version() {
+        let resource = ColorSamplersResource {
+            version: 3,
+            samplers: vec![crate::psd::ColorSampler {
+                position: crate::psd::ColorSamplerPosition::Unsupported {
+                    version: 3,
+                    horizontal: 7,
+                    vertical: 9,
+                },
+                color_space: 8,
+                depth: Some(12),
+            }],
+        };
+
+        let bytes = build_color_samplers_resource_for_test(&resource).unwrap();
+        let reparsed = parse_color_samplers_resource_for_test(&bytes);
+
+        assert_eq!(reparsed, resource);
+        assert_eq!(bytes.len(), 20);
+    }
+
+    #[test]
+    fn color_sampler_resource_rejects_mixed_versions() {
+        let resource = ColorSamplersResource {
+            version: 2,
+            samplers: vec![
+                crate::psd::ColorSampler {
+                    position: crate::psd::ColorSamplerPosition::V2 {
+                        horizontal: 1,
+                        vertical: 2,
+                    },
+                    color_space: 8,
+                    depth: Some(16),
+                },
+                crate::psd::ColorSampler {
+                    position: crate::psd::ColorSamplerPosition::V1 {
+                        horizontal: 3,
+                        vertical: 4,
+                    },
+                    color_space: 0,
+                    depth: None,
+                },
+            ],
+        };
+
+        let err = build_color_samplers_resource_for_test(&resource).unwrap_err();
+        assert!(
+            err.to_string().contains("single color sampler version"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn color_sampler_resource_rejects_version_shape_mismatch() {
+        let resource = ColorSamplersResource {
+            version: 1,
+            samplers: vec![crate::psd::ColorSampler {
+                position: crate::psd::ColorSamplerPosition::V2 {
+                    horizontal: 1,
+                    vertical: 2,
+                },
+                color_space: 8,
+                depth: Some(16),
+            }],
+        };
+
+        let err = build_color_samplers_resource_for_test(&resource).unwrap_err();
+        assert!(
+            err.to_string().contains("does not match resource version"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn color_sampler_resource_rejects_missing_depth_for_version_two_or_higher() {
+        let resource = ColorSamplersResource {
+            version: 2,
+            samplers: vec![crate::psd::ColorSampler {
+                position: crate::psd::ColorSamplerPosition::V2 {
+                    horizontal: 1,
+                    vertical: 2,
+                },
+                color_space: 8,
+                depth: None,
+            }],
+        };
+
+        let err = build_color_samplers_resource_for_test(&resource).unwrap_err();
+        assert!(
+            err.to_string().contains("requires depth"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1831,8 +1998,8 @@ mod tests {
                 alpha: 255,
                 bg_color: [255, 2, 3, 4],
                 cell_is_html: true,
-                source_id: Some(9),
-                source_type: Some(PsdU32Code(10)),
+                source_id: None,
+                source_type: None,
                 descriptor: None,
             }],
             descriptor: None,

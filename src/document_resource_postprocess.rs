@@ -173,8 +173,9 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
     }
 
     if let Some(points) = psd.color_samplers.as_ref() {
+        let version = crate::image_resources::infer_color_sampler_version(points)?.unwrap_or(2);
         resources.color_samplers_typed = Some(crate::image_resources::ColorSamplersResource {
-            version: points.first().map(|sampler| sampler.version).unwrap_or(2),
+            version,
             samplers: points.clone(),
         });
     }
