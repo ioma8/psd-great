@@ -78,8 +78,6 @@ pub struct ThumbnailRaw {
     pub data: Vec<u8>,
 }
 
-
-
 /// Audio clip frame reader
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioClipFrameReader {
@@ -143,8 +141,6 @@ pub struct CountInformation {
     pub visible: bool,
     pub points: Vec<Point>,
 }
-
-
 
 /// Global layer mask info
 #[derive(Debug, Clone, PartialEq)]
@@ -221,14 +217,33 @@ pub struct VariableSet {
     pub clip: Option<String>,
 }
 
-/// Custom point (resource 1073)
+/// Color sampler point (resource 1073)
 #[derive(Debug, Clone, PartialEq)]
-pub struct CustomPoint {
-    pub x: f64,
-    pub y: f64,
+pub enum ColorSamplerPosition {
+    V1 { horizontal: i32, vertical: i32 },
+    V2 { horizontal: i32, vertical: i32 },
 }
 
-/// Display info (resource 1036)
+/// Color sampler point (resource 1073)
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorSampler {
+    pub version: u32,
+    pub position: ColorSamplerPosition,
+    pub color_space: i16,
+    pub depth: Option<u16>,
+}
+
+/// Document slices (resource 1050)
+#[derive(Debug, Clone, PartialEq)]
+pub enum DocumentSlices {
+    Legacy(crate::image_resources::Slices),
+    Descriptor {
+        version: u32,
+        descriptor: crate::descriptor::Descriptor,
+    },
+}
+
+/// Display info (resource 1077)
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayInfo {
     pub h_res_unit: PsdU16Code,
@@ -274,14 +289,16 @@ pub struct Psd {
     /// Document path selection descriptor (resource 3000)
     pub path_selection_descriptor: Option<crate::descriptor::Descriptor>,
     /// Document slices (from resource 1050)
-    pub slices: Option<Vec<crate::image_resources::Slice>>,
+    pub slices: Option<DocumentSlices>,
     pub variable_sets: Option<Vec<VariableSet>>,
     pub data_sets: Option<Vec<Vec<String>>>,
     pub descriptor_1065: Option<crate::descriptor::Descriptor>,
     pub descriptor_1074: Option<crate::descriptor::Descriptor>,
     pub descriptor_1075: Option<crate::descriptor::Descriptor>,
-    pub custom_points: Option<Vec<CustomPoint>>,
+    pub layer_group_ids: Option<Vec<u16>>,
+    pub color_samplers: Option<Vec<ColorSampler>>,
     pub display_info: Option<DisplayInfo>,
+    pub clipping_path_name: Option<String>,
 }
 
 /// Read options for PSD parsing

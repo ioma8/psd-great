@@ -1,27 +1,23 @@
 //! Document resource postprocess/prewrite mirroring TS document-postprocess.ts and resource-postprocess.ts.
 //!
 //! Maps typed PSD document fields (e.g., variable_sets, data_sets, display_info,
-//! custom_points) to/from the low-level image resource storage (XML strings, typed resources,
+//! color_samplers) to/from the low-level image resource storage (XML strings, typed resources,
 //! descriptor resources).
 
 use crate::error::Result;
 use crate::psd::Psd;
 use quick_xml::escape::unescape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer};
 use quick_xml::XmlVersion;
+use quick_xml::{Reader, Writer};
 use std::io::Cursor;
 
 /// Apply read-side document resource postprocess: map low-level ImageResources fields
 /// onto typed Psd fields.
 pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
     if let Some(ref resources) = psd.image_resources {
-        // Map clipping from resource 1026
-        if let (Some(clipping), Some(layers)) = (resources.clipping.as_ref(), psd.children.as_mut())
-        {
-            for (layer, value) in layers.iter_mut().zip(clipping.iter()) {
-                layer.clipping = Some(*value);
-            }
+        if let Some(group_ids) = resources.layer_group_ids.as_ref() {
+            psd.layer_group_ids = Some(group_ids.clone());
         }
 
         // Map resource visibility from resource 1072
@@ -55,8 +51,8 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
             psd.descriptor_1075 = Some(desc.clone());
         }
 
-        if let Some(points) = resources.custom_points_typed.as_ref() {
-            psd.custom_points = Some(points.points.clone());
+        if let Some(samplers) = resources.color_samplers_typed.as_ref() {
+            psd.color_samplers = Some(samplers.samplers.clone());
         }
 
         if let Some(info) = resources.display_info_typed.as_ref() {
@@ -68,6 +64,10 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
             });
         }
 
+        if let Some(name) = resources.clipping_path_name.as_ref() {
+            psd.clipping_path_name = Some(name.clone());
+        }
+
         // Map resolution (resource 1005) → psd.resolution
         if let Some(ref res_info) = resources.resolution_info {
             psd.resolution = Some(res_info.horizontal_res);
@@ -76,16 +76,20 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
         // Map guides (resource 1032) → psd.guides
         if let Some(ref grid_info) = resources.grid_and_guides {
             if !grid_info.guides.is_empty() {
-                let guides: Vec<crate::psd::GuideInfo> = grid_info.guides.iter().map(|g| {
-                    let dir = match g.direction {
-                        crate::image_resources::GuideDirection::Vertical => "Vrtc",
-                        crate::image_resources::GuideDirection::Horizontal => "Hrzn",
-                    };
-                    crate::psd::GuideInfo {
-                        location: g.location,
-                        direction: crate::types::PsdStringCode::from(dir),
-                    }
-                }).collect();
+                let guides: Vec<crate::psd::GuideInfo> = grid_info
+                    .guides
+                    .iter()
+                    .map(|g| {
+                        let dir = match g.direction {
+                            crate::image_resources::GuideDirection::Vertical => "Vrtc",
+                            crate::image_resources::GuideDirection::Horizontal => "Hrzn",
+                        };
+                        crate::psd::GuideInfo {
+                            location: g.location,
+                            direction: crate::types::PsdStringCode::from(dir),
+                        }
+                    })
+                    .collect();
                 psd.guides = Some(guides);
             }
         }
@@ -109,7 +113,13 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
 
         // Map slices (resource 1050) → psd.slices
         if let Some(ref slices) = resources.slices {
-            psd.slices = Some(slices.slices.clone());
+            psd.slices = Some(match &slices.descriptor {
+                Some(descriptor) => crate::psd::DocumentSlices::Descriptor {
+                    version: slices.version,
+                    descriptor: descriptor.clone(),
+                },
+                None => crate::psd::DocumentSlices::Legacy(slices.clone()),
+            });
         }
 
         // Map path selection descriptor (resource 3000) → psd.path_selection_descriptor
@@ -125,15 +135,8 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
 pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
     let resources = psd.image_resources.get_or_insert_with(Default::default);
 
-    // Map clipping from layers → resource 1026
-    if let Some(layers) = psd.children.as_ref() {
-        let clipping_values: Vec<u16> = layers
-            .iter()
-            .map(|layer| layer.clipping.unwrap_or(0))
-            .collect();
-        if clipping_values.iter().any(|value| *value > 0) {
-            resources.clipping = Some(clipping_values);
-        }
+    if let Some(group_ids) = psd.layer_group_ids.as_ref() {
+        resources.layer_group_ids = Some(group_ids.clone());
     }
 
     // Map resource visibility from layers → resource 1072
@@ -169,10 +172,10 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
         resources.descriptor_resources.insert(1075, desc.clone());
     }
 
-    if let Some(points) = psd.custom_points.as_ref() {
-        resources.custom_points_typed = Some(crate::image_resources::CustomPointsResource {
-            version: 3,
-            points: points.clone(),
+    if let Some(points) = psd.color_samplers.as_ref() {
+        resources.color_samplers_typed = Some(crate::image_resources::ColorSamplersResource {
+            version: points.first().map(|sampler| sampler.version).unwrap_or(2),
+            samplers: points.clone(),
         });
     }
 
@@ -184,6 +187,10 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
             width_unit: info.width_unit,
             height_unit: info.height_unit,
         });
+    }
+
+    if let Some(name) = psd.clipping_path_name.as_ref() {
+        resources.clipping_path_name = Some(name.clone());
     }
 
     // Map resolution → resource 1005
@@ -209,17 +216,20 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
                 guides: Vec::new(),
             }
         });
-        grid_guides.guides = guides.iter().map(|g| {
-            let dir = if g.direction.as_ref() == "Vrtc" {
-                crate::image_resources::GuideDirection::Vertical
-            } else {
-                crate::image_resources::GuideDirection::Horizontal
-            };
-            crate::image_resources::Guide {
-                location: g.location,
-                direction: dir,
-            }
-        }).collect();
+        grid_guides.guides = guides
+            .iter()
+            .map(|g| {
+                let dir = if g.direction.as_ref() == "Vrtc" {
+                    crate::image_resources::GuideDirection::Vertical
+                } else {
+                    crate::image_resources::GuideDirection::Horizontal
+                };
+                crate::image_resources::Guide {
+                    location: g.location,
+                    direction: dir,
+                }
+            })
+            .collect();
     }
 
     // Map alpha_channel_names → resource 1045
@@ -239,9 +249,18 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
 
     // Map slices → resource 1050
     if let Some(ref slices) = psd.slices {
-        resources.slices = Some(crate::image_resources::Slices {
-            version: 8,
-            slices: slices.clone(),
+        resources.slices = Some(match slices {
+            crate::psd::DocumentSlices::Legacy(slices) => slices.clone(),
+            crate::psd::DocumentSlices::Descriptor {
+                version,
+                descriptor,
+            } => crate::image_resources::Slices {
+                version: *version,
+                bounds: None,
+                group_name: None,
+                slices: Vec::new(),
+                descriptor: Some(descriptor.clone()),
+            },
         });
     }
 
@@ -436,7 +455,10 @@ fn build_data_sets_xml(table: &[Vec<String>]) -> String {
 }
 
 fn decode_xml_text(text: BytesText<'_>) -> String {
-    let decoded = text.decode().map(|value| value.into_owned()).unwrap_or_default();
+    let decoded = text
+        .decode()
+        .map(|value| value.into_owned())
+        .unwrap_or_default();
     unescape(&decoded)
         .map(|value| value.into_owned())
         .unwrap_or(decoded)

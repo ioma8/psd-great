@@ -6,9 +6,7 @@ use std::io::Cursor;
 
 #[test]
 fn read_color_preserves_raw_rgb_hsb_lab_values() {
-    let rgb_bytes = vec![
-        0x00, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x00, 0x00,
-    ];
+    let rgb_bytes = vec![0x00, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x00, 0x00];
     let mut rgb_reader = PsdReader::new(Cursor::new(rgb_bytes), ReadOptions::default());
     assert_eq!(
         rgb_reader.read_color().unwrap(),
@@ -19,9 +17,7 @@ fn read_color_preserves_raw_rgb_hsb_lab_values() {
         }
     );
 
-    let hsb_bytes = vec![
-        0x00, 0x01, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x00, 0x00,
-    ];
+    let hsb_bytes = vec![0x00, 0x01, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x00, 0x00];
     let mut hsb_reader = PsdReader::new(Cursor::new(hsb_bytes), ReadOptions::default());
     assert_eq!(
         hsb_reader.read_color().unwrap(),
@@ -32,9 +28,7 @@ fn read_color_preserves_raw_rgb_hsb_lab_values() {
         }
     );
 
-    let lab_bytes = vec![
-        0x00, 0x07, 0x27, 0x10, 0xff, 0x9c, 0x00, 0x64, 0x00, 0x00,
-    ];
+    let lab_bytes = vec![0x00, 0x07, 0x27, 0x10, 0xff, 0x9c, 0x00, 0x64, 0x00, 0x00];
     let mut lab_reader = PsdReader::new(Cursor::new(lab_bytes), ReadOptions::default());
     assert_eq!(
         lab_reader.read_color().unwrap(),
@@ -115,6 +109,30 @@ fn write_color_rejects_lossy_rgb_rgba_and_frgb_color_structures() {
             "unexpected error: {err}"
         );
     }
+}
+
+#[test]
+fn color_sampler_public_model_preserves_version_specific_positions() {
+    let v1 = psd::ColorSampler {
+        version: 1,
+        position: psd::ColorSamplerPosition::V1 {
+            horizontal: 11,
+            vertical: 22,
+        },
+        color_space: 0,
+        depth: None,
+    };
+    let v2 = psd::ColorSampler {
+        version: 2,
+        position: psd::ColorSamplerPosition::V2 {
+            horizontal: 33,
+            vertical: 44,
+        },
+        color_space: 8,
+        depth: Some(16),
+    };
+
+    assert_ne!(v1.position, v2.position);
 }
 
 #[test]
@@ -563,9 +581,15 @@ fn test_canonical_shared_types_are_constructible_from_public_api() {
 #[test]
 fn test_no_remaining_duplicate_public_model_type_names() {
     let source_files = [
-        ("src/additional_info.rs", include_str!("../src/additional_info.rs")),
+        (
+            "src/additional_info.rs",
+            include_str!("../src/additional_info.rs"),
+        ),
         ("src/adjustments.rs", include_str!("../src/adjustments.rs")),
-        ("src/image_resources.rs", include_str!("../src/image_resources.rs")),
+        (
+            "src/image_resources.rs",
+            include_str!("../src/image_resources.rs"),
+        ),
         ("src/layer.rs", include_str!("../src/layer.rs")),
         ("src/psd.rs", include_str!("../src/psd.rs")),
         ("src/types.rs", include_str!("../src/types.rs")),
@@ -624,8 +648,14 @@ fn test_no_remaining_duplicate_public_model_type_names() {
 #[test]
 fn test_no_duplicate_public_type_names_for_canonical_models() {
     let files = [
-        ("src/additional_info.rs", include_str!("../src/additional_info.rs")),
-        ("src/image_resources.rs", include_str!("../src/image_resources.rs")),
+        (
+            "src/additional_info.rs",
+            include_str!("../src/additional_info.rs"),
+        ),
+        (
+            "src/image_resources.rs",
+            include_str!("../src/image_resources.rs"),
+        ),
         ("src/layer.rs", include_str!("../src/layer.rs")),
         ("src/psd.rs", include_str!("../src/psd.rs")),
         ("src/types.rs", include_str!("../src/types.rs")),
@@ -978,10 +1008,11 @@ fn psb_large_tagged_blocks_use_8b64_length_headers() {
         right: Some(1),
         ..Default::default()
     };
-    layer.additional_info.high_depth_layer_data = Some(psd_great::additional_info::HighDepthLayerInfo {
-        key: PsdStringCode::from("Lr16"),
-        layers: vec![],
-    });
+    layer.additional_info.high_depth_layer_data =
+        Some(psd_great::additional_info::HighDepthLayerInfo {
+            key: PsdStringCode::from("Lr16"),
+            layers: vec![],
+        });
 
     let psd = Psd {
         width: 1,
@@ -1033,7 +1064,10 @@ fn merged_alpha_writes_negative_layer_count() {
     let bytes = write_psd(&psd, &WriteOptions::default()).unwrap();
 
     let layer_count_offset = 26 + 4 + 4 + 4 + 4;
-    assert_eq!(&bytes[layer_count_offset..layer_count_offset + 2], &[0xFF, 0xFF]);
+    assert_eq!(
+        &bytes[layer_count_offset..layer_count_offset + 2],
+        &[0xFF, 0xFF]
+    );
 }
 
 #[test]

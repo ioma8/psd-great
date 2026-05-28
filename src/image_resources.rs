@@ -11,7 +11,10 @@ use crate::binrw_support::{
 use crate::descriptor::Descriptor;
 use crate::error::{PsdError, Result};
 use crate::reader::PsdReader;
-use crate::types::{BlendMode, Color, Fraction, LayerCompCapturedInfo, Point, PsdIntCode, PsdU16Code, PsdU32Code, RenderingIntent};
+use crate::types::{
+    BlendMode, Color, Fraction, LayerCompCapturedInfo, Point, PsdIntCode, PsdU16Code, PsdU32Code,
+    RenderingIntent,
+};
 use crate::writer::PsdWriter;
 use std::collections::HashMap;
 use std::io::{Read, Seek};
@@ -45,14 +48,16 @@ pub struct ImageResources {
     pub global_altitude: Option<i32>,
     /// Layer state
     pub layer_state: Option<u16>,
-    /// Layer clipping values (resource 1026)
-    pub clipping: Option<Vec<u16>>,
+    /// Layer group IDs (resource 1026)
+    pub layer_group_ids: Option<Vec<u16>>,
     /// Resource visibility (resource 1072)
     pub resource_visibility_typed: Option<ResourceVisibility>,
-    /// Custom points (resource 1073)
-    pub custom_points_typed: Option<CustomPointsResource>,
-    /// Display info (resource 1036)
+    /// Color samplers (resource 1073)
+    pub color_samplers_typed: Option<ColorSamplersResource>,
+    /// Display info (resource 1077)
     pub display_info_typed: Option<DisplayInfoResource>,
+    /// Name of clipping path (resource 2999)
+    pub clipping_path_name: Option<String>,
     /// Layer selection IDs
     pub layer_selection_ids: Option<Vec<u32>>,
     /// Alpha channel names
@@ -103,9 +108,9 @@ pub struct ResourceVisibility {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CustomPointsResource {
+pub struct ColorSamplersResource {
     pub version: u32,
-    pub points: Vec<crate::psd::CustomPoint>,
+    pub samplers: Vec<crate::psd::ColorSampler>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,6 +120,53 @@ pub struct DisplayInfoResource {
     pub v_res_unit: PsdU16Code,
     pub width_unit: PsdU16Code,
     pub height_unit: PsdU16Code,
+}
+
+fn parse_thumbnail_resource(bytes: &[u8]) -> Option<Thumbnail> {
+    if bytes.len() < 28 {
+        return None;
+    }
+    let format = u32::from_be_bytes(bytes[0..4].try_into().ok()?);
+    let width = u32::from_be_bytes(bytes[4..8].try_into().ok()?);
+    let height = u32::from_be_bytes(bytes[8..12].try_into().ok()?);
+    let _width_bytes = u32::from_be_bytes(bytes[12..16].try_into().ok()?);
+    let _total_size = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+    let compressed_size = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+    let _bits_per_pixel = u16::from_be_bytes(bytes[24..26].try_into().ok()?);
+    let _planes = u16::from_be_bytes(bytes[26..28].try_into().ok()?);
+    let data_end = 28 + compressed_size as usize;
+    let data = bytes.get(28..data_end)?.to_vec();
+    Some(Thumbnail {
+        width,
+        height,
+        format: if format == 1 {
+            ThumbnailFormat::JpegRgb
+        } else {
+            ThumbnailFormat::RawRgb
+        },
+        data,
+    })
+}
+
+fn build_thumbnail_resource(thumbnail: &Thumbnail) -> Vec<u8> {
+    let format = match thumbnail.format {
+        ThumbnailFormat::RawRgb => 0u32,
+        ThumbnailFormat::JpegRgb => 1u32,
+    };
+    let width_bytes = ((thumbnail.width * 24 + 31) / 32) * 4;
+    let total_size = width_bytes * thumbnail.height;
+    let compressed_size = thumbnail.data.len() as u32;
+    let mut bytes = Vec::with_capacity(28 + thumbnail.data.len());
+    bytes.extend_from_slice(&format.to_be_bytes());
+    bytes.extend_from_slice(&thumbnail.width.to_be_bytes());
+    bytes.extend_from_slice(&thumbnail.height.to_be_bytes());
+    bytes.extend_from_slice(&width_bytes.to_be_bytes());
+    bytes.extend_from_slice(&total_size.to_be_bytes());
+    bytes.extend_from_slice(&compressed_size.to_be_bytes());
+    bytes.extend_from_slice(&24u16.to_be_bytes());
+    bytes.extend_from_slice(&1u16.to_be_bytes());
+    bytes.extend_from_slice(&thumbnail.data);
+    bytes
 }
 
 /// Resolution information
@@ -174,62 +226,92 @@ fn build_display_info_resource(info: &DisplayInfoResource) -> Vec<u8> {
     bytes
 }
 
-fn parse_custom_points_resource(bytes: &[u8]) -> CustomPointsResource {
+fn parse_color_samplers_resource(bytes: &[u8]) -> ColorSamplersResource {
     if bytes.len() < 8 {
-        return CustomPointsResource {
+        return ColorSamplersResource {
             version: 0,
-            points: Vec::new(),
+            samplers: Vec::new(),
         };
     }
-    // All fields are little-endian per TS (DataView with false flag)
-    let version = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-    let count = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
-    let mut points = Vec::new();
+    let version = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let count = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    let mut samplers = Vec::new();
     let mut offset = 8;
     for _ in 0..count {
-        if offset + 14 > bytes.len() {
+        let record_len = if version == 1 { 10 } else { 12 };
+        if offset + record_len > bytes.len() {
             break;
         }
-        let y_raw = i32::from_le_bytes([
+        let horizontal = i32::from_be_bytes([
+            bytes[offset],
+            bytes[offset + 1],
             bytes[offset + 2],
             bytes[offset + 3],
+        ]);
+        let vertical = i32::from_be_bytes([
             bytes[offset + 4],
             bytes[offset + 5],
-        ]);
-        let x_raw = i32::from_le_bytes([
             bytes[offset + 6],
             bytes[offset + 7],
-            bytes[offset + 8],
-            bytes[offset + 9],
         ]);
-        points.push(crate::psd::CustomPoint {
-            x: x_raw as f64 / 65536.0,
-            y: if version >= 2 {
-                y_raw as f64 / 65536.0
+        let position = match version {
+            1 => crate::psd::ColorSamplerPosition::V1 {
+                horizontal,
+                vertical,
+            },
+            _ => crate::psd::ColorSamplerPosition::V2 {
+                horizontal,
+                vertical,
+            },
+        };
+        samplers.push(crate::psd::ColorSampler {
+            version,
+            position,
+            color_space: i16::from_be_bytes([bytes[offset + 8], bytes[offset + 9]]),
+            depth: if version == 2 {
+                Some(u16::from_be_bytes([bytes[offset + 10], bytes[offset + 11]]))
             } else {
-                i16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]) as f64
+                None
             },
         });
-        offset += 14;
+        offset += record_len;
     }
-    CustomPointsResource { version, points }
+    ColorSamplersResource { version, samplers }
 }
 
-fn build_custom_points_resource(points: &CustomPointsResource) -> Vec<u8> {
-    // All fields are little-endian per TS
-    let mut bytes = Vec::with_capacity(8 + points.points.len() * 14);
-    bytes.extend_from_slice(&points.version.to_le_bytes());
-    bytes.extend_from_slice(&(points.points.len() as u32).to_le_bytes());
-    for point in &points.points {
-        let y_fixed = (point.y * 65536.0) as i32;
-        let x_fixed = (point.x * 65536.0) as i32;
-        bytes.extend_from_slice(&14i16.to_le_bytes());
-        bytes.extend_from_slice(&y_fixed.to_le_bytes());
-        bytes.extend_from_slice(&x_fixed.to_le_bytes());
-        bytes.extend_from_slice(&(-1i16).to_le_bytes());
-        bytes.extend_from_slice(&8i16.to_le_bytes());
+fn build_color_samplers_resource(samplers: &ColorSamplersResource) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(8 + samplers.samplers.len() * 12);
+    bytes.extend_from_slice(&samplers.version.to_be_bytes());
+    bytes.extend_from_slice(&(samplers.samplers.len() as u32).to_be_bytes());
+    for sampler in &samplers.samplers {
+        let (horizontal, vertical) = match &sampler.position {
+            crate::psd::ColorSamplerPosition::V1 {
+                horizontal,
+                vertical,
+            }
+            | crate::psd::ColorSamplerPosition::V2 {
+                horizontal,
+                vertical,
+            } => (*horizontal, *vertical),
+        };
+        bytes.extend_from_slice(&horizontal.to_be_bytes());
+        bytes.extend_from_slice(&vertical.to_be_bytes());
+        bytes.extend_from_slice(&(sampler.color_space as u16).to_be_bytes());
+        if samplers.version >= 2 {
+            bytes.extend_from_slice(&sampler.depth.unwrap_or(0).to_be_bytes());
+        }
     }
     bytes
+}
+
+#[cfg(test)]
+pub(crate) fn parse_color_samplers_resource_for_test(bytes: &[u8]) -> ColorSamplersResource {
+    parse_color_samplers_resource(bytes)
+}
+
+#[cfg(test)]
+pub(crate) fn build_color_samplers_resource_for_test(samplers: &ColorSamplersResource) -> Vec<u8> {
+    build_color_samplers_resource(samplers)
 }
 
 /// Print information
@@ -285,8 +367,8 @@ pub struct Thumbnail {
 /// Thumbnail format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThumbnailFormat {
-    Rgb = 1,
-    Jpeg = 0,
+    RawRgb = 0,
+    JpegRgb = 1,
 }
 
 /// Grid and guides
@@ -338,7 +420,10 @@ pub enum PrintScaleStyle {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Slices {
     pub version: u32,
+    pub bounds: Option<SliceBounds>,
+    pub group_name: Option<String>,
     pub slices: Vec<Slice>,
+    pub descriptor: Option<Descriptor>,
 }
 
 /// Slice
@@ -363,6 +448,7 @@ pub struct Slice {
     pub cell_is_html: bool,
     pub source_id: Option<u32>,
     pub source_type: Option<PsdU32Code>,
+    pub descriptor: Option<Descriptor>,
 }
 
 /// Rectangle bounds for slices (integer pixel coordinates)
@@ -438,19 +524,36 @@ pub struct UrlEntry {
 // Note: Function pointers can't use impl Trait, so handlers are called directly
 
 impl<R: Read + Seek> PsdReader<R> {
-    fn read_slice_string(&mut self) -> Result<String> {
-        let len = decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "slice string length")?.value
-            as usize;
-        Ok(String::from_utf8_lossy(&self.read_bytes(len)?).to_string())
-    }
-
     fn read_slices(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
         let start = self.offset;
-        if length < 8 {
+        if length < 4 {
             self.skip_bytes(length)?;
             return Ok(());
         }
         let version = decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "slices version")?.value;
+        if version == 7 || version == 8 {
+            let _descriptor_version =
+                decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "slices descriptor version")?
+                    .value;
+            let descriptor = self.read_descriptor_structure()?;
+            resources.slices = Some(Slices {
+                version,
+                bounds: None,
+                group_name: None,
+                slices: Vec::new(),
+                descriptor: Some(descriptor),
+            });
+            return Ok(());
+        }
+        if length < 24 {
+            self.skip_bytes(length.saturating_sub(4))?;
+            return Ok(());
+        }
+        let top = self.read_i32()?;
+        let left = self.read_i32()?;
+        let bottom = self.read_i32()?;
+        let right = self.read_i32()?;
+        let group_name = self.read_unicode_string()?;
         let count =
             decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "slices count")?.value as usize;
         let mut slices = Vec::new();
@@ -461,42 +564,48 @@ impl<R: Read + Seek> PsdReader<R> {
             let id = self.read_i32()? as u32;
             let group_id = self.read_i32()? as u32;
             let origin = self.read_i32()? as u32;
-            let associated_layer_id = self.read_i32()? as u32;
-            let name = self.read_slice_string()?;
+            let associated_layer_id = if origin == 1 {
+                self.read_i32()? as u32
+            } else {
+                0
+            };
+            let name = self.read_unicode_string()?;
             if (self.offset - start) as usize + 20 > length {
                 break;
             }
             let slice_type = self.read_i32()? as u32;
-            let top = self.read_i32()?;
             let left = self.read_i32()?;
-            let bottom = self.read_i32()?;
+            let top = self.read_i32()?;
             let right = self.read_i32()?;
-            let url = self.read_slice_string()?;
-            let target = self.read_slice_string()?;
-            let message = self.read_slice_string()?;
-            let alt_tag = self.read_slice_string()?;
-            let cell_text = self.read_slice_string()?;
+            let bottom = self.read_i32()?;
+            let url = self.read_unicode_string()?;
+            let target = self.read_unicode_string()?;
+            let message = self.read_unicode_string()?;
+            let alt_tag = self.read_unicode_string()?;
+            let cell_is_html = self.read_u8()? != 0;
+            let cell_text = self.read_unicode_string()?;
             if (self.offset - start) as usize + 13 > length {
                 break;
             }
             let horizontal_align = self.read_i32()?;
             let vertical_align = self.read_i32()?;
             let alpha = self.read_u8()?;
-            if (self.offset - start) as usize + 8 > length {
+            if (self.offset - start) as usize + 3 > length {
                 break;
             }
-            let bg_color = [
-                self.read_u8()?,
-                self.read_u8()?,
-                self.read_u8()?,
-                self.read_u8()?,
-            ];
-            let cell_is_html = self.read_i32()?;
+            let bg_color = [alpha, self.read_u8()?, self.read_u8()?, self.read_u8()?];
             let mut source_id = None;
             let mut source_type = None;
-            if version >= 7 && (self.offset - start) as usize + 8 <= length {
+            let mut descriptor = None;
+            if (self.offset - start) as usize + 8 <= length {
                 source_id = Some(self.read_u32()?);
                 source_type = Some(self.read_u32()?);
+            }
+            if (self.offset - start) as usize + 4 <= length {
+                let descriptor_version = self.read_u32()?;
+                if descriptor_version == 16 {
+                    descriptor = Some(self.read_descriptor_structure()?);
+                }
             }
             slices.push(Slice {
                 id,
@@ -520,12 +629,24 @@ impl<R: Read + Seek> PsdReader<R> {
                 vertical_align: PsdIntCode(vertical_align),
                 alpha,
                 bg_color,
-                cell_is_html: cell_is_html != 0,
+                cell_is_html,
                 source_id,
                 source_type: source_type.map(PsdU32Code),
+                descriptor,
             });
         }
-        resources.slices = Some(Slices { version, slices });
+        resources.slices = Some(Slices {
+            version,
+            bounds: Some(SliceBounds {
+                top,
+                left,
+                bottom,
+                right,
+            }),
+            group_name: Some(group_name),
+            slices,
+            descriptor: None,
+        });
         Ok(())
     }
 
@@ -543,11 +664,11 @@ impl<R: Read + Seek> PsdReader<R> {
             offset += 2;
             let mut points = Vec::with_capacity(4);
             for _ in 0..4 {
-                let x = i32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as f64
-                    / 65536.0;
-                offset += 4;
                 let y = i32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as f64
-                    / 65536.0;
+                    / 16777216.0;
+                offset += 4;
+                let x = i32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as f64
+                    / 16777216.0;
                 offset += 4;
                 points.push(Point { x, y });
             }
@@ -741,15 +862,18 @@ impl<R: Read + Seek> PsdReader<R> {
         Ok(())
     }
 
-    /// Read layers group (resource 1026)
-    pub fn read_clipping(&mut self, resources: &mut ImageResources, length: usize) -> Result<()> {
+    /// Read layer group IDs (resource 1026)
+    pub fn read_layer_group_ids(
+        &mut self,
+        resources: &mut ImageResources,
+        length: usize,
+    ) -> Result<()> {
         let mut groups = Vec::new();
         let count = length / 2;
         for _ in 0..count {
-            let bytes = self.read_bytes(2)?;
-            groups.push(u16::from_le_bytes([bytes[0], bytes[1]]));
+            groups.push(self.read_u16()?);
         }
-        resources.clipping = Some(groups);
+        resources.layer_group_ids = Some(groups);
         Ok(())
     }
 
@@ -865,16 +989,6 @@ impl<R: Read + Seek> PsdReader<R> {
 }
 
 impl PsdWriter {
-    fn write_slice_string(&mut self, value: &str) -> Result<()> {
-        self.write_bytes(&encode_be(
-            &U32ValueRecord {
-                value: value.len() as u32,
-            },
-            "slice string length",
-        )?)?;
-        self.write_bytes(value.as_bytes())
-    }
-
     /// Write resolution info
     pub fn write_resolution_info(&mut self, info: &ResolutionInfo) -> Result<()> {
         let record = ResolutionInfoRecord {
@@ -988,11 +1102,10 @@ impl PsdWriter {
         self.write_bytes(&encode_be(&LayerStateRecord { state }, "layer state")?)
     }
 
-    /// Write layers group
-    pub fn write_clipping(&mut self, clipping: &[u16]) -> Result<()> {
-        for value in clipping {
-            // Little-endian u16 per TS
-            self.write_bytes(&value.to_le_bytes())?;
+    /// Write layer group IDs
+    pub fn write_layer_group_ids(&mut self, group_ids: &[u16]) -> Result<()> {
+        for value in group_ids {
+            self.write_u16(*value)?;
         }
         Ok(())
     }
@@ -1067,9 +1180,13 @@ pub fn read_image_resources<R: Read + Seek>(
             1010 => reader.read_background_color(&mut resources)?,
             1011 => reader.read_print_flags(&mut resources)?,
             1024 => reader.read_layer_state(&mut resources)?,
-            1026 => reader.read_clipping(&mut resources, data_length)?,
+            1026 => reader.read_layer_group_ids(&mut resources, data_length)?,
             1032 => reader.read_grid_and_guides(&mut resources)?,
             1036 => {
+                let bytes = reader.read_bytes(data_length)?;
+                resources.thumbnail = parse_thumbnail_resource(&bytes);
+            }
+            1077 => {
                 let bytes = reader.read_bytes(data_length)?;
                 resources.display_info_typed = parse_display_info_resource(&bytes);
             }
@@ -1094,9 +1211,12 @@ pub fn read_image_resources<R: Read + Seek>(
             }
             1073 => {
                 let bytes = reader.read_bytes(data_length)?;
-                resources.custom_points_typed = Some(parse_custom_points_resource(&bytes));
+                resources.color_samplers_typed = Some(parse_color_samplers_resource(&bytes));
             }
-            1065 | 1074 | 1075 | 2999 | 3000 => {
+            2999 => {
+                resources.clipping_path_name = Some(reader.read_pascal_string(2)?);
+            }
+            1065 | 1074 | 1075 | 3000 => {
                 let _version = decode_be::<U32ValueRecord>(
                     &reader.read_bytes(4)?,
                     "descriptor resource version",
@@ -1189,8 +1309,8 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
         write_resource(writer, 1024, &|w| w.write_layer_state(state))?;
     }
 
-    if let Some(ref clipping) = resources.clipping {
-        write_resource(writer, 1026, &|w| w.write_clipping(clipping))?;
+    if let Some(ref group_ids) = resources.layer_group_ids {
+        write_resource(writer, 1026, &|w| w.write_layer_group_ids(group_ids))?;
     }
 
     if let Some(ref grid_guides) = resources.grid_and_guides {
@@ -1229,8 +1349,14 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
         write_resource(writer, 1069, &|w| w.write_layer_selection_ids(ids))?;
     }
 
-    if let Some(ref info) = resources.display_info_typed {
+    if let Some(ref thumbnail) = resources.thumbnail {
         write_resource(writer, 1036, &|w| {
+            w.write_bytes(&build_thumbnail_resource(thumbnail))
+        })?;
+    }
+
+    if let Some(ref info) = resources.display_info_typed {
+        write_resource(writer, 1077, &|w| {
             w.write_bytes(&build_display_info_resource(info))
         })?;
     }
@@ -1247,50 +1373,74 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
         })?;
     }
 
-    if let Some(ref points) = resources.custom_points_typed {
+    if let Some(ref points) = resources.color_samplers_typed {
         write_resource(writer, 1073, &|w| {
-            w.write_bytes(&build_custom_points_resource(points))
+            w.write_bytes(&build_color_samplers_resource(points))
+        })?;
+    }
+
+    if let Some(ref clipping_path_name) = resources.clipping_path_name {
+        write_resource(writer, 2999, &|w| {
+            w.write_pascal_string(clipping_path_name, 2)
         })?;
     }
 
     if let Some(ref slices) = resources.slices {
         write_resource(writer, 1050, &|w| {
-            w.write_bytes(&encode_be(
-                &U32ValueRecord {
-                    value: slices.version,
-                },
-                "slices version",
-            )?)?;
-            w.write_bytes(&encode_be(
-                &U32ValueRecord {
-                    value: slices.slices.len() as u32,
-                },
-                "slices count",
-            )?)?;
+            if let Some(ref descriptor) = slices.descriptor {
+                w.write_u32(slices.version)?;
+                w.write_u32(16)?;
+                w.write_descriptor_structure(descriptor)?;
+                return Ok(());
+            }
+
+            w.write_u32(6)?;
+            let bounds = slices.bounds.unwrap_or(SliceBounds {
+                top: 0,
+                left: 0,
+                bottom: 0,
+                right: 0,
+            });
+            w.write_i32(bounds.top)?;
+            w.write_i32(bounds.left)?;
+            w.write_i32(bounds.bottom)?;
+            w.write_i32(bounds.right)?;
+            w.write_unicode_string(slices.group_name.as_deref().unwrap_or(""))?;
+            w.write_u32(slices.slices.len() as u32)?;
             for slice in &slices.slices {
                 w.write_i32(slice.id as i32)?;
                 w.write_i32(slice.group_id as i32)?;
                 w.write_i32(slice.origin.0 as i32)?;
-                w.write_i32(slice.associated_layer_id as i32)?;
-                w.write_slice_string(&slice.name)?;
+                if slice.origin.0 == 1 {
+                    w.write_i32(slice.associated_layer_id as i32)?;
+                }
+                w.write_unicode_string(&slice.name)?;
                 w.write_i32(slice.slice_type.0 as i32)?;
-                w.write_i32(slice.bounds.top)?;
                 w.write_i32(slice.bounds.left)?;
-                w.write_i32(slice.bounds.bottom)?;
+                w.write_i32(slice.bounds.top)?;
                 w.write_i32(slice.bounds.right)?;
-                w.write_slice_string(&slice.url)?;
-                w.write_slice_string(&slice.target)?;
-                w.write_slice_string(&slice.message)?;
-                w.write_slice_string(&slice.alt_tag)?;
-                w.write_slice_string(&slice.cell_text)?;
+                w.write_i32(slice.bounds.bottom)?;
+                w.write_unicode_string(&slice.url)?;
+                w.write_unicode_string(&slice.target)?;
+                w.write_unicode_string(&slice.message)?;
+                w.write_unicode_string(&slice.alt_tag)?;
+                w.write_u8(u8::from(slice.cell_is_html))?;
+                w.write_unicode_string(&slice.cell_text)?;
                 w.write_i32(slice.horizontal_align.0)?;
                 w.write_i32(slice.vertical_align.0)?;
                 w.write_u8(slice.alpha)?;
-                w.write_bytes(&slice.bg_color)?;
-                w.write_i32(i32::from(slice.cell_is_html))?;
-                if slices.version >= 7 {
-                    w.write_u32(slice.source_id.unwrap_or(0))?;
-                    w.write_u32(slice.source_type.unwrap_or(PsdU32Code(0)).0)?;
+                w.write_u8(slice.bg_color[1])?;
+                w.write_u8(slice.bg_color[2])?;
+                w.write_u8(slice.bg_color[3])?;
+                if let Some(source_id) = slice.source_id {
+                    w.write_u32(source_id)?;
+                }
+                if let Some(source_type) = slice.source_type {
+                    w.write_u32(source_type.0)?;
+                }
+                if let Some(ref descriptor) = slice.descriptor {
+                    w.write_u32(16)?;
+                    w.write_descriptor_structure(descriptor)?;
                 }
             }
             Ok(())
@@ -1349,8 +1499,8 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
             for record in records {
                 w.write_u16(record.record_type)?;
                 for point in record.points.iter().take(4) {
-                    w.write_i32((point.x * 65536.0).round() as i32)?;
-                    w.write_i32((point.y * 65536.0).round() as i32)?;
+                    w.write_i32((point.y * 16777216.0).round() as i32)?;
+                    w.write_i32((point.x * 16777216.0).round() as i32)?;
                 }
                 for _ in record.points.len()..4 {
                     w.write_i32(0)?;
@@ -1526,6 +1676,97 @@ mod tests {
     }
 
     #[test]
+    fn clipping_path_name_roundtrip() {
+        let mut resources = ImageResources::default();
+        resources.clipping_path_name = Some("Path 1".to_string());
+
+        let mut w = PsdWriter::new(128);
+        write_image_resources(&mut w, &resources).unwrap();
+        let buf = w.into_buffer();
+        let len = buf.len();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let reparsed = read_image_resources(&mut reader, len).unwrap();
+
+        assert_eq!(reparsed.clipping_path_name.as_deref(), Some("Path 1"));
+    }
+
+    #[test]
+    fn thumbnail_format_matches_spec_values() {
+        let thumbnail = Thumbnail {
+            width: 1,
+            height: 1,
+            format: ThumbnailFormat::JpegRgb,
+            data: vec![0xFF, 0xD8, 0xFF],
+        };
+        let bytes = build_thumbnail_resource(&thumbnail);
+        assert_eq!(u32::from_be_bytes(bytes[0..4].try_into().unwrap()), 1);
+    }
+
+    #[test]
+    fn color_sampler_roundtrips_color_space_and_depth() {
+        let resource = ColorSamplersResource {
+            version: 2,
+            samplers: vec![crate::psd::ColorSampler {
+                version: 2,
+                position: crate::psd::ColorSamplerPosition::V2 {
+                    horizontal: 100,
+                    vertical: 200,
+                },
+                color_space: 8,
+                depth: Some(16),
+            }],
+        };
+
+        let bytes = build_color_samplers_resource_for_test(&resource);
+        let reparsed = parse_color_samplers_resource_for_test(&bytes);
+        assert_eq!(reparsed, resource);
+    }
+
+    #[test]
+    fn color_sampler_resource_v1_roundtrips_versioned_position() {
+        let resource = ColorSamplersResource {
+            version: 1,
+            samplers: vec![crate::psd::ColorSampler {
+                version: 1,
+                position: crate::psd::ColorSamplerPosition::V1 {
+                    horizontal: 123,
+                    vertical: 456,
+                },
+                color_space: 2,
+                depth: None,
+            }],
+        };
+
+        let bytes = build_color_samplers_resource_for_test(&resource);
+        let reparsed = parse_color_samplers_resource_for_test(&bytes);
+
+        assert_eq!(reparsed, resource);
+        assert_eq!(bytes.len(), 18);
+    }
+
+    #[test]
+    fn color_sampler_resource_v2_roundtrips_depth_and_position() {
+        let resource = ColorSamplersResource {
+            version: 2,
+            samplers: vec![crate::psd::ColorSampler {
+                version: 2,
+                position: crate::psd::ColorSamplerPosition::V2 {
+                    horizontal: -32,
+                    vertical: 4096,
+                },
+                color_space: 8,
+                depth: Some(16),
+            }],
+        };
+
+        let bytes = build_color_samplers_resource_for_test(&resource);
+        let reparsed = parse_color_samplers_resource_for_test(&bytes);
+
+        assert_eq!(reparsed, resource);
+        assert_eq!(bytes.len(), 20);
+    }
+
+    #[test]
     fn path_resource_roundtrip() {
         let mut resources = ImageResources::default();
         resources.path_resources.insert(
@@ -1559,7 +1800,14 @@ mod tests {
     fn slices_roundtrip() {
         let mut resources = ImageResources::default();
         resources.slices = Some(Slices {
-            version: 7,
+            version: 6,
+            bounds: Some(SliceBounds {
+                top: 0,
+                left: 0,
+                bottom: 100,
+                right: 100,
+            }),
+            group_name: Some("group".to_string()),
             slices: vec![Slice {
                 id: 1,
                 group_id: 2,
@@ -1581,11 +1829,13 @@ mod tests {
                 horizontal_align: PsdIntCode(3),
                 vertical_align: PsdIntCode(5),
                 alpha: 255,
-                bg_color: [1, 2, 3, 4],
+                bg_color: [255, 2, 3, 4],
                 cell_is_html: true,
                 source_id: Some(9),
                 source_type: Some(PsdU32Code(10)),
+                descriptor: None,
             }],
+            descriptor: None,
         });
 
         let mut w = PsdWriter::new(512);

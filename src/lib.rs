@@ -49,6 +49,9 @@ pub mod jpeg;
 pub mod utf8;
 
 // Re-export commonly used types at the crate root
+pub use additional_info::LayerAdditionalInfo;
+pub use additional_info::{PlacedLayer, SectionDivider, VectorStroke};
+pub use adjustments::AdjustmentLayer;
 pub use compression::{compress_rle, compress_zip, decompress_rle, decompress_zip};
 pub use effects::{
     ColorStop, EffectContour, EffectPattern, LayerEffectBevel, LayerEffectGradientOverlay,
@@ -57,15 +60,13 @@ pub use effects::{
 };
 pub use error::{PsdError, Result};
 pub use helpers::{from_blend_mode, has_alpha, to_blend_mode};
-pub use additional_info::LayerAdditionalInfo;
 pub use image_resources::ImageResources;
-pub use additional_info::{PlacedLayer, SectionDivider, VectorStroke};
-pub use adjustments::AdjustmentLayer;
 pub use layer::{
-    BezierKnot, BezierPath, Layer, LayerMaskData,
-    LayerVectorMask, LinkedFile, PatternInfo, VectorContent,
+    BezierKnot, BezierPath, Layer, LayerMaskData, LayerVectorMask, LinkedFile, PatternInfo,
+    VectorContent,
 };
 pub use psd::{Annotation, DocumentSlices, GlobalLayerMaskInfo, Psd, ReadOptions, WriteOptions};
+pub use psd::{ColorSampler, ColorSamplerPosition, DisplayInfo};
 pub use reader::{read_psd, PsdReader};
 pub use text::{
     Font, LayerTextData, ParagraphStyle, ParagraphStyleRun, TextStyle, TextStyleRun, Warp,
@@ -74,11 +75,10 @@ pub use types::{
     AntiAlias, BlendMode, BooleanOperation, ChannelID, Color, ColorMode, Compression, Fraction,
     GradientStyle, Grayscale, InterpolationMethod, Justification, LayerColor,
     LayerCompCapturedInfo, Orientation, PixelData, Point, PsdIntCode, PsdStringCode, PsdU16Code,
-    PsdU32Code, RenderingIntent, SectionDividerType, Units, UnitsValue, WarpStyle, CMYK, FRGB,
-    RGB, RGBA,
+    PsdU32Code, RenderingIntent, SectionDividerType, Units, UnitsValue, WarpStyle, CMYK, FRGB, RGB,
+    RGBA,
 };
 pub use writer::{write_psd, PsdWriter};
-pub use psd::{ColorSampler, DisplayInfo};
 
 // Re-export additional format types
 pub use abr::{read_abr, Abr, Brush, BrushDynamics, BrushShape, SampleInfo};

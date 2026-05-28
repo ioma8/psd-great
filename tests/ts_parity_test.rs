@@ -4,8 +4,8 @@
 //! Source: /Users/jakubkolcar/projects/customs/photoshop/psd/test/*.test.ts
 
 use psd_great::{
-    read_psd, write_psd, BlendMode, ColorMode, ColorSamplerPosition, Layer,
-    LayerAdditionalInfo, LayerMaskData, PixelData, Psd, ReadOptions, WriteOptions,
+    read_psd, write_psd, BlendMode, ColorMode, Layer, LayerAdditionalInfo, LayerMaskData,
+    PixelData, Psd, ReadOptions, WriteOptions,
 };
 use std::io::Cursor;
 
@@ -1068,7 +1068,10 @@ mod document_tagged_blocks_parity {
             .expect("expected document shmd metadata");
         assert_eq!(metadata.entries.len(), 1);
         assert_eq!(metadata.entries[0].key, "cust");
-        assert_eq!(metadata.entries[0].raw_data, vec![0x00, 0x00, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(
+            metadata.entries[0].raw_data,
+            vec![0x00, 0x00, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04]
+        );
     }
 }
 
@@ -1244,15 +1247,16 @@ mod remaining_tagged_block_parity {
         layer.blend_mode = Some(BlendMode::Normal);
         layer.opacity = Some(1.0);
         layer.additional_info.name = Some("Annotated".to_string());
-        layer.additional_info.annotations = Some(vec![psd_great::additional_info::AnnotationItem {
-            x: 10,
-            y: 20,
-            color_l: 1,
-            color_o: 2,
-            color_c: 3,
-            author: "author".to_string(),
-            text: "note".to_string(),
-        }]);
+        layer.additional_info.annotations =
+            Some(vec![psd_great::additional_info::AnnotationItem {
+                x: 10,
+                y: 20,
+                color_l: 1,
+                color_o: 2,
+                color_c: 3,
+                author: "author".to_string(),
+                text: "note".to_string(),
+            }]);
 
         let mut psd = Psd::default();
         psd.width = 1;
@@ -1298,24 +1302,24 @@ mod remaining_tagged_block_parity {
             layer.additional_info.name = Some("Linked".to_string());
             layer.additional_info.linked_files =
                 Some(psd_great::additional_info::LinkedFilesBlock {
-                key: psd_great::PsdStringCode::from(*test_key),
-                items: vec![psd_great::LinkedFile {
-                    id: "id".to_string(),
-                    name: "name".to_string(),
-                    item_version: Some(7),
-                    data_kind: Some(psd_great::PsdStringCode::from("liFD")),
-                    file_type: Some(psd_great::PsdStringCode::from("JPEG")),
-                    creator: Some(psd_great::PsdStringCode::from("8BIM")),
-                    data: Some(vec![1, 2, 3]),
-                    time: None,
-                    descriptor: None,
-                    child_document_id: None,
-                    asset_mod_time: None,
-                    asset_locked_state: None,
-                    linked_file: None,
-                    open_descriptor: None,
-                }],
-            });
+                    key: psd_great::PsdStringCode::from(*test_key),
+                    items: vec![psd_great::LinkedFile {
+                        id: "id".to_string(),
+                        name: "name".to_string(),
+                        item_version: Some(7),
+                        data_kind: Some(psd_great::PsdStringCode::from("liFD")),
+                        file_type: Some(psd_great::PsdStringCode::from("JPEG")),
+                        creator: Some(psd_great::PsdStringCode::from("8BIM")),
+                        data: Some(vec![1, 2, 3]),
+                        time: None,
+                        descriptor: None,
+                        child_document_id: None,
+                        asset_mod_time: None,
+                        asset_locked_state: None,
+                        linked_file: None,
+                        open_descriptor: None,
+                    }],
+                });
 
             let mut psd = Psd::default();
             psd.width = 1;
@@ -1350,6 +1354,83 @@ mod remaining_tagged_block_parity {
                 Some(expected_key)
             );
         }
+    }
+
+    #[test]
+    fn linked_file_roundtrips_real_metadata_fields() {
+        use psd_great::additional_info::LinkedFilesBlock;
+        use psd_great::descriptor::Descriptor;
+
+        let linked = psd_great::LinkedFile {
+            id: "asset-id".to_string(),
+            name: "Placed Asset".to_string(),
+            item_version: Some(7),
+            data_kind: Some(psd_great::PsdStringCode::from("liFD")),
+            file_type: Some(psd_great::PsdStringCode::from("JPEG")),
+            creator: Some(psd_great::PsdStringCode::from("8BIM")),
+            data: Some(vec![1, 2, 3, 4]),
+            time: None,
+            descriptor: None,
+            child_document_id: Some(psd_great::PsdStringCode::from("child-doc-123")),
+            asset_mod_time: Some(1234.5),
+            asset_locked_state: Some(psd_great::PsdIntCode(3)),
+            linked_file: Some(psd_great::layer::LinkedFileInfo {
+                file_size: 99,
+                name: "asset.jpg".to_string(),
+                full_path: "/tmp/asset.jpg".to_string(),
+                original_path: "/orig/asset.jpg".to_string(),
+                relative_path: "asset.jpg".to_string(),
+            }),
+            open_descriptor: Some(Descriptor {
+                name: String::new(),
+                class_id: "null".to_string(),
+                items: std::collections::HashMap::new(),
+            }),
+        };
+
+        let mut layer = Layer::default();
+        layer.top = Some(0);
+        layer.left = Some(0);
+        layer.bottom = Some(1);
+        layer.right = Some(1);
+        layer.blend_mode = Some(BlendMode::Normal);
+        layer.opacity = Some(1.0);
+        layer.additional_info.name = Some("Linked".to_string());
+        layer.additional_info.linked_files = Some(LinkedFilesBlock {
+            key: psd_great::PsdStringCode::from("lnkD"),
+            items: vec![linked.clone()],
+        });
+
+        let mut psd = Psd::default();
+        psd.width = 1;
+        psd.height = 1;
+        psd.channels = Some(4);
+        psd.bits_per_channel = Some(8);
+        psd.color_mode = Some(ColorMode::RGB);
+        psd.children = Some(vec![layer]);
+
+        let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
+        let reparsed = read_psd(
+            Cursor::new(&bytes),
+            ReadOptions {
+                skip_layer_image_data: Some(true),
+                skip_composite_image_data: Some(true),
+                ..Default::default()
+            },
+        )
+        .expect("read");
+        let reparsed_layer = reparsed.children.unwrap().into_iter().next().unwrap();
+        assert_eq!(
+            reparsed_layer
+                .additional_info
+                .linked_files
+                .unwrap()
+                .items
+                .into_iter()
+                .next()
+                .unwrap(),
+            linked
+        );
     }
 
     #[test]
@@ -1794,7 +1875,7 @@ mod remaining_tagged_block_parity {
         });
         psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
             version: 2,
-            position: ColorSamplerPosition::V2 {
+            position: psd_great::ColorSamplerPosition::V2 {
                 horizontal: 12,
                 vertical: 34,
             },
@@ -1873,7 +1954,7 @@ mod remaining_tagged_block_parity {
         psd.descriptor_1075 = psd.descriptor_1065.clone();
         psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
             version: 1,
-            position: ColorSamplerPosition::V1 {
+            position: psd_great::ColorSamplerPosition::V1 {
                 horizontal: 10,
                 vertical: 20,
             },
@@ -1939,7 +2020,7 @@ mod remaining_tagged_block_parity {
         psd.data_sets = Some(vec![vec!["title".to_string()], vec!["Hello".to_string()]]);
         psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
             version: 2,
-            position: ColorSamplerPosition::V2 {
+            position: psd_great::ColorSamplerPosition::V2 {
                 horizontal: 4,
                 vertical: 8,
             },
@@ -2032,7 +2113,7 @@ mod remaining_tagged_block_parity {
 
     #[test]
     fn write_color_rejects_lossy_public_rgb_shapes() {
-        use psd_great::{Color, FRGB, PsdWriter, RGB, RGBA};
+        use psd_great::{Color, PsdWriter, FRGB, RGB, RGBA};
 
         let lossy_colors = [
             Color::RGB(RGB {
