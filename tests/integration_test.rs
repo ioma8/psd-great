@@ -87,7 +87,7 @@ fn write_color_roundtrips_raw_color_structures_exactly() {
 }
 
 #[test]
-fn write_color_rejects_lossy_rgb_and_rgba_color_structures() {
+fn write_color_rejects_lossy_rgb_rgba_and_frgb_color_structures() {
     let lossy_colors = [
         Color::RGB(RGB {
             r: 0x12,
@@ -99,6 +99,11 @@ fn write_color_rejects_lossy_rgb_and_rgba_color_structures() {
             g: 0x34,
             b: 0x56,
             a: 0x78,
+        }),
+        Color::FRGB(FRGB {
+            fr: 0.1,
+            fg: 0.2,
+            fb: 0.3,
         }),
     ];
 

@@ -4,8 +4,8 @@
 //! Source: /Users/jakubkolcar/projects/customs/photoshop/psd/test/*.test.ts
 
 use psd_great::{
-    read_psd, write_psd, BlendMode, ColorMode, Layer, LayerAdditionalInfo, LayerMaskData,
-    PixelData, Psd, ReadOptions, WriteOptions,
+    read_psd, write_psd, BlendMode, ColorMode, ColorSamplerPosition, Layer,
+    LayerAdditionalInfo, LayerMaskData, PixelData, Psd, ReadOptions, WriteOptions,
 };
 use std::io::Cursor;
 
@@ -1794,8 +1794,10 @@ mod remaining_tagged_block_parity {
         });
         psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
             version: 2,
-            horizontal: 12,
-            vertical: 34,
+            position: ColorSamplerPosition::V2 {
+                horizontal: 12,
+                vertical: 34,
+            },
             color_space: 8,
             depth: Some(16),
         }]);
@@ -1870,9 +1872,11 @@ mod remaining_tagged_block_parity {
         psd.descriptor_1074 = psd.descriptor_1065.clone();
         psd.descriptor_1075 = psd.descriptor_1065.clone();
         psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
-            version: 3,
-            horizontal: 10,
-            vertical: 20,
+            version: 1,
+            position: ColorSamplerPosition::V1 {
+                horizontal: 10,
+                vertical: 20,
+            },
             color_space: 0,
             depth: None,
         }]);
@@ -1934,11 +1938,13 @@ mod remaining_tagged_block_parity {
         }]);
         psd.data_sets = Some(vec![vec!["title".to_string()], vec!["Hello".to_string()]]);
         psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
-            version: 3,
-            horizontal: 4,
-            vertical: 8,
+            version: 2,
+            position: ColorSamplerPosition::V2 {
+                horizontal: 4,
+                vertical: 8,
+            },
             color_space: 0,
-            depth: None,
+            depth: Some(8),
         }]);
         psd.display_info = Some(psd_great::psd::DisplayInfo {
             h_res_unit: psd_great::PsdU16Code(1),
@@ -2026,7 +2032,7 @@ mod remaining_tagged_block_parity {
 
     #[test]
     fn write_color_rejects_lossy_public_rgb_shapes() {
-        use psd_great::{Color, PsdWriter, RGB, RGBA};
+        use psd_great::{Color, FRGB, PsdWriter, RGB, RGBA};
 
         let lossy_colors = [
             Color::RGB(RGB {
@@ -2039,6 +2045,11 @@ mod remaining_tagged_block_parity {
                 g: 0x34,
                 b: 0x56,
                 a: 0x78,
+            }),
+            Color::FRGB(FRGB {
+                fr: 0.1,
+                fg: 0.2,
+                fb: 0.3,
             }),
         ];
 
