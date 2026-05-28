@@ -1509,8 +1509,10 @@ fn parse_layer_blending_ranges(bytes: &[u8]) -> Option<crate::api::layer::LayerB
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::writer::flatten_layers;
     use crate::{write_psd, Layer, PixelData, Psd, WriteOptions};
     use std::io::Cursor;
+    use std::path::PathBuf;
 
     fn minimal_valid_psd() -> Vec<u8> {
         vec![
@@ -1528,6 +1530,82 @@ mod tests {
             0x00, 0x00, // image compression = raw
             0x00, 0x00, 0x00, // one byte per channel
         ]
+    }
+
+    fn samples_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("photoshop/psd/samples")
+            .canonicalize()
+            .unwrap_or_else(|_| {
+                std::env::current_dir()
+                    .unwrap()
+                    .join("../photoshop/psd/samples")
+                    .canonicalize()
+                    .unwrap()
+            })
+    }
+
+    fn read_flat_layers_for_sample(bytes: &[u8]) -> Result<Vec<Layer>> {
+        let mut reader = PsdReader::new(Cursor::new(bytes.to_vec()), ReadOptions::default());
+        let header: PsdHeaderRecord = decode_be(&reader.read_bytes(26)?, "PSD header")?;
+        assert_eq!(&header.signature, b"8BPS");
+        reader.large = header.version == 2;
+        let mut psd = Psd {
+            width: header.width,
+            height: header.height,
+            channels: Some(header.channels),
+            bits_per_channel: Some(header.depth as u8),
+            color_mode: Some(ColorMode::from_u16(header.color_mode)?),
+            ..Default::default()
+        };
+        read_color_mode_data(&mut reader, &mut psd)?;
+        read_image_resources(&mut reader, &mut psd)?;
+
+        reader.read_section(1, |reader, end_offset| {
+            let mut flat_layers = Vec::new();
+            if reader.bytes_left(end_offset) > 0 {
+                reader.read_section(2, |reader, end_offset| {
+                    let mut layer_count = reader.read_i16()? as i32;
+                    if layer_count < 0 {
+                        layer_count = -layer_count;
+                    }
+
+                    let mut layer_channels = Vec::new();
+                    for _ in 0..layer_count {
+                        let (layer, channels) = read_layer_record(reader)?;
+                        flat_layers.push(layer);
+                        layer_channels.push(channels);
+                    }
+                    for (i, channels) in layer_channels.iter().enumerate() {
+                        read_layer_channel_image_data(reader, &psd, &mut flat_layers[i], channels)?;
+                    }
+                    reader.skip_bytes(reader.bytes_left(end_offset))?;
+                    Ok(())
+                })?;
+            }
+            Ok(flat_layers)
+        })
+    }
+
+    fn layer_signature(layer: &Layer) -> (Option<SectionDividerType>, Option<String>) {
+        let divider = layer
+            .additional_info
+            .section_divider
+            .as_ref()
+            .map(|item| item.divider_type);
+        let name = if matches!(
+            divider,
+            Some(SectionDividerType::OpenFolder | SectionDividerType::ClosedFolder)
+        ) {
+            None
+        } else {
+            layer.additional_info.name.clone()
+        };
+        (divider, name)
     }
 
     #[test]
@@ -1914,5 +1992,38 @@ mod tests {
         assert_eq!(real_mask.width, 1);
         assert_eq!(real_mask.height, 1);
         assert_eq!(real_mask.data, vec![50]);
+    }
+
+    #[test]
+    fn sample_files_preserve_layer_group_separator_order() {
+        let samples = [
+            "3d-preview-mockup.psd",
+            "4901393.psd",
+            "images.psd",
+            "multi-value-items.psd",
+            "placeholders-with-frames.psd",
+            "rich-text.psd",
+            "sample_1920×1280.psd",
+            "text.psd",
+        ];
+
+        for sample in samples {
+            let path = samples_dir().join(sample);
+            let bytes = std::fs::read(&path).expect("read sample");
+            let flat = read_flat_layers_for_sample(&bytes).expect("read flat layers");
+
+            let mut rebuilt_psd = Psd::default();
+            build_layer_hierarchy(&mut rebuilt_psd, flat.clone()).expect("build hierarchy");
+            let reflattened = flatten_layers(rebuilt_psd.children.as_ref());
+
+            let flat_sig: Vec<_> = flat.iter().map(layer_signature).collect();
+            let reflattened_sig: Vec<_> = reflattened.iter().map(layer_signature).collect();
+
+            assert_eq!(
+                reflattened_sig, flat_sig,
+                "layer/group order mismatch for {}",
+                sample
+            );
+        }
     }
 }
