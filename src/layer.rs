@@ -338,21 +338,23 @@ pub struct SelectiveColorAdjustment {
 
 /// Adjustment layer types
 
-
 /// Linked file
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkedFile {
     pub id: String,
     pub name: String,
+    pub item_version: Option<u32>,
+    pub data_kind: Option<PsdStringCode>,
     pub file_type: Option<PsdStringCode>,
     pub creator: Option<PsdStringCode>,
     pub data: Option<Vec<u8>>,
     pub time: Option<String>,
-    pub descriptor: Option<LinkedFileDescriptor>,
-    pub child_document_id: Option<PsdStringCode>,
+    pub descriptor: Option<crate::descriptor::Descriptor>,
+    pub child_document_id: Option<String>,
     pub asset_mod_time: Option<f64>,
-    pub asset_locked_state: Option<PsdIntCode>,
+    pub asset_locked_state: Option<u8>,
     pub linked_file: Option<LinkedFileInfo>,
+    pub open_descriptor: Option<crate::descriptor::Descriptor>,
 }
 
 /// Linked file descriptor
@@ -377,8 +379,6 @@ pub struct LinkedFileInfo {
     pub original_path: String,
     pub relative_path: String,
 }
-
-
 
 /// Key descriptor item
 #[derive(Debug, Clone, PartialEq)]
@@ -502,8 +502,6 @@ pub struct AnimationTimeline {
     pub tracks: Option<Vec<TimelineTrack>>,
 }
 
-
-
 /// Protected flags
 #[derive(Debug, Clone, PartialEq)]
 pub struct Protected {
@@ -512,8 +510,6 @@ pub struct Protected {
     pub position: Option<bool>,
     pub artboards: Option<bool>,
 }
-
-
 
 /// Filter mask
 #[derive(Debug, Clone, PartialEq)]

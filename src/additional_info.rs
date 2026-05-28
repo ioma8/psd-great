@@ -24,23 +24,78 @@ fn read_pascal_string_with_padding<R: Read + std::io::Seek>(reader: &mut crate::
 }
 
 /// Write a pascal-style string with 4-byte length prefix (matching TS writePascalStringWithPadding).
-fn write_pascal_string_with_padding(writer: &mut crate::writer::PsdWriter, text: &str) -> crate::error::Result<()> {
+fn write_pascal_string_with_padding(
+    writer: &mut crate::writer::PsdWriter,
+    text: &str,
+) -> crate::error::Result<()> {
     let bytes = text.as_bytes();
     writer.write_u32((bytes.len() + 1) as u32)?;
     writer.write_bytes(bytes)?;
     writer.write_u8(0)?;
     Ok(())
 }
-use crate::helpers::{
-    from_blend_mode, to_blend_mode, ProtectedFlagsBits, VectorMaskFlagsBits,
+
+fn read_u64_parts<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<u64> {
+    let high = reader.read_u32()? as u64;
+    let low = reader.read_u32()? as u64;
+    Ok((high << 32) | low)
+}
+
+fn write_u64_parts(writer: &mut PsdWriter, value: u64) -> Result<()> {
+    writer.write_u32((value >> 32) as u32)?;
+    writer.write_u32(value as u32)?;
+    Ok(())
+}
+
+fn format_linked_file_time(
+    year: u32,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: f64,
+) -> String {
+    let second_text = if (second.fract()).abs() < f64::EPSILON {
+        format!("{:02}", second as u32)
+    } else {
+        let mut text = format!("{second:.6}");
+        while text.contains('.') && text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+        if second < 10.0 && !text.starts_with('0') {
+            text.insert(0, '0');
+        }
+        text
+    };
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second_text}Z")
+}
+
+fn parse_linked_file_time(text: &str) -> Option<(u32, u8, u8, u8, u8, f64)> {
+    let trimmed = text.strip_suffix('Z').unwrap_or(text);
+    let (date, time) = trimmed.split_once('T')?;
+    let mut date_parts = date.split('-');
+    let year = date_parts.next()?.parse().ok()?;
+    let month = date_parts.next()?.parse().ok()?;
+    let day = date_parts.next()?.parse().ok()?;
+    let mut time_parts = time.split(':');
+    let hour = time_parts.next()?.parse().ok()?;
+    let minute = time_parts.next()?.parse().ok()?;
+    let second = time_parts.next()?.parse().ok()?;
+    Some((year, month, day, hour, minute, second))
+}
+use crate::helpers::{from_blend_mode, to_blend_mode, ProtectedFlagsBits, VectorMaskFlagsBits};
+use crate::layer::{
+    KeyDescriptorItem, Layer, LinkedFile, LinkedFileInfo, RRectRadii, VectorOrigination,
 };
-use crate::layer::{KeyDescriptorItem, Layer, LinkedFile, RRectRadii, VectorOrigination};
 use crate::reader::PsdReader;
 use crate::text::UnitsBounds;
 use crate::types::Color;
 use crate::types::{
-    BlendMode, PixelData, Point, PsdIntCode, PsdStringCode, PsdU32Code, RGB, SectionDividerType,
-    Units, UnitsValue,
+    BlendMode, PixelData, Point, PsdIntCode, PsdStringCode, PsdU32Code, SectionDividerType, Units,
+    UnitsValue, RGB,
 };
 use crate::writer::PsdWriter;
 use std::collections::HashMap;
@@ -851,31 +906,76 @@ impl<R: Read + Seek> PsdReader<R> {
                 let block_end = start_offset + length as u64;
                 let mut items = Vec::new();
                 while self.offset < block_end {
-                    let chunk_length = self.read_u32()? as u64;
-                    let low = self.read_u32()? as u64;
-                    let chunk_length = (chunk_length << 32) | low;
+                    let chunk_length = read_u64_parts(self)?;
                     let chunk_start = self.offset;
                     let kind = self.read_signature()?;
-                    let _version = self.read_u32()?;
+                    let item_version = self.read_u32()?;
                     let id = self.read_pascal_string(1)?;
                     let name = self.read_unicode_string()?;
                     let file_type = self.read_signature()?;
                     let creator = self.read_signature()?;
-                    let payload_high = self.read_u32()? as u64;
-                    let payload_low = self.read_u32()? as u64;
-                    let payload_length = (payload_high << 32) | payload_low;
+                    let payload_length = read_u64_parts(self)?;
                     let open = self.read_u8()?;
-                    // When open != 0, consume the open-descriptor before the payload
+                    let mut open_descriptor = None;
                     if open != 0 {
-                        let _version = self.read_u32()?;
+                        let _descriptor_version = self.read_u32()?;
                         let descriptor_start = self.offset;
-                        self.read_descriptor_structure()?;
-                        // 2-byte alignment after descriptor
+                        open_descriptor = Some(self.read_descriptor_structure()?);
                         if (self.offset - descriptor_start) % 2 != 0 {
                             self.skip_bytes(1)?;
                         }
                     }
+                    let descriptor = if kind == "liFE" {
+                        Some(self.read_descriptor_structure()?)
+                    } else {
+                        None
+                    };
+                    let time = if kind == "liFE" && item_version > 3 {
+                        Some(format_linked_file_time(
+                            self.read_u32()?,
+                            self.read_u8()?,
+                            self.read_u8()?,
+                            self.read_u8()?,
+                            self.read_u8()?,
+                            self.read_f64()?,
+                        ))
+                    } else {
+                        None
+                    };
+                    if kind == "liFA" {
+                        let _alias_padding = read_u64_parts(self)?;
+                    }
                     let data = self.read_bytes(payload_length as usize)?;
+                    let child_document_id =
+                        if item_version >= 5 && self.offset < chunk_start + chunk_length {
+                            Some(self.read_unicode_string()?)
+                        } else {
+                            None
+                        };
+                    let asset_mod_time =
+                        if item_version >= 6 && self.offset < chunk_start + chunk_length {
+                            Some(self.read_f64()?)
+                        } else {
+                            None
+                        };
+                    let asset_locked_state =
+                        if item_version >= 7 && self.offset < chunk_start + chunk_length {
+                            Some(self.read_u8()?)
+                        } else {
+                            None
+                        };
+                    let linked_file =
+                        if item_version >= 7 && self.offset < chunk_start + chunk_length {
+                            Some(LinkedFileInfo {
+                                file_size: read_u64_parts(self)?,
+                                name: self.read_unicode_string()?,
+                                full_path: self.read_unicode_string()?,
+                                original_path: self.read_unicode_string()?,
+                                relative_path: self.read_unicode_string()?,
+                            })
+                        } else {
+                            None
+                        };
                     let remaining =
                         (chunk_start + chunk_length).saturating_sub(self.offset) as usize;
                     if remaining > 0 {
@@ -887,15 +987,18 @@ impl<R: Read + Seek> PsdReader<R> {
                     items.push(LinkedFile {
                         id,
                         name,
+                        item_version: Some(item_version),
+                        data_kind: Some(PsdStringCode(kind)),
                         file_type: Some(PsdStringCode(file_type)),
                         creator: Some(PsdStringCode(creator)),
                         data: Some(data),
-                        time: None,
-                        descriptor: None,
-                        child_document_id: Some(PsdStringCode(kind)),
-                        asset_mod_time: None,
-                        asset_locked_state: None,
-                        linked_file: None,
+                        time,
+                        descriptor,
+                        child_document_id,
+                        asset_mod_time,
+                        asset_locked_state,
+                        linked_file,
+                        open_descriptor,
                     });
                 }
                 info.linked_files = Some(LinkedFilesBlock {
@@ -2535,23 +2638,78 @@ impl PsdWriter {
                     }
                     for item in &block.items {
                         let mut item_writer = PsdWriter::new(256);
-                        let kind = item.child_document_id.as_ref().map(|v| v.as_ref()).unwrap_or("liFD");
+                        let kind = item
+                            .data_kind
+                            .as_ref()
+                            .map(|v| v.as_ref())
+                            .unwrap_or("liFD");
                         item_writer.write_signature(kind)?;
-                        item_writer.write_u32(7)?;
+                        item_writer.write_u32(item.item_version.unwrap_or(7))?;
                         item_writer.write_pascal_string(&item.id, 1)?;
                         item_writer.write_unicode_string_with_padding(&item.name)?;
-                        item_writer.write_signature(item.file_type.as_ref().map(|v| v.as_ref()).unwrap_or("    "))?;
-                        item_writer.write_signature(item.creator.as_ref().map(|v| v.as_ref()).unwrap_or("    "))?;
+                        item_writer.write_signature(
+                            item.file_type
+                                .as_ref()
+                                .map(|v| v.as_ref())
+                                .unwrap_or("    "),
+                        )?;
+                        item_writer.write_signature(
+                            item.creator.as_ref().map(|v| v.as_ref()).unwrap_or("    "),
+                        )?;
                         let data = item.data.as_deref().unwrap_or(&[]);
-                        item_writer.write_u32(0)?;
-                        item_writer.write_u32(data.len() as u32)?;
-                        item_writer.write_u8(0)?;
+                        write_u64_parts(&mut item_writer, data.len() as u64)?;
+                        if let Some(ref open_descriptor) = item.open_descriptor {
+                            item_writer.write_u8(1)?;
+                            item_writer.write_u32(16)?;
+                            let descriptor_start = item_writer.offset;
+                            item_writer.write_descriptor_structure(open_descriptor)?;
+                            if (item_writer.offset - descriptor_start) % 2 != 0 {
+                                item_writer.write_u8(0)?;
+                            }
+                        } else {
+                            item_writer.write_u8(0)?;
+                        }
+                        if kind == "liFE" {
+                            if let Some(ref descriptor) = item.descriptor {
+                                item_writer.write_descriptor_structure(descriptor)?;
+                            }
+                            if item.item_version.unwrap_or(0) > 3 {
+                                if let Some((year, month, day, hour, minute, second)) =
+                                    item.time.as_deref().and_then(parse_linked_file_time)
+                                {
+                                    item_writer.write_u32(year)?;
+                                    item_writer.write_u8(month)?;
+                                    item_writer.write_u8(day)?;
+                                    item_writer.write_u8(hour)?;
+                                    item_writer.write_u8(minute)?;
+                                    item_writer.write_f64(second)?;
+                                }
+                            }
+                        } else if kind == "liFA" {
+                            write_u64_parts(&mut item_writer, 0)?;
+                        }
                         item_writer.write_bytes(data)?;
-                        item_writer.write_u32(1)?;
-                        item_writer.write_zeros(11)?;
+                        if let Some(child_document_id) = item.child_document_id.as_ref() {
+                            item_writer.write_unicode_string_with_padding(child_document_id)?;
+                        }
+                        if let Some(asset_mod_time) = item.asset_mod_time {
+                            item_writer.write_f64(asset_mod_time)?;
+                        }
+                        if let Some(asset_locked_state) = item.asset_locked_state {
+                            item_writer.write_u8(asset_locked_state)?;
+                        }
+                        if let Some(linked_file) = item.linked_file.as_ref() {
+                            write_u64_parts(&mut item_writer, linked_file.file_size)?;
+                            item_writer.write_unicode_string_with_padding(&linked_file.name)?;
+                            item_writer
+                                .write_unicode_string_with_padding(&linked_file.full_path)?;
+                            item_writer
+                                .write_unicode_string_with_padding(&linked_file.original_path)?;
+                            item_writer
+                                .write_unicode_string_with_padding(&linked_file.relative_path)?;
+                        }
                         let item_bytes = item_writer.into_buffer();
-                        temp_writer.write_u32(0)?;
-                        temp_writer.write_u32(item_bytes.len() as u32)?;
+                        write_u64_parts(&mut temp_writer, item_bytes.len() as u64)?;
                         temp_writer.write_bytes(&item_bytes)?;
                         let padding = item_bytes.len() % 4;
                         if padding != 0 {
@@ -3120,15 +3278,22 @@ mod tests {
             items: vec![LinkedFile {
                 id: "id".to_string(),
                 name: "name".to_string(),
+                item_version: Some(9),
+                data_kind: Some(PsdStringCode::from("liFD")),
                 file_type: Some(PsdStringCode::from("JPEG")),
                 creator: Some(PsdStringCode::from("8BIM")),
                 data: Some(vec![0xAA, 0xBB]),
                 time: None,
                 descriptor: None,
-                child_document_id: Some(PsdStringCode::from("liFD")),
+                child_document_id: Some("chid".to_string()),
                 asset_mod_time: None,
                 asset_locked_state: None,
                 linked_file: None,
+                open_descriptor: Some(Descriptor {
+                    name: String::new(),
+                    class_id: "null".to_string(),
+                    items: HashMap::new(),
+                }),
             }],
         });
         let mut w = PsdWriter::new(128);

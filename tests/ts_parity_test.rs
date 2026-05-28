@@ -1371,9 +1371,9 @@ mod remaining_tagged_block_parity {
             data: Some(vec![1, 2, 3, 4]),
             time: None,
             descriptor: None,
-            child_document_id: Some(psd_great::PsdStringCode::from("child-doc-123")),
+            child_document_id: Some("child-doc-123".to_string()),
             asset_mod_time: Some(1234.5),
-            asset_locked_state: Some(psd_great::PsdIntCode(3)),
+            asset_locked_state: Some(3),
             linked_file: Some(psd_great::layer::LinkedFileInfo {
                 file_size: 99,
                 name: "asset.jpg".to_string(),
