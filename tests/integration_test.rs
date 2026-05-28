@@ -64,6 +64,13 @@ fn write_color_roundtrips_raw_color_structures_exactly() {
             a: -100,
             b: 100,
         },
+        Color::CMYK(CMYK {
+            c: 0x1111,
+            m: 0x2222,
+            y: 0x3333,
+            k: 0x4444,
+        }),
+        Color::Grayscale(Grayscale { k: 0x2710 }),
         Color::OpaqueColorSpace {
             color_space: 42,
             components: [1, 2, 3, 4],
@@ -76,6 +83,32 @@ fn write_color_roundtrips_raw_color_structures_exactly() {
         let bytes = writer.into_buffer();
         let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
         assert_eq!(reader.read_color().unwrap(), color);
+    }
+}
+
+#[test]
+fn write_color_rejects_lossy_rgb_and_rgba_color_structures() {
+    let lossy_colors = [
+        Color::RGB(RGB {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        }),
+        Color::RGBA(RGBA {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+            a: 0x78,
+        }),
+    ];
+
+    for color in lossy_colors {
+        let mut writer = PsdWriter::new(32);
+        let err = writer.write_color(Some(&color)).unwrap_err();
+        assert!(
+            err.to_string().contains("lossless"),
+            "unexpected error: {err}"
+        );
     }
 }
 

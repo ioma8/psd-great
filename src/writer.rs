@@ -255,19 +255,10 @@ impl PsdWriter {
                 self.write_u16(0)?; // RGB color space
                 self.write_zeros(8)?;
             }
-            Some(Color::RGBA(c)) => {
-                self.write_u16(0)?; // RGB
-                self.write_u16((c.r as f64 * 257.0).round() as u16)?;
-                self.write_u16((c.g as f64 * 257.0).round() as u16)?;
-                self.write_u16((c.b as f64 * 257.0).round() as u16)?;
-                self.write_u16(0)?;
-            }
-            Some(Color::RGB(c)) => {
-                self.write_u16(0)?; // RGB
-                self.write_u16((c.r as f64 * 257.0).round() as u16)?;
-                self.write_u16((c.g as f64 * 257.0).round() as u16)?;
-                self.write_u16((c.b as f64 * 257.0).round() as u16)?;
-                self.write_u16(0)?;
+            Some(Color::RGBA(_)) | Some(Color::RGB(_)) | Some(Color::FRGB(_)) => {
+                return Err(PsdError::UnsupportedFeature(
+                    "Photoshop color structures require lossless raw color variants".to_string(),
+                ));
             }
             Some(Color::Rgb48 { red, green, blue }) => {
                 self.write_u16(0)?; // RGB
@@ -314,10 +305,6 @@ impl PsdWriter {
                 for component in components {
                     self.write_u16(*component)?;
                 }
-            }
-            _ => {
-                self.write_u16(0)?;
-                self.write_zeros(8)?;
             }
         }
 

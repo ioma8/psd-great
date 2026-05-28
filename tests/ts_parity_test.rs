@@ -2002,6 +2002,13 @@ mod remaining_tagged_block_parity {
                 a: -100,
                 b: 100,
             },
+            Color::CMYK(psd_great::CMYK {
+                c: 0x1111,
+                m: 0x2222,
+                y: 0x3333,
+                k: 0x4444,
+            }),
+            Color::Grayscale(psd_great::Grayscale { k: 0x2710 }),
             Color::OpaqueColorSpace {
                 color_space: 42,
                 components: [1, 2, 3, 4],
@@ -2014,6 +2021,34 @@ mod remaining_tagged_block_parity {
             let bytes = writer.into_buffer();
             let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
             assert_eq!(reader.read_color().unwrap(), color);
+        }
+    }
+
+    #[test]
+    fn write_color_rejects_lossy_public_rgb_shapes() {
+        use psd_great::{Color, PsdWriter, RGB, RGBA};
+
+        let lossy_colors = [
+            Color::RGB(RGB {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+            }),
+            Color::RGBA(RGBA {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+                a: 0x78,
+            }),
+        ];
+
+        for color in lossy_colors {
+            let mut writer = PsdWriter::new(32);
+            let err = writer.write_color(Some(&color)).unwrap_err();
+            assert!(
+                err.to_string().contains("lossless"),
+                "unexpected error: {err}"
+            );
         }
     }
 }
