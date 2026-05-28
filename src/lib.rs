@@ -65,7 +65,7 @@ pub use layer::{
     BezierKnot, BezierPath, Layer, LayerMaskData,
     LayerVectorMask, LinkedFile, PatternInfo, VectorContent,
 };
-pub use psd::{Annotation, GlobalLayerMaskInfo, Psd, ReadOptions, WriteOptions};
+pub use psd::{Annotation, DocumentSlices, GlobalLayerMaskInfo, Psd, ReadOptions, WriteOptions};
 pub use reader::{read_psd, PsdReader};
 pub use text::{
     Font, LayerTextData, ParagraphStyle, ParagraphStyleRun, TextStyle, TextStyleRun, Warp,
@@ -75,9 +75,10 @@ pub use types::{
     GradientStyle, Grayscale, InterpolationMethod, Justification, LayerColor,
     LayerCompCapturedInfo, Orientation, PixelData, Point, PsdIntCode, PsdStringCode, PsdU16Code,
     PsdU32Code, RenderingIntent, SectionDividerType, Units, UnitsValue, WarpStyle, CMYK, FRGB,
-    HSB, LAB, RGB, RGBA,
+    RGB, RGBA,
 };
 pub use writer::{write_psd, PsdWriter};
+pub use psd::{ColorSampler, DisplayInfo};
 
 // Re-export additional format types
 pub use abr::{read_abr, Abr, Brush, BrushDynamics, BrushShape, SampleInfo};

@@ -94,9 +94,9 @@ pub enum ColorMode {
     Indexed = 2,
     RGB = 3,
     CMYK = 4,
-    Multichannel = 5,
-    Duotone = 6,
-    Lab = 7,
+    Multichannel = 7,
+    Duotone = 8,
+    Lab = 9,
 }
 
 impl ColorMode {
@@ -107,9 +107,9 @@ impl ColorMode {
             2 => Ok(ColorMode::Indexed),
             3 => Ok(ColorMode::RGB),
             4 => Ok(ColorMode::CMYK),
-            5 => Ok(ColorMode::Multichannel),
-            6 => Ok(ColorMode::Duotone),
-            7 => Ok(ColorMode::Lab),
+            7 => Ok(ColorMode::Multichannel),
+            8 => Ok(ColorMode::Duotone),
+            9 => Ok(ColorMode::Lab),
             _ => Err(crate::error::PsdError::InvalidColorMode(value as u8)),
         }
     }
@@ -150,35 +150,19 @@ pub struct FRGB {
     pub fb: f64,
 }
 
-/// HSB color (values from 0 to 1)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct HSB {
-    pub h: f64,
-    pub s: f64,
-    pub b: f64,
-}
-
-/// CMYK color (values from 0 to 255)
+/// CMYK color (full Photoshop color-structure values)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CMYK {
-    pub c: u8,
-    pub m: u8,
-    pub y: u8,
-    pub k: u8,
+    pub c: u16,
+    pub m: u16,
+    pub y: u16,
+    pub k: u16,
 }
 
-/// LAB color (l from 0 to 1; a and b from -1 to 1)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LAB {
-    pub l: f64,
-    pub a: f64,
-    pub b: f64,
-}
-
-/// Grayscale color (values from 0 to 255)
+/// Grayscale color (0..10000)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Grayscale {
-    pub k: u8,
+    pub k: u16,
 }
 
 /// Generic color type that can represent any color format
@@ -187,10 +171,27 @@ pub enum Color {
     RGBA(RGBA),
     RGB(RGB),
     FRGB(FRGB),
-    HSB(HSB),
+    Rgb48 {
+        red: u16,
+        green: u16,
+        blue: u16,
+    },
+    Hsb {
+        hue: u16,
+        saturation: u16,
+        brightness: u16,
+    },
     CMYK(CMYK),
-    LAB(LAB),
+    Lab {
+        lightness: u16,
+        a: i16,
+        b: i16,
+    },
     Grayscale(Grayscale),
+    OpaqueColorSpace {
+        color_space: u16,
+        components: [u16; 4],
+    },
 }
 
 /// Units for measurements
@@ -509,14 +510,14 @@ mod color_mode_tests {
         assert_eq!(ColorMode::Indexed as u16, 2);
         assert_eq!(ColorMode::RGB as u16, 3);
         assert_eq!(ColorMode::CMYK as u16, 4);
-        assert_eq!(ColorMode::Multichannel as u16, 5);
-        assert_eq!(ColorMode::Duotone as u16, 6);
-        assert_eq!(ColorMode::Lab as u16, 7);
+        assert_eq!(ColorMode::Multichannel as u16, 7);
+        assert_eq!(ColorMode::Duotone as u16, 8);
+        assert_eq!(ColorMode::Lab as u16, 9);
     }
 
     #[test]
     fn color_mode_round_trips_from_u16() {
-        for v in [0u16, 1, 2, 3, 4, 5, 6, 7] {
+        for v in [0u16, 1, 2, 3, 4, 7, 8, 9] {
             let mode = ColorMode::from_u16(v).expect("should parse");
             assert_eq!(mode as u16, v);
         }

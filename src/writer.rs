@@ -269,41 +269,51 @@ impl PsdWriter {
                 self.write_u16((c.b as f64 * 257.0).round() as u16)?;
                 self.write_u16(0)?;
             }
-            Some(Color::HSB(c)) => {
+            Some(Color::Rgb48 { red, green, blue }) => {
+                self.write_u16(0)?; // RGB
+                self.write_u16(*red)?;
+                self.write_u16(*green)?;
+                self.write_u16(*blue)?;
+                self.write_u16(0)?;
+            }
+            Some(Color::Hsb {
+                hue,
+                saturation,
+                brightness,
+            }) => {
                 self.write_u16(1)?; // HSB
-                self.write_u16((c.h * 0xffff as f64).round() as u16)?;
-                self.write_u16((c.s * 0xffff as f64).round() as u16)?;
-                self.write_u16((c.b * 0xffff as f64).round() as u16)?;
+                self.write_u16(*hue)?;
+                self.write_u16(*saturation)?;
+                self.write_u16(*brightness)?;
                 self.write_u16(0)?;
             }
             Some(Color::CMYK(c)) => {
                 self.write_u16(2)?; // CMYK
-                self.write_u16((c.c as f64 * 257.0).round() as u16)?;
-                self.write_u16((c.m as f64 * 257.0).round() as u16)?;
-                self.write_u16((c.y as f64 * 257.0).round() as u16)?;
-                self.write_u16((c.k as f64 * 257.0).round() as u16)?;
+                self.write_u16(c.c)?;
+                self.write_u16(c.m)?;
+                self.write_u16(c.y)?;
+                self.write_u16(c.k)?;
             }
-            Some(Color::LAB(c)) => {
+            Some(Color::Lab { lightness, a, b }) => {
                 self.write_u16(7)?; // Lab
-                self.write_i16((c.l * 10000.0).round() as i16)?;
-                let a_val = if c.a < 0.0 {
-                    (c.a * 12800.0).round() as i16
-                } else {
-                    (c.a * 12700.0).round() as i16
-                };
-                self.write_i16(a_val)?;
-                let b_val = if c.b < 0.0 {
-                    (c.b * 12800.0).round() as i16
-                } else {
-                    (c.b * 12700.0).round() as i16
-                };
-                self.write_i16(b_val)?;
+                self.write_u16(*lightness)?;
+                self.write_i16(*a)?;
+                self.write_i16(*b)?;
                 self.write_u16(0)?;
             }
             Some(Color::Grayscale(c)) => {
                 self.write_u16(8)?; // Grayscale
-                self.write_u16((c.k as f64 * 10000.0 / 255.0).round() as u16)?;
+                self.write_u16(c.k)?;
                 self.write_zeros(6)?;
+            }
+            Some(Color::OpaqueColorSpace {
+                color_space,
+                components,
+            }) => {
+                self.write_u16(*color_space)?;
+                for component in components {
+                    self.write_u16(*component)?;
+                }
             }
             _ => {
                 self.write_u16(0)?;
@@ -383,7 +393,7 @@ pub fn write_psd(psd: &Psd, options: &WriteOptions) -> Result<Vec<u8>> {
     write_image_resources(&mut writer, &psd, options)?;
 
     // Write layer and mask information section
-    write_layer_and_mask_info(&mut writer, &psd, options)?;
+    write_layer_and_mask_info(&mut writer, &psd, options, global_alpha)?;
 
     // Write image data section
     write_image_data(&mut writer, &psd, options, global_alpha)?;
@@ -434,24 +444,34 @@ fn write_layer_and_mask_info(
     writer: &mut PsdWriter,
     psd: &Psd,
     options: &WriteOptions,
+    global_alpha: bool,
 ) -> Result<()> {
     let psb = options.psb.unwrap_or(false);
     writer.write_section(1, psb, |writer| {
         // Write layer info
-        write_layer_info(writer, psd, options)?;
+        write_layer_info(writer, psd, options, global_alpha)?;
 
         // Write global layer mask info
         write_global_layer_mask_info(writer, psd.global_layer_mask_info.as_ref())?;
 
         // Write document-level tagged blocks
-        crate::additional_info::write_layer_additional_info(writer, &psd.additional_info)?;
+        crate::additional_info::write_layer_additional_info_with_options(
+            writer,
+            &psd.additional_info,
+            psb,
+        )?;
 
         Ok(())
     })
 }
 
 /// Write layer info section
-fn write_layer_info(writer: &mut PsdWriter, psd: &Psd, options: &WriteOptions) -> Result<()> {
+fn write_layer_info(
+    writer: &mut PsdWriter,
+    psd: &Psd,
+    options: &WriteOptions,
+    global_alpha: bool,
+) -> Result<()> {
     let psb = options.psb.unwrap_or(false);
     let bits_per_channel = psd.bits_per_channel.unwrap_or(8);
     writer.write_section(2, psb, |writer| {
@@ -461,7 +481,11 @@ fn write_layer_info(writer: &mut PsdWriter, psd: &Psd, options: &WriteOptions) -
             .map(|layer| prepare_layer_channels(layer, bits_per_channel, options))
             .collect::<Result<Vec<PreparedLayerChannels>>>()?;
 
-        let layer_count = layers.len() as i16;
+        let layer_count = if global_alpha {
+            -(layers.len() as i16)
+        } else {
+            layers.len() as i16
+        };
         writer.write_i16(layer_count)?;
 
         // Write layer records
@@ -677,7 +701,11 @@ fn write_layer_record(
         writer.write_pascal_string(name, 4)?;
 
         // Write tagged blocks (additional layer info)
-        crate::additional_info::write_layer_additional_info(writer, &layer.additional_info)?;
+        crate::additional_info::write_layer_additional_info_with_options(
+            writer,
+            &layer.additional_info,
+            psb,
+        )?;
 
         Ok(())
     })?;
@@ -800,25 +828,29 @@ fn write_image_data(
             }
         }
         Compression::ZipWithoutPrediction => {
+            let mut planar = Vec::with_capacity(width * height * offsets.len() * bytes_per_sample(bits_per_channel));
             for &offset in offsets {
                 let raw = extract_channel_data_from_rgba(image_data, width, height, offset);
-                let expanded = expand_samples_for_depth(&raw, bits_per_channel);
-                let compressed = compression::compress_zip(&expanded)?;
-                writer.write_bytes(&compressed)?;
+                planar.extend_from_slice(&expand_samples_for_depth(&raw, bits_per_channel));
             }
+            let compressed = compression::compress_zip(&planar)?;
+            writer.write_bytes(&compressed)?;
         }
         Compression::ZipWithPrediction => {
+            let mut planar = Vec::with_capacity(width * height * offsets.len() * bytes_per_sample(bits_per_channel));
             for &offset in offsets {
                 let raw = extract_channel_data_from_rgba(image_data, width, height, offset);
-                let expanded = expand_samples_for_depth(&raw, bits_per_channel);
-                let compressed = compression::compress_zip_with_prediction(
-                    &expanded,
-                    width,
-                    height,
-                    bits_per_channel as u16,
-                )?;
-                writer.write_bytes(&compressed)?;
+                planar.extend_from_slice(&expand_samples_for_depth(&raw, bits_per_channel));
             }
+            apply_prediction_planar(
+                &mut planar,
+                width,
+                height,
+                offsets.len(),
+                bits_per_channel as u16,
+            );
+            let compressed = compression::compress_zip(&planar)?;
+            writer.write_bytes(&compressed)?;
         }
     }
 
@@ -945,6 +977,68 @@ fn bytes_per_sample(bits_per_channel: u8) -> usize {
         16 => 2,
         32 => 4,
         _ => 1,
+    }
+}
+
+fn apply_prediction_planar(
+    data: &mut [u8],
+    width: usize,
+    height: usize,
+    channels: usize,
+    depth: u16,
+) {
+    let bytes_per_sample = match depth {
+        8 => 1usize,
+        16 => 2,
+        32 => 4,
+        _ => return,
+    };
+    let plane_len = width * height * bytes_per_sample;
+
+    for channel in 0..channels {
+        let plane_start = channel * plane_len;
+        match depth {
+            8 => {
+                for row in 0..height {
+                    let start = plane_start + row * width;
+                    for x in (1..width).rev() {
+                        data[start + x] = data[start + x].wrapping_sub(data[start + x - 1]);
+                    }
+                }
+            }
+            16 => {
+                let row_bytes = width * 2;
+                for row in 0..height {
+                    let start = plane_start + row * row_bytes;
+                    for i in (start + 1..start + row_bytes).rev() {
+                        data[i] = data[i].wrapping_sub(data[i - 1]);
+                    }
+                }
+            }
+            32 => {
+                let row_bytes = width * 4;
+                let mut reordered = vec![0u8; row_bytes];
+                for row in 0..height {
+                    let row_off = plane_start + row * row_bytes;
+                    for pixel in 0..width {
+                        let src = row_off + pixel * 4;
+                        reordered[pixel] = data[src];
+                        reordered[width + pixel] = data[src + 1];
+                        reordered[width * 2 + pixel] = data[src + 2];
+                        reordered[width * 3 + pixel] = data[src + 3];
+                    }
+                    for plane in 0..4usize {
+                        let base = plane * width;
+                        for i in (1..width).rev() {
+                            reordered[base + i] =
+                                reordered[base + i].wrapping_sub(reordered[base + i - 1]);
+                        }
+                    }
+                    data[row_off..row_off + row_bytes].copy_from_slice(&reordered);
+                }
+            }
+            _ => {}
+        }
     }
 }
 

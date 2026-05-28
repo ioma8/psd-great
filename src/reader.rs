@@ -54,6 +54,15 @@ impl<R: Read + Seek> PsdReader<R> {
         Ok(val)
     }
 
+    /// Peek a 4-character signature without advancing.
+    pub fn peek_signature(&mut self) -> Result<String> {
+        let pos = self.reader.stream_position()?;
+        let bytes = self.read_bytes(4)?;
+        self.reader.seek(SeekFrom::Start(pos))?;
+        self.offset = pos;
+        Ok(String::from_utf8_lossy(&bytes).to_string())
+    }
+
     /// Read a signed 16-bit integer (big-endian)
     pub fn read_i16(&mut self) -> Result<i16> {
         let val = self.reader.read_i16::<BigEndian>()?;
@@ -249,28 +258,40 @@ impl<R: Read + Seek> PsdReader<R> {
 
     /// Read a color value
     pub fn read_color(&mut self) -> Result<crate::types::Color> {
-        use crate::types::{Color, RGBA};
+        use crate::types::{CMYK, Color, Grayscale};
         let color_space = self.read_u16()?;
+        let c1 = self.read_u16()?;
+        let c2 = self.read_u16()?;
+        let c3 = self.read_u16()?;
+        let c4 = self.read_u16()?;
 
         match color_space {
-            0 => {
-                // RGB
-                let r = (self.read_u16()? >> 8) as u8;
-                let g = (self.read_u16()? >> 8) as u8;
-                let b = (self.read_u16()? >> 8) as u8;
-                self.read_u16()?; // Skip padding
-                Ok(Color::RGBA(RGBA { r, g, b, a: 255 }))
-            }
-            _ => {
-                // Skip other color spaces for now
-                self.skip_bytes(6)?;
-                Ok(Color::RGBA(RGBA {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                }))
-            }
+            0 => Ok(Color::Rgb48 {
+                red: c1,
+                green: c2,
+                blue: c3,
+            }),
+            1 => Ok(Color::Hsb {
+                hue: c1,
+                saturation: c2,
+                brightness: c3,
+            }),
+            2 => Ok(Color::CMYK(CMYK {
+                c: c1,
+                m: c2,
+                y: c3,
+                k: c4,
+            })),
+            7 => Ok(Color::Lab {
+                lightness: c1,
+                a: i16::from_be_bytes(c2.to_be_bytes()),
+                b: i16::from_be_bytes(c3.to_be_bytes()),
+            }),
+            8 => Ok(Color::Grayscale(Grayscale { k: c1 })),
+            _ => Ok(Color::OpaqueColorSpace {
+                color_space,
+                components: [c1, c2, c3, c4],
+            }),
         }
     }
 }
@@ -295,6 +316,12 @@ pub fn read_psd<R: Read + Seek>(mut reader: R, options: ReadOptions) -> Result<P
         )));
     }
 
+    if header.reserved.iter().any(|byte| *byte != 0) {
+        return Err(PsdError::InvalidFormat(
+            "Header reserved bytes must be zero".to_string(),
+        ));
+    }
+
     psd_reader.large = version == 2;
 
     let channels = header.channels;
@@ -312,7 +339,14 @@ pub fn read_psd<R: Read + Seek>(mut reader: R, options: ReadOptions) -> Result<P
         )));
     }
 
-    if channels > 56 {
+    if width == 0 || height == 0 {
+        return Err(PsdError::InvalidFormat(format!(
+            "Invalid size: {}x{}",
+            width, height
+        )));
+    }
+
+    if channels == 0 || channels > 56 {
         return Err(PsdError::InvalidFormat(format!(
             "Invalid channel count: {}",
             channels
@@ -356,8 +390,10 @@ pub fn read_psd<R: Read + Seek>(mut reader: R, options: ReadOptions) -> Result<P
         descriptor_1065: None,
         descriptor_1074: None,
         descriptor_1075: None,
-        custom_points: None,
+        layer_group_ids: None,
+        color_samplers: None,
         display_info: None,
+        clipping_path_name: None,
     };
 
     // Read color mode data section
@@ -1062,13 +1098,26 @@ fn read_image_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd) -> 
     if reader.global_alpha && total_channels == base_channels {
         total_channels += 1;
     }
+    let bits_per_channel = psd.bits_per_channel.unwrap_or(8) as u16;
+    let bytes_per_sample = match bits_per_channel {
+        8 => 1usize,
+        16 => 2,
+        32 => 4,
+        _ => {
+            return Err(PsdError::UnsupportedFeature(format!(
+                "Unsupported bits per channel for composite image: {}",
+                bits_per_channel
+            )))
+        }
+    };
+    let channel_len_bytes = channel_len * bytes_per_sample;
 
     let mut planes: Vec<Vec<u8>> = vec![Vec::new(); total_channels];
     match compression {
         Compression::RawData => {
             for i in 0..total_channels {
-                let plane = reader.read_bytes(channel_len)?;
-                planes[i] = normalize_channel_data(plane, channel_len);
+                let plane = reader.read_bytes(channel_len_bytes)?;
+                planes[i] = normalize_channel_data(plane, channel_len_bytes);
             }
         }
         Compression::RleCompressed => {
@@ -1088,22 +1137,28 @@ fn read_image_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd) -> 
                 let channel_counts = &byte_counts[start..end];
                 let compressed_len = channel_counts.iter().map(|v| *v as usize).sum();
                 let compressed = reader.read_bytes(compressed_len)?;
-                let mut out = vec![0u8; channel_len];
-                compression::decompress_rle(&compressed, &mut out, width, height, channel_counts)?;
+                let mut out = vec![0u8; channel_len_bytes];
+                compression::decompress_rle(
+                    &compressed,
+                    &mut out,
+                    width * bytes_per_sample,
+                    height,
+                    channel_counts,
+                )?;
                 planes[channel_index] = out;
             }
         }
         Compression::ZipWithoutPrediction | Compression::ZipWithPrediction => {
             let compressed = reader.read_remaining_bytes()?;
-            let expected_total = channel_len * total_channels;
+            let expected_total = channel_len_bytes * total_channels;
             let mut data = compression::decompress_zip(&compressed, expected_total)?;
             data = normalize_channel_data(data, expected_total);
             if compression == Compression::ZipWithPrediction {
-                reverse_prediction_planar_u8(&mut data, width, height, total_channels);
+                reverse_prediction_planar(&mut data, width, height, total_channels, bits_per_channel);
             }
             for (idx, plane) in planes.iter_mut().enumerate() {
-                let start = idx * channel_len;
-                let end = start + channel_len;
+                let start = idx * channel_len_bytes;
+                let end = start + channel_len_bytes;
                 *plane = data[start..end].to_vec();
             }
         }
@@ -1112,7 +1167,7 @@ fn read_image_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd) -> 
     let mut rgba = vec![0u8; channel_len * 4];
     for i in 0..channel_len {
         for (channel_idx, channel) in planes.iter().enumerate() {
-            let value = channel.get(i).copied().unwrap_or(0);
+            let value = sample_to_u8(channel, i, bits_per_channel);
             match color_mode {
                 ColorMode::CMYK => match channel_idx {
                     0 | 1 | 2 | 3 => {}
@@ -1164,17 +1219,90 @@ fn read_image_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd) -> 
     Ok(())
 }
 
-fn reverse_prediction_planar_u8(data: &mut [u8], width: usize, height: usize, channels: usize) {
-    let plane_len = width * height;
-    for c in 0..channels {
-        let plane_start = c * plane_len;
-        for y in 0..height {
-            let row_start = plane_start + y * width;
-            for x in 1..width {
-                let pos = row_start + x;
-                data[pos] = data[pos].wrapping_add(data[pos - 1]);
+fn reverse_prediction_planar(
+    data: &mut [u8],
+    width: usize,
+    height: usize,
+    channels: usize,
+    depth: u16,
+) {
+    let bytes_per_sample = match depth {
+        8 => 1usize,
+        16 => 2,
+        32 => 4,
+        _ => return,
+    };
+    let plane_len = width * height * bytes_per_sample;
+    for channel in 0..channels {
+        let plane_start = channel * plane_len;
+        match depth {
+            8 => {
+                for row in 0..height {
+                    let row_start = plane_start + row * width;
+                    for x in 1..width {
+                        let pos = row_start + x;
+                        data[pos] = data[pos].wrapping_add(data[pos - 1]);
+                    }
+                }
+            }
+            16 => {
+                let row_bytes = width * 2;
+                for row in 0..height {
+                    let start = plane_start + row * row_bytes;
+                    for i in start + 1..start + row_bytes {
+                        data[i] = data[i].wrapping_add(data[i - 1]);
+                    }
+                }
+            }
+            32 => {
+                let row_bytes = width * 4;
+                let mut reordered = vec![0u8; row_bytes];
+                for row in 0..height {
+                    let row_off = plane_start + row * row_bytes;
+                    reordered.copy_from_slice(&data[row_off..row_off + row_bytes]);
+                    for plane in 0..4usize {
+                        let base = plane * width;
+                        for i in 1..width {
+                            reordered[base + i] =
+                                reordered[base + i].wrapping_add(reordered[base + i - 1]);
+                        }
+                    }
+                    for pixel in 0..width {
+                        let dst = row_off + pixel * 4;
+                        data[dst] = reordered[pixel];
+                        data[dst + 1] = reordered[width + pixel];
+                        data[dst + 2] = reordered[width * 2 + pixel];
+                        data[dst + 3] = reordered[width * 3 + pixel];
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn sample_to_u8(channel: &[u8], index: usize, depth: u16) -> u8 {
+    match depth {
+        8 => channel.get(index).copied().unwrap_or(0),
+        16 => {
+            let start = index * 2;
+            channel.get(start).copied().unwrap_or(0)
+        }
+        32 => {
+            let start = index * 4;
+            if start + 4 > channel.len() {
+                0
+            } else {
+                let value = f32::from_be_bytes([
+                    channel[start],
+                    channel[start + 1],
+                    channel[start + 2],
+                    channel[start + 3],
+                ]);
+                (value.clamp(0.0, 1.0) * 255.0).round() as u8
             }
         }
+        _ => 0,
     }
 }
 
@@ -1251,6 +1379,24 @@ mod tests {
     use crate::{write_psd, Layer, PixelData, Psd, WriteOptions};
     use std::io::Cursor;
 
+    fn minimal_valid_psd() -> Vec<u8> {
+        vec![
+            b'8', b'B', b'P', b'S', // signature
+            0x00, 0x01, // version
+            0, 0, 0, 0, 0, 0, // reserved
+            0x00, 0x03, // channels
+            0x00, 0x00, 0x00, 0x01, // height
+            0x00, 0x00, 0x00, 0x01, // width
+            0x00, 0x08, // depth
+            0x00, 0x03, // RGB
+            0x00, 0x00, 0x00, 0x00, // color mode data length
+            0x00, 0x00, 0x00, 0x00, // image resources length
+            0x00, 0x00, 0x00, 0x00, // layer and mask length
+            0x00, 0x00, // image compression = raw
+            0x00, 0x00, 0x00, // one byte per channel
+        ]
+    }
+
     #[test]
     fn test_read_signature() {
         let data = b"8BPS";
@@ -1293,6 +1439,81 @@ mod tests {
         assert_eq!(payload, 0xAA);
         let next = reader.read_u8().expect("next byte");
         assert_eq!(next, 0xBB);
+    }
+
+    #[test]
+    fn test_rejects_non_zero_reserved_header_bytes() {
+        let mut bytes = minimal_valid_psd();
+        bytes[6] = 1;
+        let err = read_psd(Cursor::new(bytes), ReadOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("reserved"));
+    }
+
+    #[test]
+    fn test_rejects_zero_width_in_header() {
+        let mut bytes = minimal_valid_psd();
+        bytes[18..22].copy_from_slice(&0u32.to_be_bytes());
+        let err = read_psd(Cursor::new(bytes), ReadOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("Invalid size"));
+    }
+
+    #[test]
+    fn test_read_color_cmyk() {
+        let bytes = [
+            0x00, 0x02, // CMYK
+            0xFF, 0xFF, // C
+            0x80, 0x80, // M
+            0x40, 0x40, // Y
+            0x00, 0x00, // K
+        ];
+        let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
+        let color = reader.read_color().unwrap();
+        assert_eq!(
+            color,
+            crate::types::Color::CMYK(crate::types::CMYK {
+                c: 65535,
+                m: 32896,
+                y: 16448,
+                k: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn test_read_color_preserves_grayscale_0_to_10000() {
+        let bytes = [
+            0x00, 0x08, // grayscale
+            0x27, 0x10, // 10000
+            0x00, 0x00,
+            0x00, 0x00,
+            0x00, 0x00,
+        ];
+        let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
+        let color = reader.read_color().unwrap();
+        assert_eq!(
+            color,
+            crate::types::Color::Grayscale(crate::types::Grayscale { k: 10000 })
+        );
+    }
+
+    #[test]
+    fn test_read_color_preserves_opaque_custom_space() {
+        let bytes = [
+            0x00, 0x03, // custom space
+            0x00, 0x01,
+            0x00, 0x02,
+            0x00, 0x03,
+            0x00, 0x04,
+        ];
+        let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
+        let color = reader.read_color().unwrap();
+        assert_eq!(
+            color,
+            crate::types::Color::OpaqueColorSpace {
+                color_space: 3,
+                components: [1, 2, 3, 4],
+            }
+        );
     }
 
     #[test]

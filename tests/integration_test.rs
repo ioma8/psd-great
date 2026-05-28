@@ -5,6 +5,81 @@ use std::fs::File;
 use std::io::Cursor;
 
 #[test]
+fn read_color_preserves_raw_rgb_hsb_lab_values() {
+    let rgb_bytes = vec![
+        0x00, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x00, 0x00,
+    ];
+    let mut rgb_reader = PsdReader::new(Cursor::new(rgb_bytes), ReadOptions::default());
+    assert_eq!(
+        rgb_reader.read_color().unwrap(),
+        Color::Rgb48 {
+            red: 0x1234,
+            green: 0x5678,
+            blue: 0x9abc,
+        }
+    );
+
+    let hsb_bytes = vec![
+        0x00, 0x01, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x00, 0x00,
+    ];
+    let mut hsb_reader = PsdReader::new(Cursor::new(hsb_bytes), ReadOptions::default());
+    assert_eq!(
+        hsb_reader.read_color().unwrap(),
+        Color::Hsb {
+            hue: 0x1111,
+            saturation: 0x2222,
+            brightness: 0x3333,
+        }
+    );
+
+    let lab_bytes = vec![
+        0x00, 0x07, 0x27, 0x10, 0xff, 0x9c, 0x00, 0x64, 0x00, 0x00,
+    ];
+    let mut lab_reader = PsdReader::new(Cursor::new(lab_bytes), ReadOptions::default());
+    assert_eq!(
+        lab_reader.read_color().unwrap(),
+        Color::Lab {
+            lightness: 10000,
+            a: -100,
+            b: 100,
+        }
+    );
+}
+
+#[test]
+fn write_color_roundtrips_raw_color_structures_exactly() {
+    let colors = [
+        Color::Rgb48 {
+            red: 0x1234,
+            green: 0x5678,
+            blue: 0x9abc,
+        },
+        Color::Hsb {
+            hue: 0x1111,
+            saturation: 0x2222,
+            brightness: 0x3333,
+        },
+        Color::Lab {
+            lightness: 10000,
+            a: -100,
+            b: 100,
+        },
+        Color::OpaqueColorSpace {
+            color_space: 42,
+            components: [1, 2, 3, 4],
+        },
+    ];
+
+    for color in colors {
+        let mut writer = PsdWriter::new(32);
+        writer.write_color(Some(&color)).unwrap();
+        let bytes = writer.into_buffer();
+        let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
+        assert_eq!(reader.read_color().unwrap(), color);
+    }
+}
+
+#[test]
 fn test_basic_types() {
     // Test color types
     let rgba = RGBA {
@@ -817,4 +892,197 @@ fn test_read_existing_psd() {
             println!("Successfully read test PSD: {}x{}", psd.width, psd.height);
         }
     }
+}
+
+#[test]
+fn spec_color_mode_codes_match_adobe_header_values() {
+    assert_eq!(ColorMode::Bitmap as u16, 0);
+    assert_eq!(ColorMode::Grayscale as u16, 1);
+    assert_eq!(ColorMode::Indexed as u16, 2);
+    assert_eq!(ColorMode::RGB as u16, 3);
+    assert_eq!(ColorMode::CMYK as u16, 4);
+    assert_eq!(ColorMode::Multichannel as u16, 7);
+    assert_eq!(ColorMode::Duotone as u16, 8);
+    assert_eq!(ColorMode::Lab as u16, 9);
+}
+
+#[test]
+fn packbits_0x80_is_a_noop() {
+    let compressed = [0x80, 0x02, b'A', b'B', b'C'];
+    let mut output = [0u8; 3];
+
+    decompress_rle(&compressed, &mut output, 3, 1, &[5]).unwrap();
+
+    assert_eq!(&output, b"ABC");
+}
+
+#[test]
+fn additional_info_uses_even_padding_not_four_byte_padding() {
+    let bytes = vec![
+        b'8', b'B', b'I', b'M', // signature
+        b'f', b'c', b'm', b'y', // key
+        0, 0, 0, 1, // length
+        7, // payload
+        0, // even-byte padding
+    ];
+    let mut reader = psd_great::PsdReader::new(Cursor::new(bytes), ReadOptions::default());
+    let parsed = psd_great::additional_info::read_layer_additional_info(&mut reader, 14).unwrap();
+
+    assert_eq!(parsed.fcmy, Some(7));
+}
+
+#[test]
+fn psb_large_tagged_blocks_use_8b64_length_headers() {
+    let mut layer = Layer {
+        top: Some(0),
+        left: Some(0),
+        bottom: Some(1),
+        right: Some(1),
+        ..Default::default()
+    };
+    layer.additional_info.high_depth_layer_data = Some(psd_great::additional_info::HighDepthLayerInfo {
+        key: PsdStringCode::from("Lr16"),
+        layers: vec![],
+    });
+
+    let psd = Psd {
+        width: 1,
+        height: 1,
+        children: Some(vec![layer]),
+        ..Default::default()
+    };
+
+    let bytes = write_psd(
+        &psd,
+        &WriteOptions {
+            psb: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert!(bytes.windows(4).any(|w| w == b"8B64"));
+}
+
+#[test]
+fn merged_alpha_writes_negative_layer_count() {
+    let psd = Psd {
+        width: 1,
+        height: 1,
+        channels: Some(4),
+        bits_per_channel: Some(8),
+        color_mode: Some(ColorMode::RGB),
+        children: Some(vec![Layer {
+            top: Some(0),
+            left: Some(0),
+            bottom: Some(1),
+            right: Some(1),
+            image_data: Some(PixelData {
+                data: vec![1, 2, 3, 4],
+                width: 1,
+                height: 1,
+            }),
+            ..Default::default()
+        }]),
+        image_data: Some(PixelData {
+            data: vec![1, 2, 3, 4],
+            width: 1,
+            height: 1,
+        }),
+        ..Default::default()
+    };
+
+    let bytes = write_psd(&psd, &WriteOptions::default()).unwrap();
+
+    let layer_count_offset = 26 + 4 + 4 + 4 + 4;
+    assert_eq!(&bytes[layer_count_offset..layer_count_offset + 2], &[0xFF, 0xFF]);
+}
+
+#[test]
+fn composite_16bit_raw_roundtrip_reads_correct_plane_sizes() {
+    let psd = Psd {
+        width: 1,
+        height: 1,
+        channels: Some(3),
+        bits_per_channel: Some(16),
+        color_mode: Some(ColorMode::RGB),
+        image_data: Some(PixelData {
+            data: vec![0x12, 0x34, 0x56, 0xFF],
+            width: 1,
+            height: 1,
+        }),
+        ..Default::default()
+    };
+
+    let bytes = write_psd(
+        &psd,
+        &WriteOptions {
+            compress: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let reparsed = read_psd(Cursor::new(bytes), ReadOptions::default()).unwrap();
+
+    assert_eq!(
+        reparsed.image_data.unwrap().data,
+        vec![0x12, 0x34, 0x56, 0xFF]
+    );
+}
+
+#[test]
+fn composite_32bit_zip_prediction_roundtrip_reads_correct_plane_sizes() {
+    let psd = Psd {
+        width: 1,
+        height: 1,
+        channels: Some(1),
+        bits_per_channel: Some(32),
+        color_mode: Some(ColorMode::Grayscale),
+        image_data: Some(PixelData {
+            data: vec![0x40, 0x40, 0x40, 0xFF],
+            width: 1,
+            height: 1,
+        }),
+        ..Default::default()
+    };
+
+    let bytes = write_psd(
+        &psd,
+        &WriteOptions {
+            compress: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let reparsed = read_psd(Cursor::new(bytes), ReadOptions::default()).unwrap();
+
+    assert_eq!(
+        reparsed.image_data.unwrap().data,
+        vec![0x40, 0x40, 0x40, 0xFF]
+    );
+}
+
+#[test]
+fn path_resources_use_8_24_fixed_point() {
+    let mut resources = ImageResources::default();
+    resources.path_resources.insert(
+        2000,
+        vec![psd_great::image_resources::PathResourceRecord {
+            record_type: 1,
+            closed: true,
+            points: vec![
+                Point { x: 0.25, y: 1.0 },
+                Point { x: 0.5, y: 0.5 },
+                Point { x: 0.25, y: 0.25 },
+                Point { x: 0.0, y: 0.0 },
+            ],
+        }],
+    );
+
+    let mut writer = PsdWriter::new(256);
+    psd_great::image_resources::write_image_resources(&mut writer, &resources).unwrap();
+    let bytes = writer.into_buffer();
+
+    assert_eq!(&bytes[14..18], &[0x01, 0x00, 0x00, 0x00]);
+    assert_eq!(&bytes[18..22], &[0x00, 0x40, 0x00, 0x00]);
 }

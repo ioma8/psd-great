@@ -1302,15 +1302,18 @@ mod remaining_tagged_block_parity {
                 items: vec![psd_great::LinkedFile {
                     id: "id".to_string(),
                     name: "name".to_string(),
+                    item_version: Some(7),
+                    data_kind: Some(psd_great::PsdStringCode::from("liFD")),
                     file_type: Some(psd_great::PsdStringCode::from("JPEG")),
                     creator: Some(psd_great::PsdStringCode::from("8BIM")),
                     data: Some(vec![1, 2, 3]),
                     time: None,
                     descriptor: None,
-                    child_document_id: Some(psd_great::PsdStringCode::from("liFD")),
+                    child_document_id: None,
                     asset_mod_time: None,
                     asset_locked_state: None,
                     linked_file: None,
+                    open_descriptor: None,
                 }],
             });
 
@@ -1666,24 +1669,15 @@ mod remaining_tagged_block_parity {
     }
 
     #[test]
-    fn roundtrip_resource_1026_maps_layer_clipping() {
-        let mut layer_a = Layer::default();
-        layer_a.top = Some(0);
-        layer_a.left = Some(0);
-        layer_a.bottom = Some(1);
-        layer_a.right = Some(1);
-        layer_a.clipping = Some(0);
-
-        let mut layer_b = layer_a.clone();
-        layer_b.clipping = Some(2);
-
+    fn roundtrip_resource_1026_maps_layer_group_ids() {
         let mut psd = Psd::default();
         psd.width = 1;
         psd.height = 1;
         psd.channels = Some(4);
         psd.bits_per_channel = Some(8);
         psd.color_mode = Some(ColorMode::RGB);
-        psd.children = Some(vec![layer_a, layer_b]);
+        psd.children = Some(vec![Layer::default(), Layer::default()]);
+        psd.layer_group_ids = Some(vec![7, 11]);
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
         let reparsed = read_psd(
@@ -1696,9 +1690,9 @@ mod remaining_tagged_block_parity {
         )
         .expect("read");
 
-        let layers = reparsed.children.expect("layers");
-        assert_eq!(layers[0].clipping, Some(0));
-        assert_eq!(layers[1].clipping, Some(2));
+        assert_eq!(reparsed.layer_group_ids, Some(vec![7, 11]));
+        let resources = reparsed.image_resources.expect("image resources");
+        assert_eq!(resources.layer_group_ids, Some(vec![7, 11]));
     }
 
     #[test]
@@ -1785,7 +1779,7 @@ mod remaining_tagged_block_parity {
     }
 
     #[test]
-    fn roundtrip_display_info_and_custom_points_are_typed() {
+    fn roundtrip_display_info_and_color_samplers_are_typed() {
         let mut psd = Psd::default();
         psd.width = 1;
         psd.height = 1;
@@ -1798,7 +1792,13 @@ mod remaining_tagged_block_parity {
             width_unit: psd_great::PsdU16Code(3),
             height_unit: psd_great::PsdU16Code(4),
         });
-        psd.custom_points = Some(vec![psd_great::psd::CustomPoint { x: 1.5, y: 2.5 }]);
+        psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
+            version: 2,
+            horizontal: 12,
+            vertical: 34,
+            color_space: 8,
+            depth: Some(16),
+        }]);
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
         let reparsed = read_psd(
@@ -1812,49 +1812,34 @@ mod remaining_tagged_block_parity {
         .expect("read");
 
         assert_eq!(reparsed.display_info, psd.display_info);
-        assert_eq!(reparsed.custom_points, psd.custom_points);
+        assert_eq!(reparsed.color_samplers, psd.color_samplers);
         let resources = reparsed.image_resources.expect("image resources");
-        assert!(resources.custom_points_typed.is_some());
+        assert!(resources.color_samplers_typed.is_some());
         assert!(resources.display_info_typed.is_some());
         assert_eq!(
-            resources.display_info_typed.as_ref().map(|info| {
-                let mut bytes = vec![0u8; 28];
-                bytes[0..2].copy_from_slice(&info.version.to_be_bytes());
-                bytes[2..4].copy_from_slice(&info.h_res_unit.0.to_be_bytes());
-                bytes[4..6].copy_from_slice(&1u16.to_be_bytes());
-                bytes[6..8].copy_from_slice(&info.v_res_unit.0.to_be_bytes());
-                bytes[8..10].copy_from_slice(&1u16.to_be_bytes());
-                bytes[10..12].copy_from_slice(&info.width_unit.0.to_be_bytes());
-                bytes[12..14].copy_from_slice(&1u16.to_be_bytes());
-                bytes[14..16].copy_from_slice(&info.height_unit.0.to_be_bytes());
-                bytes[16..18].copy_from_slice(&1u16.to_be_bytes());
-                bytes
-            }).as_deref(),
-            Some(&[
-                0, 1, 0, 1, 0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 4, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0
-            ][..])
+            resources
+                .color_samplers_typed
+                .as_ref()
+                .map(|samplers| samplers.samplers.clone()),
+            psd.color_samplers
         );
-        assert_eq!(
-            resources.custom_points_typed.as_ref().map(|points| {
-                let mut bytes = Vec::new();
-                bytes.extend_from_slice(&points.version.to_be_bytes());
-                bytes.extend_from_slice(&(points.points.len() as u32).to_be_bytes());
-                for point in &points.points {
-                    let y_fixed = (point.y * 65536.0) as i32;
-                    let x_fixed = (point.x * 65536.0) as i32;
-                    bytes.extend_from_slice(&14i16.to_be_bytes());
-                    bytes.extend_from_slice(&y_fixed.to_be_bytes());
-                    bytes.extend_from_slice(&x_fixed.to_be_bytes());
-                    bytes.extend_from_slice(&(-1i16).to_be_bytes());
-                    bytes.extend_from_slice(&8i16.to_be_bytes());
-                }
-                bytes
-            }).as_deref(),
-            Some(&[
-                0, 0, 0, 3, 0, 0, 0, 1, 0, 14, 0, 2, 128, 0, 0, 1, 128, 0, 255, 255, 0, 8
-            ][..])
-        );
+    }
+
+    #[test]
+    fn document_slices_descriptor_variant_is_public() {
+        let slices = psd_great::psd::DocumentSlices::Descriptor {
+            version: 7,
+            descriptor: psd_great::descriptor::Descriptor {
+                name: String::new(),
+                class_id: "null".to_string(),
+                items: std::collections::HashMap::new(),
+            },
+        };
+
+        match slices {
+            psd_great::psd::DocumentSlices::Descriptor { version, .. } => assert_eq!(version, 7),
+            _ => panic!("wrong slices variant"),
+        }
     }
 
     #[test]
@@ -1884,7 +1869,13 @@ mod remaining_tagged_block_parity {
         });
         psd.descriptor_1074 = psd.descriptor_1065.clone();
         psd.descriptor_1075 = psd.descriptor_1065.clone();
-        psd.custom_points = Some(vec![psd_great::psd::CustomPoint { x: 10.5, y: 20.25 }]);
+        psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
+            version: 3,
+            horizontal: 10,
+            vertical: 20,
+            color_space: 0,
+            depth: None,
+        }]);
         psd.display_info = Some(psd_great::psd::DisplayInfo {
             h_res_unit: psd_great::PsdU16Code(1),
             v_res_unit: psd_great::PsdU16Code(2),
@@ -1908,7 +1899,7 @@ mod remaining_tagged_block_parity {
         assert_eq!(reparsed.descriptor_1065, psd.descriptor_1065);
         assert_eq!(reparsed.descriptor_1074, psd.descriptor_1074);
         assert_eq!(reparsed.descriptor_1075, psd.descriptor_1075);
-        assert_eq!(reparsed.custom_points, psd.custom_points);
+        assert_eq!(reparsed.color_samplers, psd.color_samplers);
         assert_eq!(reparsed.display_info, psd.display_info);
     }
 
@@ -1919,11 +1910,9 @@ mod remaining_tagged_block_parity {
         layer_a.left = Some(0);
         layer_a.bottom = Some(1);
         layer_a.right = Some(1);
-        layer_a.clipping = Some(0);
         layer_a.resource_visible = Some(true);
 
         let mut layer_b = layer_a.clone();
-        layer_b.clipping = Some(2);
         layer_b.resource_visible = Some(false);
 
         let mut psd = Psd::default();
@@ -1933,6 +1922,7 @@ mod remaining_tagged_block_parity {
         psd.bits_per_channel = Some(8);
         psd.color_mode = Some(ColorMode::RGB);
         psd.children = Some(vec![layer_a, layer_b]);
+        psd.layer_group_ids = Some(vec![0, 2]);
         psd.variable_sets = Some(vec![psd_great::psd::VariableSet {
             var_name: Some("title".to_string()),
             trait_name: Some("textcontent".to_string()),
@@ -1943,7 +1933,13 @@ mod remaining_tagged_block_parity {
             clip: None,
         }]);
         psd.data_sets = Some(vec![vec!["title".to_string()], vec!["Hello".to_string()]]);
-        psd.custom_points = Some(vec![psd_great::psd::CustomPoint { x: 4.0, y: 8.0 }]);
+        psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
+            version: 3,
+            horizontal: 4,
+            vertical: 8,
+            color_space: 0,
+            depth: None,
+        }]);
         psd.display_info = Some(psd_great::psd::DisplayInfo {
             h_res_unit: psd_great::PsdU16Code(1),
             v_res_unit: psd_great::PsdU16Code(1),
@@ -1963,13 +1959,12 @@ mod remaining_tagged_block_parity {
         .expect("read");
 
         let layers = reparsed.children.as_ref().expect("layers");
-        assert_eq!(layers[0].clipping, Some(0));
-        assert_eq!(layers[1].clipping, Some(2));
         assert_eq!(layers[0].resource_visible, Some(true));
         assert_eq!(layers[1].resource_visible, Some(false));
+        assert_eq!(reparsed.layer_group_ids, Some(vec![0, 2]));
         assert_eq!(reparsed.variable_sets, psd.variable_sets);
         assert_eq!(reparsed.data_sets, psd.data_sets);
-        assert_eq!(reparsed.custom_points, psd.custom_points);
+        assert_eq!(reparsed.color_samplers, psd.color_samplers);
         assert_eq!(reparsed.display_info, psd.display_info);
     }
 
@@ -1985,5 +1980,40 @@ mod remaining_tagged_block_parity {
         let magic_value_markers: [&str; 0] = [];
 
         assert_eq!(magic_value_markers.len(), 0);
+    }
+
+    #[test]
+    fn roundtrip_lossless_photoshop_color_structures() {
+        use psd_great::{Color, PsdReader, PsdWriter};
+
+        let colors = [
+            Color::Rgb48 {
+                red: 0x1234,
+                green: 0x5678,
+                blue: 0x9abc,
+            },
+            Color::Hsb {
+                hue: 0x1111,
+                saturation: 0x2222,
+                brightness: 0x3333,
+            },
+            Color::Lab {
+                lightness: 10000,
+                a: -100,
+                b: 100,
+            },
+            Color::OpaqueColorSpace {
+                color_space: 42,
+                components: [1, 2, 3, 4],
+            },
+        ];
+
+        for color in colors {
+            let mut writer = PsdWriter::new(32);
+            writer.write_color(Some(&color)).unwrap();
+            let bytes = writer.into_buffer();
+            let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
+            assert_eq!(reader.read_color().unwrap(), color);
+        }
     }
 }
