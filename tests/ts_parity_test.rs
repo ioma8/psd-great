@@ -1307,7 +1307,7 @@ mod remaining_tagged_block_parity {
                         id: "id".to_string(),
                         name: "name".to_string(),
                         item_version: Some(7),
-                        data_kind: Some(psd_great::PsdStringCode::from("liFD")),
+                        data_kind: Some(psd_great::LinkedFileDataKind::Data),
                         file_type: Some(psd_great::PsdStringCode::from("JPEG")),
                         creator: Some(psd_great::PsdStringCode::from("8BIM")),
                         data: Some(vec![1, 2, 3]),
@@ -1365,7 +1365,7 @@ mod remaining_tagged_block_parity {
             id: "asset-id".to_string(),
             name: "Placed Asset".to_string(),
             item_version: Some(7),
-            data_kind: Some(psd_great::PsdStringCode::from("liFE")),
+            data_kind: Some(psd_great::LinkedFileDataKind::External),
             file_type: Some(psd_great::PsdStringCode::from("8BPS")),
             creator: Some(psd_great::PsdStringCode::from("8BIM")),
             data: Some(vec![1, 2, 3, 4]),
@@ -1458,7 +1458,7 @@ mod remaining_tagged_block_parity {
                 id: "asset-id".to_string(),
                 name: "Placed Asset".to_string(),
                 item_version: Some(7),
-                data_kind: Some(psd_great::PsdStringCode::from("liFE")),
+                data_kind: Some(psd_great::LinkedFileDataKind::External),
                 file_type: Some(psd_great::PsdStringCode::from("8BPS")),
                 creator: Some(psd_great::PsdStringCode::from("8BIM")),
                 data: Some(vec![1, 2, 3, 4]),
@@ -1509,7 +1509,7 @@ mod remaining_tagged_block_parity {
                 id: "asset-id".to_string(),
                 name: "Placed Asset".to_string(),
                 item_version: Some(3),
-                data_kind: Some(psd_great::PsdStringCode::from("liFE")),
+                data_kind: Some(psd_great::LinkedFileDataKind::External),
                 file_type: Some(psd_great::PsdStringCode::from("8BPS")),
                 creator: Some(psd_great::PsdStringCode::from("8BIM")),
                 data: Some(vec![1, 2, 3, 4]),
@@ -1977,10 +1977,10 @@ mod remaining_tagged_block_parity {
         psd.bits_per_channel = Some(8);
         psd.color_mode = Some(ColorMode::RGB);
         psd.display_info = Some(psd_great::psd::DisplayInfo {
-            h_res_unit: psd_great::PsdU16Code(1),
-            v_res_unit: psd_great::PsdU16Code(2),
-            width_unit: psd_great::PsdU16Code(3),
-            height_unit: psd_great::PsdU16Code(4),
+            h_res_unit: psd_great::DisplayUnit::PixelsPerInch,
+            v_res_unit: psd_great::DisplayUnit::PixelsPerCentimeter,
+            width_unit: psd_great::DisplayUnit::Points,
+            height_unit: psd_great::DisplayUnit::Picas,
         });
         psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
             position: psd_great::ColorSamplerPosition::V2 {
@@ -2068,10 +2068,10 @@ mod remaining_tagged_block_parity {
             color_space: 0,
         }]);
         psd.display_info = Some(psd_great::psd::DisplayInfo {
-            h_res_unit: psd_great::PsdU16Code(1),
-            v_res_unit: psd_great::PsdU16Code(2),
-            width_unit: psd_great::PsdU16Code(3),
-            height_unit: psd_great::PsdU16Code(4),
+            h_res_unit: psd_great::DisplayUnit::PixelsPerInch,
+            v_res_unit: psd_great::DisplayUnit::PixelsPerCentimeter,
+            width_unit: psd_great::DisplayUnit::Points,
+            height_unit: psd_great::DisplayUnit::Picas,
         });
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
@@ -2133,10 +2133,10 @@ mod remaining_tagged_block_parity {
             color_space: 0,
         }]);
         psd.display_info = Some(psd_great::psd::DisplayInfo {
-            h_res_unit: psd_great::PsdU16Code(1),
-            v_res_unit: psd_great::PsdU16Code(1),
-            width_unit: psd_great::PsdU16Code(1),
-            height_unit: psd_great::PsdU16Code(1),
+            h_res_unit: psd_great::DisplayUnit::PixelsPerInch,
+            v_res_unit: psd_great::DisplayUnit::PixelsPerInch,
+            width_unit: psd_great::DisplayUnit::PixelsPerInch,
+            height_unit: psd_great::DisplayUnit::PixelsPerInch,
         });
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");

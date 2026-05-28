@@ -344,7 +344,7 @@ pub struct LinkedFile {
     pub id: String,
     pub name: String,
     pub item_version: Option<u32>,
-    pub data_kind: Option<PsdStringCode>,
+    pub data_kind: Option<LinkedFileDataKind>,
     pub file_type: Option<PsdStringCode>,
     pub creator: Option<PsdStringCode>,
     pub data: Option<Vec<u8>>,

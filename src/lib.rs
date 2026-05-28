@@ -65,18 +65,18 @@ pub use layer::{
     BezierKnot, BezierPath, Layer, LayerMaskData, LayerVectorMask, LinkedFile, PatternInfo,
     VectorContent,
 };
-pub use psd::{Annotation, DocumentSlices, GlobalLayerMaskInfo, Psd, ReadOptions, WriteOptions};
+pub use psd::{Annotation, DocumentSlices, GlobalLayerMaskInfo, GuideInfo, Psd, ReadOptions, WriteOptions};
 pub use psd::{ColorSampler, ColorSamplerPosition, DisplayInfo};
 pub use reader::{read_psd, PsdReader};
 pub use text::{
     Font, LayerTextData, ParagraphStyle, ParagraphStyleRun, TextStyle, TextStyleRun, Warp,
 };
 pub use types::{
-    AntiAlias, BlendMode, BooleanOperation, ChannelID, Color, ColorMode, Compression, Fraction,
-    GradientStyle, Grayscale, InterpolationMethod, Justification, LayerColor,
-    LayerCompCapturedInfo, Orientation, PixelData, Point, PsdIntCode, PsdStringCode, PsdU16Code,
-    PsdU32Code, RenderingIntent, SectionDividerType, Units, UnitsValue, WarpStyle, CMYK, FRGB, RGB,
-    RGBA,
+    AntiAlias, BlendMode, BooleanOperation, ChannelID, Color, ColorMode, Compression, DisplayUnit,
+    Fraction, GradientStyle, Grayscale, GuideDirection, InterpolationMethod, Justification,
+    LayerColor, LayerCompCapturedInfo, LinkedFileDataKind, Orientation, PixelData, Point,
+    PsdIntCode, PsdStringCode, PsdU16Code, PsdU32Code, RenderingIntent, SectionDividerType, Units,
+    UnitsValue, WarpStyle, CMYK, FRGB, RGB, RGBA,
 };
 pub use writer::{write_psd, PsdWriter};
 

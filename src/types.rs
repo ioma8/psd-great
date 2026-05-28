@@ -375,6 +375,101 @@ pub enum RenderingIntent {
     AbsoluteColorimetric,
 }
 
+/// Linked file data kind
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkedFileDataKind {
+    Data,
+    External,
+    Alias,
+    Other([u8; 4]),
+}
+
+impl LinkedFileDataKind {
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            "liFD" => Self::Data,
+            "liFE" => Self::External,
+            "liFA" => Self::Alias,
+            _ => Self::Other(code.as_bytes().try_into().unwrap_or(*b"????")),
+        }
+    }
+
+    pub fn to_code(self) -> [u8; 4] {
+        match self {
+            Self::Data => *b"liFD",
+            Self::External => *b"liFE",
+            Self::Alias => *b"liFA",
+            Self::Other(code) => code,
+        }
+    }
+}
+
+/// Guide direction
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuideDirection {
+    Horizontal,
+    Vertical,
+}
+
+impl GuideDirection {
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            "Hrzn" => Self::Horizontal,
+            "Vrtc" => Self::Vertical,
+            _ => Self::Horizontal,
+        }
+    }
+
+    pub fn to_code(self) -> &'static str {
+        match self {
+            Self::Horizontal => "Hrzn",
+            Self::Vertical => "Vrtc",
+        }
+    }
+}
+
+/// Display unit for resolution/measurement
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayUnit {
+    PixelsPerInch,
+    PixelsPerCentimeter,
+    Points,
+    Picas,
+    Columns,
+    Inches,
+    Centimeters,
+    Millimeters,
+}
+
+impl DisplayUnit {
+    pub fn from_u16(value: u16) -> Self {
+        match value {
+            1 => Self::PixelsPerInch,
+            2 => Self::PixelsPerCentimeter,
+            3 => Self::Points,
+            4 => Self::Picas,
+            5 => Self::Columns,
+            6 => Self::Inches,
+            7 => Self::Centimeters,
+            8 => Self::Millimeters,
+            _ => Self::PixelsPerInch,
+        }
+    }
+
+    pub fn to_u16(self) -> u16 {
+        match self {
+            Self::PixelsPerInch => 1,
+            Self::PixelsPerCentimeter => 2,
+            Self::Points => 3,
+            Self::Picas => 4,
+            Self::Columns => 5,
+            Self::Inches => 6,
+            Self::Centimeters => 7,
+            Self::Millimeters => 8,
+        }
+    }
+}
+
 /// Layer color label
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerColor {

@@ -4,9 +4,10 @@
 //! guides, grids, color profiles, and thumbnails.
 
 use crate::binrw_support::{
-    decode_be, encode_be, GridAndGuidesHeaderRecord, GuideRecord, ImageResourceHeaderRecord,
-    ImageResourceLengthRecord, LayerStateRecord, PrintFlagsRecord, PrintScaleRecord,
-    ResolutionInfoRecord, SignedI32Record, U16ListCountRecord, U32ValueRecord, U8BoolRecord,
+    decode_be, encode_be, DisplayInfoRecord, GridAndGuidesHeaderRecord, GuideRecord,
+    ImageResourceHeaderRecord, ImageResourceLengthRecord, LayerStateRecord, PrintFlagsRecord,
+    PrintScaleRecord, ResolutionInfoRecord, SignedI32Record, U16ListCountRecord, U32ValueRecord,
+    U8BoolRecord,
 };
 use crate::descriptor::Descriptor;
 use crate::error::{PsdError, Result};
@@ -201,29 +202,19 @@ fn parse_display_info_resource(bytes: &[u8]) -> Option<DisplayInfoResource> {
     if bytes.len() < 18 {
         return None;
     }
+    let record: DisplayInfoRecord = decode_be(bytes, "display info resource").ok()?;
     Some(DisplayInfoResource {
-        version: u16::from_be_bytes([bytes[0], bytes[1]]),
-        // Unit fields are little-endian per TS (DataView getUint16 with false flag)
-        h_res_unit: PsdU16Code(u16::from_le_bytes([bytes[2], bytes[3]])),
-        v_res_unit: PsdU16Code(u16::from_le_bytes([bytes[6], bytes[7]])),
-        width_unit: PsdU16Code(u16::from_le_bytes([bytes[10], bytes[11]])),
-        height_unit: PsdU16Code(u16::from_le_bytes([bytes[14], bytes[15]])),
+        version: record.version,
+        h_res_unit: PsdU16Code(record.h_res_unit()),
+        v_res_unit: PsdU16Code(record.v_res_unit()),
+        width_unit: PsdU16Code(record.width_unit()),
+        height_unit: PsdU16Code(record.height_unit()),
     })
 }
 
 fn build_display_info_resource(info: &DisplayInfoResource) -> Vec<u8> {
-    let mut bytes = vec![0u8; 28];
-    bytes[0..2].copy_from_slice(&info.version.to_be_bytes());
-    // Unit fields are little-endian per TS
-    bytes[2..4].copy_from_slice(&info.h_res_unit.0.to_le_bytes());
-    bytes[4..6].copy_from_slice(&1u16.to_be_bytes());
-    bytes[6..8].copy_from_slice(&info.v_res_unit.0.to_le_bytes());
-    bytes[8..10].copy_from_slice(&1u16.to_be_bytes());
-    bytes[10..12].copy_from_slice(&info.width_unit.0.to_le_bytes());
-    bytes[12..14].copy_from_slice(&1u16.to_be_bytes());
-    bytes[14..16].copy_from_slice(&info.height_unit.0.to_le_bytes());
-    bytes[16..18].copy_from_slice(&1u16.to_be_bytes());
-    bytes
+    let record = DisplayInfoRecord::from(info.clone());
+    encode_be(&record, "display info resource").unwrap_or_else(|_| vec![0u8; 28])
 }
 
 fn parse_color_samplers_resource(bytes: &[u8]) -> ColorSamplersResource {

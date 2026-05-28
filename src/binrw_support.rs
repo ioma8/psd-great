@@ -4,6 +4,67 @@ use binrw::{BinRead, BinReaderExt, BinWrite, BinWriterExt};
 
 use crate::error::{PsdError, Result};
 
+/// Display info record (resource 1077) with mixed endianness:
+/// version is big-endian, unit fields are little-endian.
+#[derive(binrw::BinRead, binrw::BinWrite, Debug, Clone, PartialEq, Eq)]
+#[brw(big)]
+pub(crate) struct DisplayInfoRecord {
+    pub version: u16,
+    pub h_res_unit_raw: [u8; 2],
+    pub h_width_unit_tag: u16,
+    pub v_res_unit_raw: [u8; 2],
+    pub v_width_unit_tag: u16,
+    pub width_unit_raw: [u8; 2],
+    pub width_unit_tag: u16,
+    pub height_unit_raw: [u8; 2],
+    pub height_unit_tag: u16,
+    pub padding: [u8; 10],
+}
+
+impl DisplayInfoRecord {
+    pub fn h_res_unit(&self) -> u16 {
+        u16::from_le_bytes(self.h_res_unit_raw)
+    }
+    pub fn v_res_unit(&self) -> u16 {
+        u16::from_le_bytes(self.v_res_unit_raw)
+    }
+    pub fn width_unit(&self) -> u16 {
+        u16::from_le_bytes(self.width_unit_raw)
+    }
+    pub fn height_unit(&self) -> u16 {
+        u16::from_le_bytes(self.height_unit_raw)
+    }
+}
+
+impl From<crate::image_resources::DisplayInfoResource> for DisplayInfoRecord {
+    fn from(info: crate::image_resources::DisplayInfoResource) -> Self {
+        Self {
+            version: info.version,
+            h_res_unit_raw: info.h_res_unit.0.to_le_bytes(),
+            h_width_unit_tag: 1,
+            v_res_unit_raw: info.v_res_unit.0.to_le_bytes(),
+            v_width_unit_tag: 1,
+            width_unit_raw: info.width_unit.0.to_le_bytes(),
+            width_unit_tag: 1,
+            height_unit_raw: info.height_unit.0.to_le_bytes(),
+            height_unit_tag: 1,
+            padding: [0; 10],
+        }
+    }
+}
+
+impl From<DisplayInfoRecord> for crate::image_resources::DisplayInfoResource {
+    fn from(record: DisplayInfoRecord) -> Self {
+        crate::image_resources::DisplayInfoResource {
+            version: record.version,
+            h_res_unit: crate::types::PsdU16Code(record.h_res_unit()),
+            v_res_unit: crate::types::PsdU16Code(record.v_res_unit()),
+            width_unit: crate::types::PsdU16Code(record.width_unit()),
+            height_unit: crate::types::PsdU16Code(record.height_unit()),
+        }
+    }
+}
+
 #[derive(binrw::BinRead, binrw::BinWrite, Debug, Clone, PartialEq, Eq)]
 #[brw(big)]
 pub(crate) struct PsdHeaderRecord {
@@ -224,6 +285,20 @@ pub(crate) struct EffectsCommonStateRecord {
 pub(crate) struct EffectBlockHeaderRecord {
     pub block_size: u32,
     pub version: u32,
+}
+
+#[derive(binrw::BinRead, binrw::BinWrite, Debug, Clone, PartialEq, Eq)]
+#[brw(big)]
+pub(crate) struct AnnotationHeaderRecord {
+    pub major: u16,
+    pub minor: u16,
+    pub count: u32,
+}
+
+#[derive(binrw::BinRead, binrw::BinWrite, Debug, Clone, PartialEq, Eq)]
+#[brw(big)]
+pub(crate) struct UsingAlignedRenderingRecord {
+    pub value: u32,
 }
 
 pub(crate) fn decode_be<T>(bytes: &[u8], context: &str) -> Result<T>

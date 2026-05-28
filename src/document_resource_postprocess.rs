@@ -57,10 +57,10 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
 
         if let Some(info) = resources.display_info_typed.as_ref() {
             psd.display_info = Some(crate::psd::DisplayInfo {
-                h_res_unit: info.h_res_unit,
-                v_res_unit: info.v_res_unit,
-                width_unit: info.width_unit,
-                height_unit: info.height_unit,
+                h_res_unit: crate::types::DisplayUnit::from_u16(info.h_res_unit.0),
+                v_res_unit: crate::types::DisplayUnit::from_u16(info.v_res_unit.0),
+                width_unit: crate::types::DisplayUnit::from_u16(info.width_unit.0),
+                height_unit: crate::types::DisplayUnit::from_u16(info.height_unit.0),
             });
         }
 
@@ -80,13 +80,12 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
                     .guides
                     .iter()
                     .map(|g| {
-                        let dir = match g.direction {
-                            crate::image_resources::GuideDirection::Vertical => "Vrtc",
-                            crate::image_resources::GuideDirection::Horizontal => "Hrzn",
-                        };
                         crate::psd::GuideInfo {
                             location: g.location,
-                            direction: crate::types::PsdStringCode::from(dir),
+                            direction: match g.direction {
+                                crate::image_resources::GuideDirection::Vertical => crate::types::GuideDirection::Vertical,
+                                crate::image_resources::GuideDirection::Horizontal => crate::types::GuideDirection::Horizontal,
+                            },
                         }
                     })
                     .collect();
@@ -183,10 +182,10 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
     if let Some(info) = psd.display_info.as_ref() {
         resources.display_info_typed = Some(crate::image_resources::DisplayInfoResource {
             version: 1,
-            h_res_unit: info.h_res_unit,
-            v_res_unit: info.v_res_unit,
-            width_unit: info.width_unit,
-            height_unit: info.height_unit,
+            h_res_unit: crate::types::PsdU16Code(info.h_res_unit.to_u16()),
+            v_res_unit: crate::types::PsdU16Code(info.v_res_unit.to_u16()),
+            width_unit: crate::types::PsdU16Code(info.width_unit.to_u16()),
+            height_unit: crate::types::PsdU16Code(info.height_unit.to_u16()),
         });
     }
 
@@ -220,10 +219,9 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
         grid_guides.guides = guides
             .iter()
             .map(|g| {
-                let dir = if g.direction.as_ref() == "Vrtc" {
-                    crate::image_resources::GuideDirection::Vertical
-                } else {
-                    crate::image_resources::GuideDirection::Horizontal
+                let dir = match g.direction {
+                    crate::types::GuideDirection::Vertical => crate::image_resources::GuideDirection::Vertical,
+                    crate::types::GuideDirection::Horizontal => crate::image_resources::GuideDirection::Horizontal,
                 };
                 crate::image_resources::Guide {
                     location: g.location,

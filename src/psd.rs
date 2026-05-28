@@ -60,7 +60,7 @@ pub struct GridInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GuideInfo {
     pub location: f64,
-    pub direction: PsdStringCode,
+    pub direction: GuideDirection,
 }
 
 /// Grid and guides information
@@ -286,10 +286,10 @@ pub enum DocumentSlices {
 /// Display info (resource 1077)
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayInfo {
-    pub h_res_unit: PsdU16Code,
-    pub v_res_unit: PsdU16Code,
-    pub width_unit: PsdU16Code,
-    pub height_unit: PsdU16Code,
+    pub h_res_unit: DisplayUnit,
+    pub v_res_unit: DisplayUnit,
+    pub width_unit: DisplayUnit,
+    pub height_unit: DisplayUnit,
 }
 
 /// Generic color-mode section payload for non-indexed modes.

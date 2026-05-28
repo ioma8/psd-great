@@ -1429,7 +1429,7 @@ fn write_psd_rejects_life_version_4_without_required_time() {
             id: "asset-id".to_string(),
             name: "Placed Asset".to_string(),
             item_version: Some(4),
-            data_kind: Some(psd_great::PsdStringCode::from("liFE")),
+            data_kind: Some(psd_great::LinkedFileDataKind::External),
             file_type: Some(psd_great::PsdStringCode::from("8BPS")),
             creator: Some(psd_great::PsdStringCode::from("8BIM")),
             data: Some(vec![1, 2, 3, 4]),
@@ -1465,4 +1465,70 @@ fn write_psd_rejects_life_version_4_without_required_time() {
 
     let err = write_psd(&psd, &WriteOptions::default()).unwrap_err();
     assert!(err.to_string().contains("time"), "unexpected error: {err}");
+}
+
+#[test]
+fn canonical_image_resource_types_are_public() {
+    let guide = psd_great::GuideInfo {
+        location: 10.0,
+        direction: psd_great::GuideDirection::Horizontal,
+    };
+    let sampler = psd_great::ColorSampler {
+        position: psd_great::ColorSamplerPosition::V2 {
+            horizontal: 1,
+            vertical: 2,
+            depth: 16,
+        },
+        color_space: 8,
+    };
+
+    assert_eq!(guide.direction, psd_great::GuideDirection::Horizontal);
+    assert_eq!(sampler.position.version(), 2);
+}
+
+#[test]
+fn linked_file_kind_is_typed_publicly() {
+    let file = psd_great::LinkedFile {
+        id: "id".into(),
+        name: "name".into(),
+        data_kind: Some(psd_great::LinkedFileDataKind::External),
+        file_type: None,
+        creator: None,
+        item_version: None,
+        data: None,
+        time: None,
+        descriptor: None,
+        child_document_id: None,
+        asset_mod_time: None,
+        asset_locked_state: None,
+        linked_file: None,
+        open_descriptor: None,
+    };
+
+    assert_eq!(file.data_kind, Some(psd_great::LinkedFileDataKind::External));
+}
+
+#[test]
+fn guide_direction_and_display_units_are_typed_publicly() {
+    use psd_great::psd::{
+        DisplayInfo,
+    };
+
+    let guide = psd_great::GuideInfo {
+        location: 10.0,
+        direction: psd_great::GuideDirection::Vertical,
+    };
+    let mut psd = psd_great::Psd::default();
+    psd.display_info = Some(DisplayInfo {
+        h_res_unit: psd_great::DisplayUnit::PixelsPerInch,
+        v_res_unit: psd_great::DisplayUnit::PixelsPerCentimeter,
+        width_unit: psd_great::DisplayUnit::Inches,
+        height_unit: psd_great::DisplayUnit::Centimeters,
+    });
+
+    assert_eq!(guide.direction, psd_great::GuideDirection::Vertical);
+    assert_eq!(
+        psd.display_info.unwrap().h_res_unit,
+        psd_great::DisplayUnit::PixelsPerInch
+    );
 }

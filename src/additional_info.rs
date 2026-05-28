@@ -5,8 +5,9 @@
 
 use crate::adjustments::AdjustmentLayer;
 use crate::binrw_support::{
-    decode_be, encode_be, LayerColorRecord, NameSourceRecord, ProtectedFlagsRecord,
-    SectionDividerBaseRecord, SectionDividerExtendedRecord, U32ValueRecord, U8BoolRecord,
+    decode_be, encode_be, AnnotationHeaderRecord, LayerColorRecord, NameSourceRecord,
+    ProtectedFlagsRecord, SectionDividerBaseRecord, SectionDividerExtendedRecord,
+    U32ValueRecord, U8BoolRecord, UsingAlignedRenderingRecord,
 };
 use crate::compression;
 use crate::descriptor::{Descriptor, DescriptorValue};
@@ -100,11 +101,9 @@ fn validate_linked_file_item(item: &LinkedFile) -> Result<()> {
     let version = item.item_version.unwrap_or(7);
     let kind = item
         .data_kind
-        .as_ref()
-        .map(|v| v.as_ref())
-        .unwrap_or("liFD");
+        .unwrap_or(LinkedFileDataKind::Data);
 
-    if kind == "liFE" {
+    if kind == LinkedFileDataKind::External {
         if item.descriptor.is_none() {
             return Err(PsdError::InvalidFormat(
                 "liFE items require a descriptor".to_string(),
@@ -137,18 +136,18 @@ fn validate_linked_file_item(item: &LinkedFile) -> Result<()> {
             "linked file asset_locked_state requires item_version >= 7".to_string(),
         ));
     }
-    if item.descriptor.is_some() && kind != "liFE" {
+    if item.descriptor.is_some() && kind != LinkedFileDataKind::External {
         return Err(PsdError::InvalidFormat(
             "linked file descriptor is only valid for liFE items".to_string(),
         ));
     }
-    if item.time.is_some() && !(kind == "liFE" && version > 3) {
+    if item.time.is_some() && !(kind == LinkedFileDataKind::External && version > 3) {
         return Err(PsdError::InvalidFormat(
             "linked file time requires liFE item_version > 3".to_string(),
         ));
     }
     if let Some(linked_file) = item.linked_file.as_ref() {
-        if kind != "liFE" {
+        if kind != LinkedFileDataKind::External {
             return Err(PsdError::InvalidFormat(
                 "linked file info is only valid for liFE items".to_string(),
             ));
@@ -159,7 +158,7 @@ fn validate_linked_file_item(item: &LinkedFile) -> Result<()> {
             ));
         }
     }
-    if kind == "liFA"
+    if kind == LinkedFileDataKind::Alias
         && (item.descriptor.is_some() || item.time.is_some() || item.linked_file.is_some())
     {
         return Err(PsdError::InvalidFormat(
@@ -184,8 +183,8 @@ use crate::reader::PsdReader;
 use crate::text::UnitsBounds;
 use crate::types::Color;
 use crate::types::{
-    BlendMode, PixelData, Point, PsdIntCode, PsdStringCode, PsdU32Code, SectionDividerType, Units,
-    UnitsValue, RGB,
+    BlendMode, LinkedFileDataKind, PixelData, Point, PsdIntCode, PsdStringCode, PsdU32Code,
+    SectionDividerType, Units, UnitsValue, RGB,
 };
 use crate::writer::PsdWriter;
 use std::collections::HashMap;
@@ -1094,7 +1093,7 @@ impl<R: Read + Seek> PsdReader<R> {
                         id,
                         name,
                         item_version: Some(item_version),
-                        data_kind: Some(PsdStringCode(kind)),
+                        data_kind: Some(LinkedFileDataKind::from_code(&kind)),
                         file_type: Some(PsdStringCode(file_type)),
                         creator: Some(PsdStringCode(creator)),
                         data: Some(data),
@@ -1160,9 +1159,9 @@ impl<R: Read + Seek> PsdReader<R> {
                     .insert(key.to_string(), self.read_bytes(length)?);
             }
             "Anno" => {
-                let _major = self.read_u16()?;
-                let _minor = self.read_u16()?;
-                let count = self.read_u32()? as usize;
+                let header: AnnotationHeaderRecord =
+                    decode_be(&self.read_bytes(8)?, "annotation header")?;
+                let count = header.count as usize;
                 let mut items = Vec::with_capacity(count);
                 for _ in 0..count {
                     let item_length = self.read_u32()? as usize;
@@ -2082,7 +2081,9 @@ impl<R: Read + Seek> PsdReader<R> {
 
     /// Read using aligned rendering (sn2P)
     fn read_using_aligned_rendering(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        info.using_aligned_rendering = Some(self.read_u32()? != 0);
+        let record: UsingAlignedRenderingRecord =
+            decode_be(&self.read_bytes(4)?, "using aligned rendering")?;
+        info.using_aligned_rendering = Some(record.value != 0);
         Ok(())
     }
 
@@ -2737,7 +2738,12 @@ impl PsdWriter {
             }
             "sn2P" => {
                 if let Some(using) = info.using_aligned_rendering {
-                    temp_writer.write_u32(if using { 1 } else { 0 })?;
+                    temp_writer.write_bytes(&encode_be(
+                        &UsingAlignedRenderingRecord {
+                            value: if using { 1 } else { 0 },
+                        },
+                        "using aligned rendering",
+                    )?)?;
                 }
             }
             "brit" | "levl" | "curv" | "expA" | "blnc" | "phfl" | "hue2" | "selc" | "mixr"
@@ -2771,13 +2777,9 @@ impl PsdWriter {
                     for item in &block.items {
                         validate_linked_file_item(item)?;
                         let mut item_writer = PsdWriter::new(256);
-                        let kind = item
-                            .data_kind
-                            .as_ref()
-                            .map(|v| v.as_ref())
-                            .unwrap_or("liFD");
+                        let kind = item.data_kind.unwrap_or(LinkedFileDataKind::Data);
                         let version = item.item_version.unwrap_or(7);
-                        item_writer.write_signature(kind)?;
+                        item_writer.write_signature(std::str::from_utf8(&kind.to_code()).unwrap())?;
                         item_writer.write_u32(version)?;
                         item_writer.write_pascal_string(&item.id, 1)?;
                         item_writer.write_unicode_string_with_padding(&item.name)?;
@@ -2803,7 +2805,7 @@ impl PsdWriter {
                         } else {
                             item_writer.write_u8(0)?;
                         }
-                        if kind == "liFE" {
+                        if kind == LinkedFileDataKind::External {
                             if let Some(ref descriptor) = item.descriptor {
                                 item_writer.write_descriptor_structure(descriptor)?;
                             }
@@ -2826,7 +2828,7 @@ impl PsdWriter {
                                     .map(|linked_file| linked_file.file_size)
                                     .unwrap_or_default(),
                             )?;
-                        } else if kind == "liFA" {
+                        } else if kind == LinkedFileDataKind::Alias {
                             write_u64_parts(&mut item_writer, 0)?;
                         }
                         item_writer.write_bytes(data)?;
@@ -2845,7 +2847,7 @@ impl PsdWriter {
                                 item_writer.write_u8(asset_locked_state)?;
                             }
                         }
-                        if version >= 7 && kind == "liFE" {
+                        if version >= 7 && kind == LinkedFileDataKind::External {
                             if let Some(linked_file) = item.linked_file.as_ref() {
                                 if linked_file_uses_versioned_paths(linked_file) {
                                     item_writer
@@ -2934,9 +2936,14 @@ impl PsdWriter {
             }
             "Anno" => {
                 if let Some(ref annotations) = info.annotations {
-                    temp_writer.write_u16(2)?;
-                    temp_writer.write_u16(1)?;
-                    temp_writer.write_u32(annotations.len() as u32)?;
+                    temp_writer.write_bytes(&encode_be(
+                        &AnnotationHeaderRecord {
+                            major: 2,
+                            minor: 1,
+                            count: annotations.len() as u32,
+                        },
+                        "annotation header",
+                    )?)?;
                     for item in annotations {
                         let mut item_writer = PsdWriter::new(256);
                         item_writer.write_signature("txtA")?;
@@ -3471,7 +3478,7 @@ mod tests {
                 id: "id".to_string(),
                 name: "name".to_string(),
                 item_version: Some(9),
-                data_kind: Some(PsdStringCode::from("liFD")),
+                data_kind: Some(LinkedFileDataKind::Data),
                 file_type: Some(PsdStringCode::from("JPEG")),
                 creator: Some(PsdStringCode::from("8BIM")),
                 data: Some(vec![0xAA, 0xBB]),
@@ -3515,7 +3522,7 @@ mod tests {
             id: "external-id".to_string(),
             name: "external.psb".to_string(),
             item_version: Some(7),
-            data_kind: Some(PsdStringCode::from("liFE")),
+            data_kind: Some(LinkedFileDataKind::External),
             file_type: Some(PsdStringCode::from("8BPS")),
             creator: Some(PsdStringCode::from("8BIM")),
             data: Some(vec![0xAA, 0xBB, 0xCC]),
@@ -3614,7 +3621,7 @@ mod tests {
                 id: "external-id".to_string(),
                 name: "external.psb".to_string(),
                 item_version: Some(7),
-                data_kind: Some(PsdStringCode::from("liFE")),
+                data_kind: Some(LinkedFileDataKind::External),
                 file_type: Some(PsdStringCode::from("8BPS")),
                 creator: Some(PsdStringCode::from("8BIM")),
                 data: Some(vec![0xAA, 0xBB, 0xCC]),
@@ -3671,7 +3678,7 @@ mod tests {
             id: "alias-id".to_string(),
             name: "alias".to_string(),
             item_version: Some(2),
-            data_kind: Some(PsdStringCode::from("liFA")),
+            data_kind: Some(LinkedFileDataKind::Alias),
             file_type: Some(PsdStringCode::from("TEXT")),
             creator: Some(PsdStringCode::from("8BIM")),
             data: Some(vec![1, 2, 3, 4]),
@@ -3710,7 +3717,7 @@ mod tests {
                 id: "bad".to_string(),
                 name: "bad".to_string(),
                 item_version: Some(4),
-                data_kind: Some(PsdStringCode::from("liFD")),
+                data_kind: Some(LinkedFileDataKind::Data),
                 file_type: Some(PsdStringCode::from("TEXT")),
                 creator: Some(PsdStringCode::from("8BIM")),
                 data: Some(vec![9]),
