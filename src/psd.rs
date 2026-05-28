@@ -220,14 +220,52 @@ pub struct VariableSet {
 /// Color sampler point (resource 1073)
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColorSamplerPosition {
-    V1 { horizontal: i32, vertical: i32 },
-    V2 { horizontal: i32, vertical: i32 },
+    V1 {
+        horizontal: i32,
+        vertical: i32,
+    },
+    V2 {
+        horizontal: i32,
+        vertical: i32,
+    },
+    Unsupported {
+        version: u32,
+        horizontal: i32,
+        vertical: i32,
+    },
+}
+
+impl ColorSamplerPosition {
+    pub fn version(&self) -> u32 {
+        match self {
+            Self::V1 { .. } => 1,
+            Self::V2 { .. } => 2,
+            Self::Unsupported { version, .. } => *version,
+        }
+    }
+
+    pub fn coordinates(&self) -> (i32, i32) {
+        match self {
+            Self::V1 {
+                horizontal,
+                vertical,
+            }
+            | Self::V2 {
+                horizontal,
+                vertical,
+            }
+            | Self::Unsupported {
+                horizontal,
+                vertical,
+                ..
+            } => (*horizontal, *vertical),
+        }
+    }
 }
 
 /// Color sampler point (resource 1073)
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorSampler {
-    pub version: u32,
     pub position: ColorSamplerPosition,
     pub color_space: i16,
     pub depth: Option<u16>,

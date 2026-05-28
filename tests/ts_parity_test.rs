@@ -1874,7 +1874,6 @@ mod remaining_tagged_block_parity {
             height_unit: psd_great::PsdU16Code(4),
         });
         psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
-            version: 2,
             position: psd_great::ColorSamplerPosition::V2 {
                 horizontal: 12,
                 vertical: 34,
@@ -1953,7 +1952,6 @@ mod remaining_tagged_block_parity {
         psd.descriptor_1074 = psd.descriptor_1065.clone();
         psd.descriptor_1075 = psd.descriptor_1065.clone();
         psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
-            version: 1,
             position: psd_great::ColorSamplerPosition::V1 {
                 horizontal: 10,
                 vertical: 20,
@@ -2019,7 +2017,6 @@ mod remaining_tagged_block_parity {
         }]);
         psd.data_sets = Some(vec![vec!["title".to_string()], vec!["Hello".to_string()]]);
         psd.color_samplers = Some(vec![psd_great::psd::ColorSampler {
-            version: 2,
             position: psd_great::ColorSamplerPosition::V2 {
                 horizontal: 4,
                 vertical: 8,
@@ -2053,6 +2050,41 @@ mod remaining_tagged_block_parity {
         assert_eq!(reparsed.data_sets, psd.data_sets);
         assert_eq!(reparsed.color_samplers, psd.color_samplers);
         assert_eq!(reparsed.display_info, psd.display_info);
+    }
+
+    #[test]
+    fn write_psd_rejects_mixed_color_sampler_versions() {
+        let mut psd = Psd::default();
+        psd.width = 1;
+        psd.height = 1;
+        psd.channels = Some(4);
+        psd.bits_per_channel = Some(8);
+        psd.color_mode = Some(ColorMode::RGB);
+        psd.color_samplers = Some(vec![
+            psd_great::psd::ColorSampler {
+                position: psd_great::ColorSamplerPosition::V1 {
+                    horizontal: 1,
+                    vertical: 2,
+                },
+                color_space: 0,
+                depth: None,
+            },
+            psd_great::psd::ColorSampler {
+                position: psd_great::ColorSamplerPosition::Unsupported {
+                    version: 9,
+                    horizontal: 3,
+                    vertical: 4,
+                },
+                color_space: 8,
+                depth: Some(16),
+            },
+        ]);
+
+        let err = write_psd(&psd, &WriteOptions::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("single color sampler version"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
