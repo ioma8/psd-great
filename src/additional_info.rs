@@ -86,6 +86,76 @@ fn parse_linked_file_time(text: &str) -> Option<(u32, u8, u8, u8, u8, f64)> {
     let second = time_parts.next()?.parse().ok()?;
     Some((year, month, day, hour, minute, second))
 }
+
+fn linked_file_uses_versioned_paths(info: &LinkedFileInfo) -> bool {
+    !info.name.is_empty()
+        || !info.full_path.is_empty()
+        || !info.original_path.is_empty()
+        || !info.relative_path.is_empty()
+}
+
+fn validate_linked_file_item(item: &LinkedFile) -> Result<()> {
+    let version = item.item_version.unwrap_or(7);
+    let kind = item
+        .data_kind
+        .as_ref()
+        .map(|v| v.as_ref())
+        .unwrap_or("liFD");
+
+    if item.child_document_id.is_some() && version < 5 {
+        return Err(PsdError::InvalidFormat(
+            "linked file child_document_id requires item_version >= 5".to_string(),
+        ));
+    }
+    if item.asset_mod_time.is_some() && version < 6 {
+        return Err(PsdError::InvalidFormat(
+            "linked file asset_mod_time requires item_version >= 6".to_string(),
+        ));
+    }
+    if item.asset_locked_state.is_some() && version < 7 {
+        return Err(PsdError::InvalidFormat(
+            "linked file asset_locked_state requires item_version >= 7".to_string(),
+        ));
+    }
+    if item.descriptor.is_some() && kind != "liFE" {
+        return Err(PsdError::InvalidFormat(
+            "linked file descriptor is only valid for liFE items".to_string(),
+        ));
+    }
+    if item.time.is_some() && !(kind == "liFE" && version > 3) {
+        return Err(PsdError::InvalidFormat(
+            "linked file time requires liFE item_version > 3".to_string(),
+        ));
+    }
+    if let Some(linked_file) = item.linked_file.as_ref() {
+        if kind != "liFE" {
+            return Err(PsdError::InvalidFormat(
+                "linked file info is only valid for liFE items".to_string(),
+            ));
+        }
+        if version < 7 && linked_file_uses_versioned_paths(linked_file) {
+            return Err(PsdError::InvalidFormat(
+                "linked file paths require liFE item_version >= 7".to_string(),
+            ));
+        }
+    }
+    if kind == "liFA"
+        && (item.descriptor.is_some() || item.time.is_some() || item.linked_file.is_some())
+    {
+        return Err(PsdError::InvalidFormat(
+            "linked file alias items only support alias padding, payload, and versioned tail fields".to_string(),
+        ));
+    }
+    if let Some(time) = item.time.as_deref() {
+        if parse_linked_file_time(time).is_none() {
+            return Err(PsdError::InvalidFormat(
+                "linked file time must be ISO-like UTC text".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
 use crate::helpers::{from_blend_mode, to_blend_mode, ProtectedFlagsBits, VectorMaskFlagsBits};
 use crate::layer::{
     KeyDescriptorItem, Layer, LinkedFile, LinkedFileInfo, RRectRadii, VectorOrigination,
@@ -942,6 +1012,11 @@ impl<R: Read + Seek> PsdReader<R> {
                     } else {
                         None
                     };
+                    let external_file_size = if kind == "liFE" {
+                        Some(read_u64_parts(self)?)
+                    } else {
+                        None
+                    };
                     if kind == "liFA" {
                         let _alias_padding = read_u64_parts(self)?;
                     }
@@ -964,18 +1039,27 @@ impl<R: Read + Seek> PsdReader<R> {
                         } else {
                             None
                         };
-                    let linked_file =
+                    let linked_file = if kind == "liFE" {
                         if item_version >= 7 && self.offset < chunk_start + chunk_length {
                             Some(LinkedFileInfo {
-                                file_size: read_u64_parts(self)?,
+                                file_size: external_file_size.unwrap_or_default(),
                                 name: self.read_unicode_string()?,
                                 full_path: self.read_unicode_string()?,
                                 original_path: self.read_unicode_string()?,
                                 relative_path: self.read_unicode_string()?,
                             })
                         } else {
-                            None
-                        };
+                            external_file_size.map(|file_size| LinkedFileInfo {
+                                file_size,
+                                name: String::new(),
+                                full_path: String::new(),
+                                original_path: String::new(),
+                                relative_path: String::new(),
+                            })
+                        }
+                    } else {
+                        None
+                    };
                     let remaining =
                         (chunk_start + chunk_length).saturating_sub(self.offset) as usize;
                     if remaining > 0 {
@@ -2637,14 +2721,16 @@ impl PsdWriter {
                         return Ok(0);
                     }
                     for item in &block.items {
+                        validate_linked_file_item(item)?;
                         let mut item_writer = PsdWriter::new(256);
                         let kind = item
                             .data_kind
                             .as_ref()
                             .map(|v| v.as_ref())
                             .unwrap_or("liFD");
+                        let version = item.item_version.unwrap_or(7);
                         item_writer.write_signature(kind)?;
-                        item_writer.write_u32(item.item_version.unwrap_or(7))?;
+                        item_writer.write_u32(version)?;
                         item_writer.write_pascal_string(&item.id, 1)?;
                         item_writer.write_unicode_string_with_padding(&item.name)?;
                         item_writer.write_signature(
@@ -2673,7 +2759,7 @@ impl PsdWriter {
                             if let Some(ref descriptor) = item.descriptor {
                                 item_writer.write_descriptor_structure(descriptor)?;
                             }
-                            if item.item_version.unwrap_or(0) > 3 {
+                            if version > 3 {
                                 if let Some((year, month, day, hour, minute, second)) =
                                     item.time.as_deref().and_then(parse_linked_file_time)
                                 {
@@ -2685,28 +2771,48 @@ impl PsdWriter {
                                     item_writer.write_f64(second)?;
                                 }
                             }
+                            write_u64_parts(
+                                &mut item_writer,
+                                item.linked_file
+                                    .as_ref()
+                                    .map(|linked_file| linked_file.file_size)
+                                    .unwrap_or_default(),
+                            )?;
                         } else if kind == "liFA" {
                             write_u64_parts(&mut item_writer, 0)?;
                         }
                         item_writer.write_bytes(data)?;
-                        if let Some(child_document_id) = item.child_document_id.as_ref() {
-                            item_writer.write_unicode_string_with_padding(child_document_id)?;
+                        if version >= 5 {
+                            if let Some(child_document_id) = item.child_document_id.as_ref() {
+                                item_writer.write_unicode_string_with_padding(child_document_id)?;
+                            }
                         }
-                        if let Some(asset_mod_time) = item.asset_mod_time {
-                            item_writer.write_f64(asset_mod_time)?;
+                        if version >= 6 {
+                            if let Some(asset_mod_time) = item.asset_mod_time {
+                                item_writer.write_f64(asset_mod_time)?;
+                            }
                         }
-                        if let Some(asset_locked_state) = item.asset_locked_state {
-                            item_writer.write_u8(asset_locked_state)?;
+                        if version >= 7 {
+                            if let Some(asset_locked_state) = item.asset_locked_state {
+                                item_writer.write_u8(asset_locked_state)?;
+                            }
                         }
-                        if let Some(linked_file) = item.linked_file.as_ref() {
-                            write_u64_parts(&mut item_writer, linked_file.file_size)?;
-                            item_writer.write_unicode_string_with_padding(&linked_file.name)?;
-                            item_writer
-                                .write_unicode_string_with_padding(&linked_file.full_path)?;
-                            item_writer
-                                .write_unicode_string_with_padding(&linked_file.original_path)?;
-                            item_writer
-                                .write_unicode_string_with_padding(&linked_file.relative_path)?;
+                        if version >= 7 && kind == "liFE" {
+                            if let Some(linked_file) = item.linked_file.as_ref() {
+                                if linked_file_uses_versioned_paths(linked_file) {
+                                    item_writer
+                                        .write_unicode_string_with_padding(&linked_file.name)?;
+                                    item_writer.write_unicode_string_with_padding(
+                                        &linked_file.full_path,
+                                    )?;
+                                    item_writer.write_unicode_string_with_padding(
+                                        &linked_file.original_path,
+                                    )?;
+                                    item_writer.write_unicode_string_with_padding(
+                                        &linked_file.relative_path,
+                                    )?;
+                                }
+                            }
                         }
                         let item_bytes = item_writer.into_buffer();
                         write_u64_parts(&mut temp_writer, item_bytes.len() as u64)?;
@@ -3305,6 +3411,245 @@ mod tests {
             .read_additional_info("lnk2", len, &mut read_info)
             .unwrap();
         assert_eq!(read_info.linked_files, info.linked_files);
+    }
+
+    #[test]
+    fn reader_consumes_spec_correct_life_layout() {
+        let descriptor = Descriptor {
+            name: "linked".to_string(),
+            class_id: "lnkF".to_string(),
+            items: HashMap::from([("size".to_string(), DescriptorValue::Integer(42))]),
+        };
+        let open_descriptor = Descriptor {
+            name: String::new(),
+            class_id: "null".to_string(),
+            items: HashMap::new(),
+        };
+        let linked = LinkedFile {
+            id: "external-id".to_string(),
+            name: "external.psb".to_string(),
+            item_version: Some(7),
+            data_kind: Some(PsdStringCode::from("liFE")),
+            file_type: Some(PsdStringCode::from("8BPS")),
+            creator: Some(PsdStringCode::from("8BIM")),
+            data: Some(vec![0xAA, 0xBB, 0xCC]),
+            time: Some("2026-05-28T11:22:33.5Z".to_string()),
+            descriptor: Some(descriptor.clone()),
+            child_document_id: Some("child-doc".to_string()),
+            asset_mod_time: Some(88.5),
+            asset_locked_state: Some(1),
+            linked_file: Some(LinkedFileInfo {
+                file_size: 123_456,
+                name: "external.psb".to_string(),
+                full_path: "/tmp/external.psb".to_string(),
+                original_path: "/orig/external.psb".to_string(),
+                relative_path: "external.psb".to_string(),
+            }),
+            open_descriptor: Some(open_descriptor.clone()),
+        };
+        let mut item_writer = PsdWriter::new(512);
+        item_writer.write_signature("liFE").unwrap();
+        item_writer.write_u32(7).unwrap();
+        item_writer.write_pascal_string("external-id", 1).unwrap();
+        item_writer
+            .write_unicode_string_with_padding("external.psb")
+            .unwrap();
+        item_writer.write_signature("8BPS").unwrap();
+        item_writer.write_signature("8BIM").unwrap();
+        write_u64_parts(&mut item_writer, 3).unwrap();
+        item_writer.write_u8(1).unwrap();
+        item_writer.write_u32(16).unwrap();
+        item_writer
+            .write_descriptor_structure(&open_descriptor)
+            .unwrap();
+        item_writer.write_descriptor_structure(&descriptor).unwrap();
+        item_writer.write_u32(2026).unwrap();
+        item_writer.write_u8(5).unwrap();
+        item_writer.write_u8(28).unwrap();
+        item_writer.write_u8(11).unwrap();
+        item_writer.write_u8(22).unwrap();
+        item_writer.write_f64(33.5).unwrap();
+        write_u64_parts(&mut item_writer, 123_456).unwrap();
+        item_writer.write_bytes(&[0xAA, 0xBB, 0xCC]).unwrap();
+        item_writer
+            .write_unicode_string_with_padding("child-doc")
+            .unwrap();
+        item_writer.write_f64(88.5).unwrap();
+        item_writer.write_u8(1).unwrap();
+        item_writer
+            .write_unicode_string_with_padding("external.psb")
+            .unwrap();
+        item_writer
+            .write_unicode_string_with_padding("/tmp/external.psb")
+            .unwrap();
+        item_writer
+            .write_unicode_string_with_padding("/orig/external.psb")
+            .unwrap();
+        item_writer
+            .write_unicode_string_with_padding("external.psb")
+            .unwrap();
+        let item_bytes = item_writer.into_buffer();
+
+        let mut block_writer = PsdWriter::new(1024);
+        write_u64_parts(&mut block_writer, item_bytes.len() as u64).unwrap();
+        block_writer.write_bytes(&item_bytes).unwrap();
+        if item_bytes.len() % 4 != 0 {
+            block_writer
+                .write_zeros(4 - (item_bytes.len() % 4))
+                .unwrap();
+        }
+        let buf = block_writer.into_buffer();
+        let len = buf.len();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut read_info = LayerAdditionalInfo::default();
+        reader
+            .read_additional_info("lnkD", len, &mut read_info)
+            .unwrap();
+
+        assert_eq!(read_info.linked_files.unwrap().items[0], linked);
+    }
+
+    #[test]
+    fn life_writer_places_file_size_before_payload_bytes() {
+        let descriptor = Descriptor {
+            name: "linked".to_string(),
+            class_id: "lnkF".to_string(),
+            items: HashMap::from([("size".to_string(), DescriptorValue::Integer(42))]),
+        };
+        let open_descriptor = Descriptor {
+            name: String::new(),
+            class_id: "null".to_string(),
+            items: HashMap::new(),
+        };
+        let mut info = LayerAdditionalInfo::default();
+        info.linked_files = Some(LinkedFilesBlock {
+            key: PsdStringCode::from("lnkD"),
+            items: vec![LinkedFile {
+                id: "external-id".to_string(),
+                name: "external.psb".to_string(),
+                item_version: Some(7),
+                data_kind: Some(PsdStringCode::from("liFE")),
+                file_type: Some(PsdStringCode::from("8BPS")),
+                creator: Some(PsdStringCode::from("8BIM")),
+                data: Some(vec![0xAA, 0xBB, 0xCC]),
+                time: Some("2026-05-28T11:22:33.5Z".to_string()),
+                descriptor: Some(descriptor),
+                child_document_id: Some("child-doc".to_string()),
+                asset_mod_time: Some(88.5),
+                asset_locked_state: Some(1),
+                linked_file: Some(LinkedFileInfo {
+                    file_size: 123_456,
+                    name: "external.psb".to_string(),
+                    full_path: "/tmp/external.psb".to_string(),
+                    original_path: "/orig/external.psb".to_string(),
+                    relative_path: "external.psb".to_string(),
+                }),
+                open_descriptor: Some(open_descriptor),
+            }],
+        });
+
+        let mut w = PsdWriter::new(1024);
+        let _len = w.write_additional_info("lnkD", &info).unwrap();
+        let buf = w.into_buffer();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+
+        let _chunk_length = read_u64_parts(&mut reader).unwrap();
+        assert_eq!(reader.read_signature().unwrap(), "liFE");
+        assert_eq!(reader.read_u32().unwrap(), 7);
+        assert_eq!(reader.read_pascal_string(1).unwrap(), "external-id");
+        assert_eq!(reader.read_unicode_string().unwrap(), "external.psb");
+        assert_eq!(reader.read_signature().unwrap(), "8BPS");
+        assert_eq!(reader.read_signature().unwrap(), "8BIM");
+        assert_eq!(read_u64_parts(&mut reader).unwrap(), 3);
+        assert_eq!(reader.read_u8().unwrap(), 1);
+        assert_eq!(reader.read_u32().unwrap(), 16);
+        let descriptor_start = reader.offset;
+        let _open_descriptor = reader.read_descriptor_structure().unwrap();
+        if (reader.offset - descriptor_start) % 2 != 0 {
+            reader.skip_bytes(1).unwrap();
+        }
+        let _descriptor = reader.read_descriptor_structure().unwrap();
+        assert_eq!(reader.read_u32().unwrap(), 2026);
+        assert_eq!(reader.read_u8().unwrap(), 5);
+        assert_eq!(reader.read_u8().unwrap(), 28);
+        assert_eq!(reader.read_u8().unwrap(), 11);
+        assert_eq!(reader.read_u8().unwrap(), 22);
+        assert_eq!(reader.read_f64().unwrap(), 33.5);
+        assert_eq!(read_u64_parts(&mut reader).unwrap(), 123_456);
+        assert_eq!(reader.read_bytes(3).unwrap(), vec![0xAA, 0xBB, 0xCC]);
+    }
+
+    #[test]
+    fn lifa_roundtrip_preserves_alias_payload() {
+        let linked = LinkedFile {
+            id: "alias-id".to_string(),
+            name: "alias".to_string(),
+            item_version: Some(2),
+            data_kind: Some(PsdStringCode::from("liFA")),
+            file_type: Some(PsdStringCode::from("TEXT")),
+            creator: Some(PsdStringCode::from("8BIM")),
+            data: Some(vec![1, 2, 3, 4]),
+            time: None,
+            descriptor: None,
+            child_document_id: None,
+            asset_mod_time: None,
+            asset_locked_state: None,
+            linked_file: None,
+            open_descriptor: None,
+        };
+        let mut info = LayerAdditionalInfo::default();
+        info.linked_files = Some(LinkedFilesBlock {
+            key: PsdStringCode::from("lnk3"),
+            items: vec![linked.clone()],
+        });
+
+        let mut w = PsdWriter::new(256);
+        let len = w.write_additional_info("lnk3", &info).unwrap();
+        let buf = w.into_buffer();
+        let mut reader = PsdReader::new(std::io::Cursor::new(buf), Default::default());
+        let mut read_info = LayerAdditionalInfo::default();
+        reader
+            .read_additional_info("lnk3", len, &mut read_info)
+            .unwrap();
+
+        assert_eq!(read_info.linked_files.unwrap().items[0], linked);
+    }
+
+    #[test]
+    fn linked_file_writer_rejects_non_roundtrippable_versioned_fields() {
+        let mut info = LayerAdditionalInfo::default();
+        info.linked_files = Some(LinkedFilesBlock {
+            key: PsdStringCode::from("lnkD"),
+            items: vec![LinkedFile {
+                id: "bad".to_string(),
+                name: "bad".to_string(),
+                item_version: Some(4),
+                data_kind: Some(PsdStringCode::from("liFD")),
+                file_type: Some(PsdStringCode::from("TEXT")),
+                creator: Some(PsdStringCode::from("8BIM")),
+                data: Some(vec![9]),
+                time: None,
+                descriptor: None,
+                child_document_id: Some("too-new".to_string()),
+                asset_mod_time: None,
+                asset_locked_state: None,
+                linked_file: Some(LinkedFileInfo {
+                    file_size: 7,
+                    name: "bad".to_string(),
+                    full_path: "/tmp/bad".to_string(),
+                    original_path: "/tmp/bad".to_string(),
+                    relative_path: "bad".to_string(),
+                }),
+                open_descriptor: None,
+            }],
+        });
+
+        let mut w = PsdWriter::new(256);
+        let err = w.write_additional_info("lnkD", &info).unwrap_err();
+        assert!(
+            err.to_string().contains("linked file"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

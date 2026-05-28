@@ -357,6 +357,19 @@ pub struct LinkedFile {
     pub open_descriptor: Option<crate::descriptor::Descriptor>,
 }
 
+/// Linked file descriptor
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkedFileDescriptor {
+    pub comp_info: CompInfo,
+}
+
+/// Comp info
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompInfo {
+    pub comp_id: i32,
+    pub original_comp_id: i32,
+}
+
 /// Linked file info
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkedFileInfo {
