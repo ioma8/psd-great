@@ -792,6 +792,8 @@ fn read_layer_channel_image_data<R: Read + Seek>(
     let mut green: Option<Vec<u8>> = None;
     let mut blue: Option<Vec<u8>> = None;
     let mut alpha: Option<Vec<u8>> = None;
+    let mut user_mask_channel: Option<(Vec<u8>, usize, usize, i32, i32)> = None;
+    let mut real_user_mask_channel: Option<(Vec<u8>, usize, usize, i32, i32)> = None;
 
     for channel in channels {
         let compression = reader.read_u16()?;
@@ -801,17 +803,7 @@ fn read_layer_channel_image_data<R: Read + Seek>(
             .checked_sub(2)
             .ok_or_else(|| PsdError::InvalidFormat("Invalid channel length".to_string()))?
             as usize;
-        let uses_mask_dims = matches!(channel.id, ChannelID::UserMask | ChannelID::RealUserMask)
-            && layer.additional_info.mask.is_some();
-        let (channel_width, channel_height) = if uses_mask_dims {
-            let mask = layer.additional_info.mask.as_ref().unwrap();
-            (
-                (mask.right.unwrap_or(0) - mask.left.unwrap_or(0)).max(0) as usize,
-                (mask.bottom.unwrap_or(0) - mask.top.unwrap_or(0)).max(0) as usize,
-            )
-        } else {
-            (width, height)
-        };
+        let (_, _, channel_width, channel_height) = layer_channel_bounds(layer, channel.id);
         let channel_expected_len = channel_width * channel_height;
 
         let decoded = match compression {
@@ -872,7 +864,21 @@ fn read_layer_channel_image_data<R: Read + Seek>(
             1 => green = Some(decoded),
             2 => blue = Some(decoded),
             3 => alpha = Some(decoded),
-            _ => {}
+            _ => {
+                let (mask_left, mask_top, mask_width, mask_height) =
+                    layer_channel_bounds(layer, channel.id);
+                match channel.id {
+                    ChannelID::UserMask => {
+                        user_mask_channel =
+                            Some((decoded, mask_width, mask_height, mask_left, mask_top));
+                    }
+                    ChannelID::RealUserMask => {
+                        real_user_mask_channel =
+                            Some((decoded, mask_width, mask_height, mask_left, mask_top));
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -896,6 +902,80 @@ fn read_layer_channel_image_data<R: Read + Seek>(
     if is_grayscale {
         setup_grayscale(&mut pixel_data);
     }
+
+    if let Some((mask_data, mask_width, mask_height, mask_left, mask_top)) =
+        user_mask_channel.as_ref()
+    {
+        let layer_left = layer.left.unwrap_or(0);
+        let layer_top = layer.top.unwrap_or(0);
+        let rel_left = *mask_left - layer_left;
+        let rel_top = *mask_top - layer_top;
+
+        for mask_y in 0..*mask_height {
+            for mask_x in 0..*mask_width {
+                let target_x = rel_left + mask_x as i32;
+                let target_y = rel_top + mask_y as i32;
+                if target_x < 0
+                    || target_y < 0
+                    || target_x >= width as i32
+                    || target_y >= height as i32
+                {
+                    continue;
+                }
+                let mask_index = mask_y * *mask_width + mask_x;
+                let target_index = ((target_y as usize) * width + target_x as usize) * 4 + 3;
+                pixel_data.data[target_index] = pixel_data.data[target_index].min(mask_data[mask_index]);
+            }
+        }
+    } else if let Some((mask_data, mask_width, mask_height, mask_left, mask_top)) =
+        real_user_mask_channel.as_ref()
+    {
+        let layer_left = layer.left.unwrap_or(0);
+        let layer_top = layer.top.unwrap_or(0);
+        let rel_left = *mask_left - layer_left;
+        let rel_top = *mask_top - layer_top;
+
+        for mask_y in 0..*mask_height {
+            for mask_x in 0..*mask_width {
+                let target_x = rel_left + mask_x as i32;
+                let target_y = rel_top + mask_y as i32;
+                if target_x < 0
+                    || target_y < 0
+                    || target_x >= width as i32
+                    || target_y >= height as i32
+                {
+                    continue;
+                }
+                let mask_index = mask_y * *mask_width + mask_x;
+                let target_index = ((target_y as usize) * width + target_x as usize) * 4 + 3;
+                pixel_data.data[target_index] = pixel_data.data[target_index].min(mask_data[mask_index]);
+            }
+        }
+    }
+
+    if let Some((mask_data, mask_width, mask_height, _, _)) = user_mask_channel {
+        let mask_pixel_data = PixelData {
+            data: mask_data,
+            width: mask_width,
+            height: mask_height,
+        };
+        if let Some(mask) = layer.additional_info.mask.as_mut() {
+            mask.image_data = Some(mask_pixel_data);
+        }
+    }
+    if let Some((mask_data, mask_width, mask_height, _, _)) = real_user_mask_channel {
+        let mask_pixel_data = PixelData {
+            data: mask_data,
+            width: mask_width,
+            height: mask_height,
+        };
+        let real_mask = layer
+            .additional_info
+            .real_mask
+            .get_or_insert_with(Default::default);
+        real_mask.image_data = Some(mask_pixel_data);
+    }
+
     layer.image_data = Some(pixel_data);
     Ok(())
 }
@@ -915,20 +995,7 @@ fn read_layer_channel_raw_data<R: Read + Seek>(
             .checked_sub(2)
             .ok_or_else(|| PsdError::InvalidFormat("Invalid channel length".to_string()))?
             as usize;
-        let uses_mask_dims = matches!(channel.id, ChannelID::UserMask | ChannelID::RealUserMask)
-            && layer.additional_info.mask.is_some();
-        let (channel_width, channel_height) = if uses_mask_dims {
-            let mask = layer.additional_info.mask.as_ref().unwrap();
-            (
-                (mask.right.unwrap_or(0) - mask.left.unwrap_or(0)).max(0) as usize,
-                (mask.bottom.unwrap_or(0) - mask.top.unwrap_or(0)).max(0) as usize,
-            )
-        } else {
-            (
-                (layer.right.unwrap_or(0) - layer.left.unwrap_or(0)).max(0) as usize,
-                (layer.bottom.unwrap_or(0) - layer.top.unwrap_or(0)).max(0) as usize,
-            )
-        };
+        let (_, _, channel_width, channel_height) = layer_channel_bounds(layer, channel.id);
         let bytes_per_sample = match bits_per_channel {
             8 => 1,
             16 => 2,
@@ -999,7 +1066,7 @@ fn read_layer_channel_raw_data<R: Read + Seek>(
 
 /// Build layer hierarchy from flat layer list
 fn build_layer_hierarchy(psd: &mut Psd, layers: Vec<Layer>) -> Result<()> {
-    let mut stack: Vec<Vec<Layer>> = vec![Vec::new()];
+    let mut stack: Vec<(Vec<Layer>, Option<bool>)> = vec![(Vec::new(), None)];
 
     for mut layer in layers.into_iter().rev() {
         let section_type = layer
@@ -1011,27 +1078,89 @@ fn build_layer_hierarchy(psd: &mut Psd, layers: Vec<Layer>) -> Result<()> {
 
         match section_type {
             SectionDividerType::BoundingSectionDivider => {
-                stack.push(Vec::new());
-            }
-            SectionDividerType::OpenFolder | SectionDividerType::ClosedFolder => {
-                let children = if stack.len() > 1 {
+                let (children, opened) = if stack.len() > 1 {
                     stack.pop().unwrap()
                 } else {
-                    Vec::new()
+                    (Vec::new(), None)
                 };
                 if !children.is_empty() {
                     layer.children = Some(children);
                 }
-                stack.last_mut().unwrap().insert(0, layer);
+                layer.opened = opened;
+                stack.last_mut().unwrap().0.insert(0, layer);
+            }
+            SectionDividerType::OpenFolder | SectionDividerType::ClosedFolder => {
+                stack.push((
+                    Vec::new(),
+                    Some(matches!(section_type, SectionDividerType::OpenFolder)),
+                ));
             }
             SectionDividerType::Other => {
-                stack.last_mut().unwrap().insert(0, layer);
+                stack.last_mut().unwrap().0.insert(0, layer);
             }
         }
     }
 
-    psd.children = Some(stack.pop().unwrap_or_default());
+    psd.children = Some(stack.pop().map(|(layers, _)| layers).unwrap_or_default());
     Ok(())
+}
+
+fn layer_channel_bounds(layer: &Layer, channel_id: ChannelID) -> (i32, i32, usize, usize) {
+    let layer_left = layer.left.unwrap_or(0);
+    let layer_top = layer.top.unwrap_or(0);
+    let layer_right = layer.right.unwrap_or(0);
+    let layer_bottom = layer.bottom.unwrap_or(0);
+
+    match channel_id {
+        ChannelID::UserMask => {
+            if let Some(mask) = layer.additional_info.mask.as_ref() {
+                let left = mask.left.unwrap_or(layer_left);
+                let top = mask.top.unwrap_or(layer_top);
+                let right = mask.right.unwrap_or(left);
+                let bottom = mask.bottom.unwrap_or(top);
+                return (
+                    left,
+                    top,
+                    (right - left).max(0) as usize,
+                    (bottom - top).max(0) as usize,
+                );
+            }
+        }
+        ChannelID::RealUserMask => {
+            if let Some(mask) = layer.additional_info.real_mask.as_ref() {
+                let left = mask.left.unwrap_or(layer_left);
+                let top = mask.top.unwrap_or(layer_top);
+                let right = mask.right.unwrap_or(left);
+                let bottom = mask.bottom.unwrap_or(top);
+                return (
+                    left,
+                    top,
+                    (right - left).max(0) as usize,
+                    (bottom - top).max(0) as usize,
+                );
+            }
+            if let Some(mask) = layer.additional_info.mask.as_ref() {
+                let left = mask.real_left.or(mask.left).unwrap_or(layer_left);
+                let top = mask.real_top.or(mask.top).unwrap_or(layer_top);
+                let right = mask.real_right.or(mask.right).unwrap_or(left);
+                let bottom = mask.real_bottom.or(mask.bottom).unwrap_or(top);
+                return (
+                    left,
+                    top,
+                    (right - left).max(0) as usize,
+                    (bottom - top).max(0) as usize,
+                );
+            }
+        }
+        _ => {}
+    }
+
+    (
+        layer_left,
+        layer_top,
+        (layer_right - layer_left).max(0) as usize,
+        (layer_bottom - layer_top).max(0) as usize,
+    )
 }
 
 /// Read global layer mask info
@@ -1568,5 +1697,222 @@ mod tests {
 
         let composite = loaded.image_data.expect("composite image");
         assert_eq!(composite.data, vec![0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn test_build_layer_hierarchy_uses_bounding_as_group_layer() {
+        let mut psd = Psd::default();
+        let group = Layer {
+            additional_info: crate::format::additional_info::LayerAdditionalInfo {
+                name: Some("Group".to_string()),
+                section_divider: Some(crate::format::additional_info::SectionDivider {
+                    divider_type: SectionDividerType::BoundingSectionDivider,
+                    blend_mode: None,
+                    sub_type: None,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let leaf = Layer {
+            additional_info: crate::format::additional_info::LayerAdditionalInfo {
+                name: Some("Leaf".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let close = Layer {
+            additional_info: crate::format::additional_info::LayerAdditionalInfo {
+                section_divider: Some(crate::format::additional_info::SectionDivider {
+                    divider_type: SectionDividerType::ClosedFolder,
+                    blend_mode: None,
+                    sub_type: None,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        build_layer_hierarchy(&mut psd, vec![group, leaf, close]).expect("build hierarchy");
+
+        let roots = psd.children.expect("root layers");
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].additional_info.name.as_deref(), Some("Group"));
+        assert_eq!(roots[0].opened, Some(false));
+        assert_eq!(
+            roots[0]
+                .children
+                .as_ref()
+                .expect("group children")
+                .first()
+                .and_then(|child| child.additional_info.name.as_deref()),
+            Some("Leaf")
+        );
+    }
+
+    #[test]
+    fn test_layer_user_mask_modulates_alpha_and_is_preserved() {
+        let mut bytes = Vec::new();
+        for data in [&[10u8, 20][..], &[0u8, 0][..], &[0u8, 0][..], &[255u8, 255][..]] {
+            bytes.extend_from_slice(&0u16.to_be_bytes());
+            bytes.extend_from_slice(data);
+        }
+        bytes.extend_from_slice(&0u16.to_be_bytes());
+        bytes.push(0);
+
+        let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
+        let psd = Psd {
+            color_mode: Some(ColorMode::RGB),
+            bits_per_channel: Some(8),
+            ..Default::default()
+        };
+        let mut layer = Layer {
+            left: Some(0),
+            top: Some(0),
+            right: Some(2),
+            bottom: Some(1),
+            additional_info: crate::format::additional_info::LayerAdditionalInfo {
+                mask: Some(LayerMaskData {
+                    left: Some(1),
+                    top: Some(0),
+                    right: Some(2),
+                    bottom: Some(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let channels = vec![
+            ChannelInfo {
+                id: ChannelID::Color0,
+                length: 4,
+            },
+            ChannelInfo {
+                id: ChannelID::Color1,
+                length: 4,
+            },
+            ChannelInfo {
+                id: ChannelID::Color2,
+                length: 4,
+            },
+            ChannelInfo {
+                id: ChannelID::Transparency,
+                length: 4,
+            },
+            ChannelInfo {
+                id: ChannelID::UserMask,
+                length: 3,
+            },
+        ];
+
+        read_layer_channel_image_data(&mut reader, &psd, &mut layer, &channels).expect("read channels");
+
+        let pixels = layer.image_data.expect("layer image").data;
+        assert_eq!(pixels, vec![10, 0, 0, 255, 20, 0, 0, 0]);
+
+        let mask = layer
+            .additional_info
+            .mask
+            .and_then(|mask| mask.image_data)
+            .expect("mask image");
+        assert_eq!(mask.width, 1);
+        assert_eq!(mask.height, 1);
+        assert_eq!(mask.data, vec![0]);
+    }
+
+    #[test]
+    fn test_layer_preserves_user_and_real_mask_channels_separately() {
+        let mut bytes = Vec::new();
+        for data in [
+            &[10u8, 20][..],
+            &[0u8, 0][..],
+            &[0u8, 0][..],
+            &[255u8, 255][..],
+            &[100u8][..],
+            &[50u8][..],
+        ] {
+            bytes.extend_from_slice(&0u16.to_be_bytes());
+            bytes.extend_from_slice(data);
+        }
+
+        let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
+        let psd = Psd {
+            color_mode: Some(ColorMode::RGB),
+            bits_per_channel: Some(8),
+            ..Default::default()
+        };
+        let mut layer = Layer {
+            left: Some(0),
+            top: Some(0),
+            right: Some(2),
+            bottom: Some(1),
+            additional_info: crate::format::additional_info::LayerAdditionalInfo {
+                mask: Some(LayerMaskData {
+                    left: Some(0),
+                    top: Some(0),
+                    right: Some(1),
+                    bottom: Some(1),
+                    real_left: Some(1),
+                    real_top: Some(0),
+                    real_right: Some(2),
+                    real_bottom: Some(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let channels = vec![
+            ChannelInfo {
+                id: ChannelID::Color0,
+                length: 4,
+            },
+            ChannelInfo {
+                id: ChannelID::Color1,
+                length: 4,
+            },
+            ChannelInfo {
+                id: ChannelID::Color2,
+                length: 4,
+            },
+            ChannelInfo {
+                id: ChannelID::Transparency,
+                length: 4,
+            },
+            ChannelInfo {
+                id: ChannelID::UserMask,
+                length: 3,
+            },
+            ChannelInfo {
+                id: ChannelID::RealUserMask,
+                length: 3,
+            },
+        ];
+
+        read_layer_channel_image_data(&mut reader, &psd, &mut layer, &channels).expect("read channels");
+
+        let pixels = layer.image_data.expect("layer image").data;
+        assert_eq!(pixels, vec![10, 0, 0, 100, 20, 0, 0, 255]);
+
+        let user_mask = layer
+            .additional_info
+            .mask
+            .as_ref()
+            .and_then(|mask| mask.image_data.as_ref())
+            .expect("user mask image");
+        assert_eq!(user_mask.width, 1);
+        assert_eq!(user_mask.height, 1);
+        assert_eq!(user_mask.data, vec![100]);
+
+        let real_mask = layer
+            .additional_info
+            .real_mask
+            .as_ref()
+            .and_then(|mask| mask.image_data.as_ref())
+            .expect("real mask image");
+        assert_eq!(real_mask.width, 1);
+        assert_eq!(real_mask.height, 1);
+        assert_eq!(real_mask.data, vec![50]);
     }
 }

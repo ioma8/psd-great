@@ -14,6 +14,7 @@ use crate::support::helpers::{
 use crate::api::layer::Layer;
 use crate::api::psd::{GlobalLayerMaskInfo, Psd, WriteOptions};
 use crate::api::types::{BlendMode, ChannelID, Color, ColorMode, Compression};
+use crate::format::additional_info::SectionDivider;
 use byteorder::{BigEndian, WriteBytesExt};
 use std::io::Cursor;
 
@@ -350,9 +351,7 @@ pub fn write_psd(psd: &Psd, options: &WriteOptions) -> Result<Vec<u8>> {
         ColorMode::CMYK => 4,
         _ => 3,
     };
-    let channel_count = psd
-        .channels
-        .unwrap_or((base_channels + usize::from(global_alpha)) as u16);
+    let channel_count = (base_channels + usize::from(global_alpha)) as u16;
 
     // Apply prewrite passes
     let mut psd = psd.clone();
@@ -498,6 +497,13 @@ pub(crate) fn flatten_layers(children: Option<&Vec<Layer>>) -> Vec<Layer> {
                 // Add opening folder marker
                 let mut folder = child.clone();
                 folder.children = None;
+                let mut divider = folder.additional_info.section_divider.unwrap_or(SectionDivider {
+                    divider_type: crate::api::types::SectionDividerType::BoundingSectionDivider,
+                    blend_mode: None,
+                    sub_type: None,
+                });
+                divider.divider_type = crate::api::types::SectionDividerType::BoundingSectionDivider;
+                folder.additional_info.section_divider = Some(divider);
                 result.push(folder);
 
                 // Add children
@@ -506,6 +512,15 @@ pub(crate) fn flatten_layers(children: Option<&Vec<Layer>>) -> Vec<Layer> {
                 // Add closing folder marker
                 let mut closing = Layer::default();
                 closing.additional_info.name = Some("</Layer group>".to_string());
+                closing.additional_info.section_divider = Some(SectionDivider {
+                    divider_type: if child.opened.unwrap_or(true) {
+                        crate::api::types::SectionDividerType::OpenFolder
+                    } else {
+                        crate::api::types::SectionDividerType::ClosedFolder
+                    },
+                    blend_mode: None,
+                    sub_type: None,
+                });
                 result.push(closing);
             } else {
                 result.push(child.clone());
@@ -937,16 +952,68 @@ fn prepare_layer_channels(
 
 fn layer_channel_dimensions(layer: &Layer, channel_id: ChannelID) -> (usize, usize) {
     if matches!(channel_id, ChannelID::UserMask | ChannelID::RealUserMask) {
-        if let Some(ref mask) = layer.additional_info.mask {
-            return (
-                (mask.right.unwrap_or(0) - mask.left.unwrap_or(0)).max(0) as usize,
-                (mask.bottom.unwrap_or(0) - mask.top.unwrap_or(0)).max(0) as usize,
-            );
-        }
+        let (_, _, width, height) = layer_channel_bounds(layer, channel_id);
+        return (width, height);
     }
+    let (_, _, width, height) = layer_channel_bounds(layer, channel_id);
+    (width, height)
+}
+
+fn layer_channel_bounds(layer: &Layer, channel_id: ChannelID) -> (i32, i32, usize, usize) {
+    let layer_left = layer.left.unwrap_or(0);
+    let layer_top = layer.top.unwrap_or(0);
+    let layer_right = layer.right.unwrap_or(0);
+    let layer_bottom = layer.bottom.unwrap_or(0);
+
+    match channel_id {
+        ChannelID::UserMask => {
+            if let Some(mask) = layer.additional_info.mask.as_ref() {
+                let left = mask.left.unwrap_or(layer_left);
+                let top = mask.top.unwrap_or(layer_top);
+                let right = mask.right.unwrap_or(left);
+                let bottom = mask.bottom.unwrap_or(top);
+                return (
+                    left,
+                    top,
+                    (right - left).max(0) as usize,
+                    (bottom - top).max(0) as usize,
+                );
+            }
+        }
+        ChannelID::RealUserMask => {
+            if let Some(mask) = layer.additional_info.real_mask.as_ref() {
+                let left = mask.left.unwrap_or(layer_left);
+                let top = mask.top.unwrap_or(layer_top);
+                let right = mask.right.unwrap_or(left);
+                let bottom = mask.bottom.unwrap_or(top);
+                return (
+                    left,
+                    top,
+                    (right - left).max(0) as usize,
+                    (bottom - top).max(0) as usize,
+                );
+            }
+            if let Some(mask) = layer.additional_info.mask.as_ref() {
+                let left = mask.real_left.or(mask.left).unwrap_or(layer_left);
+                let top = mask.real_top.or(mask.top).unwrap_or(layer_top);
+                let right = mask.real_right.or(mask.right).unwrap_or(left);
+                let bottom = mask.real_bottom.or(mask.bottom).unwrap_or(top);
+                return (
+                    left,
+                    top,
+                    (right - left).max(0) as usize,
+                    (bottom - top).max(0) as usize,
+                );
+            }
+        }
+        _ => {}
+    }
+
     (
-        (layer.right.unwrap_or(0) - layer.left.unwrap_or(0)).max(0) as usize,
-        (layer.bottom.unwrap_or(0) - layer.top.unwrap_or(0)).max(0) as usize,
+        layer_left,
+        layer_top,
+        (layer_right - layer_left).max(0) as usize,
+        (layer_bottom - layer_top).max(0) as usize,
     )
 }
 
@@ -1247,6 +1314,9 @@ fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::psd::ReadOptions;
+    use crate::format::additional_info::LayerAdditionalInfo;
+    use std::io::Cursor;
 
     #[test]
     fn test_write_signature() {
@@ -1268,5 +1338,150 @@ mod tests {
         writer.write_u16(256).unwrap();
         writer.write_u32(512).unwrap();
         assert_eq!(writer.get_buffer(), &[0x01, 0x00, 0x00, 0x00, 0x02, 0x00]);
+    }
+
+    #[test]
+    fn test_flatten_layers_emits_section_divider_markers_for_groups() {
+        let group = Layer {
+            opened: Some(false),
+            additional_info: LayerAdditionalInfo {
+                name: Some("Group".to_string()),
+                ..Default::default()
+            },
+            children: Some(vec![Layer {
+                additional_info: LayerAdditionalInfo {
+                    name: Some("Leaf".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+
+        let flattened = flatten_layers(Some(&vec![group]));
+        assert_eq!(flattened.len(), 3);
+        assert_eq!(
+            flattened[0]
+                .additional_info
+                .section_divider
+                .as_ref()
+                .map(|divider| divider.divider_type),
+            Some(crate::api::types::SectionDividerType::BoundingSectionDivider)
+        );
+        assert_eq!(
+            flattened[2]
+                .additional_info
+                .section_divider
+                .as_ref()
+                .map(|divider| divider.divider_type),
+            Some(crate::api::types::SectionDividerType::ClosedFolder)
+        );
+    }
+
+    #[test]
+    fn test_write_psd_uses_actual_composite_channel_count() {
+        let psd = Psd {
+            width: 1,
+            height: 1,
+            channels: Some(4),
+            bits_per_channel: Some(8),
+            color_mode: Some(ColorMode::RGB),
+            image_data: Some(crate::api::types::PixelData {
+                data: vec![12, 34, 56, 255],
+                width: 1,
+                height: 1,
+            }),
+            ..Default::default()
+        };
+
+        let bytes = write_psd(
+            &psd,
+            &WriteOptions {
+                compress: Some(true),
+                ..Default::default()
+            },
+        )
+        .expect("write psd");
+
+        assert_eq!(u16::from_be_bytes([bytes[12], bytes[13]]), 3);
+
+        let reparsed = crate::read_psd(
+            Cursor::new(bytes),
+            ReadOptions {
+                skip_composite_image_data: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("reparse written psd");
+        assert_eq!(reparsed.channels, Some(3));
+    }
+
+    #[test]
+    fn test_group_roundtrip_preserves_children_and_open_state() {
+        let child = Layer {
+            top: Some(0),
+            left: Some(0),
+            bottom: Some(1),
+            right: Some(1),
+            image_data: Some(crate::api::types::PixelData {
+                data: vec![255, 0, 0, 255],
+                width: 1,
+                height: 1,
+            }),
+            additional_info: LayerAdditionalInfo {
+                name: Some("Child".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let group = Layer {
+            opened: Some(false),
+            children: Some(vec![child]),
+            additional_info: LayerAdditionalInfo {
+                name: Some("Group".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let psd = Psd {
+            width: 1,
+            height: 1,
+            color_mode: Some(ColorMode::RGB),
+            bits_per_channel: Some(8),
+            children: Some(vec![group]),
+            ..Default::default()
+        };
+
+        let bytes = write_psd(
+            &psd,
+            &WriteOptions {
+                compress: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("write grouped psd");
+        let loaded = crate::read_psd(
+            Cursor::new(bytes),
+            ReadOptions {
+                skip_layer_image_data: Some(false),
+                skip_composite_image_data: Some(true),
+                ..Default::default()
+            },
+        )
+        .expect("read grouped psd");
+
+        let roots = loaded.children.expect("root layers");
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].additional_info.name.as_deref(), Some("Group"));
+        assert_eq!(roots[0].opened, Some(false));
+        assert_eq!(
+            roots[0]
+                .children
+                .as_ref()
+                .expect("group children")
+                .first()
+                .and_then(|child| child.additional_info.name.as_deref()),
+            Some("Child")
+        );
     }
 }
