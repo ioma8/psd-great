@@ -2,7 +2,7 @@
 
 A Rust library for reading and writing Adobe Photoshop PSD and PSB files.
 
-This crate began as a port of the TypeScript [ag-psd](https://github.com/Agamnentzar/ag-psd) parser/writer, but has since been expanded substantially with additional PSD/PSB feature coverage and a typed Rust API for document structure, layers, tagged blocks, resources, text data, effects, masks, paths, and smart-object metadata.
+`psd-great` aims to be the most feature-rich and complete PSD/PSB reading and writing crate in Rust. It began as a port of the TypeScript [ag-psd](https://github.com/Agamnentzar/ag-psd) parser/writer and has since grown into a broader typed Rust API for document structure, layers, tagged blocks, resources, text, effects, masks, paths, and smart-object metadata.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -41,31 +41,13 @@ fn main() -> Result<()> {
 }
 ```
 
-## Crate Layout
-
-The codebase is organized into a few top-level groups:
-
-- `api` - public document model types such as `Psd`, `Layer`, `Color`, `DisplayInfo`, and related enums/structs
-- `format` - PSD/PSB wire-format sections such as image resources, tagged blocks, and document postprocess logic
-- `io` - high-level reader and writer entry points
-- `support` - internal helpers such as descriptor parsing, compression, JPEG helpers, and binary record support
-- `formats` - additional Adobe-related formats such as ABR, ASE, and CSH
-
-The crate root still re-exports the main user-facing types and functions for ergonomic use:
-
-- `read_psd`, `write_psd`
-- `Psd`, `Layer`
-- `ReadOptions`, `WriteOptions`
-- core enums and data types such as `BlendMode`, `ColorMode`, `Compression`, and `Color`
-
-## What It Supports
+## Highlights
 
 - PSD and PSB read/write
-- Layer trees, groups, masks, blend modes, and layer effects
-- Text layer structures, engine data, style runs, and paragraph runs
-- Document resources, metadata, paths, slices, thumbnails, and XMP
-- Smart-object related structures, linked files, and placed-layer metadata
-- Pattern blocks, annotations, filter-effect blocks, and many Photoshop tagged blocks
+- Typed public API centered on `Psd`, `Layer`, `ReadOptions`, and `WriteOptions`
+- Layer trees, groups, masks, blend modes, layer effects, and many tagged blocks
+- Text structures, engine data, style runs, paragraph runs, and document resources
+- Paths, slices, thumbnails, XMP, linked files, placed layers, and smart-object metadata
 - ABR, ASE, and CSH parsing helpers
 
 ## Current Status
@@ -79,7 +61,7 @@ The crate root still re-exports the main user-facing types and functions for erg
 | 16/32-bit depth | Partial | Structural support exists, but not every path is fully validated end to end |
 | Smart objects / linked data | Partial | Typed structures exist, but not every Photoshop workflow is exhaustively covered |
 
-## Limitations
+## Limits
 
 - This crate is a PSD/PSB parser and writer, not a Photoshop compositor or rasterizer.
 - Editing text, vector data, masks, or effects does not automatically redraw layer pixels or the composite image.
@@ -96,25 +78,16 @@ cargo run --example extract_layers path/to/file.psd
 cargo run --example create_psd
 ```
 
-## API Notes
+## Layout
 
-- Main document type: `Psd`
-- Main layer type: `Layer`
-- Core enums: `BlendMode`, `ColorMode`, `Compression`
-- I/O options: `ReadOptions`, `WriteOptions`
-- Additional file formats: `read_abr`, `read_ase`, `write_ase`, `read_csh`
+- `api` - public document model types
+- `format` - PSD/PSB wire-format sections
+- `io` - high-level readers and writers
+- `support` - internal helpers
+- `formats` - ABR, ASE, and CSH support
 
 Generate API docs locally with:
 
 ```bash
 cargo doc --open
 ```
-
-## Notes For Contributors
-
-- The public model lives under `src/api/`
-- PSD/PSB wire-format logic lives under `src/format/`
-- Reader/writer entry points live under `src/io/`
-- Internal helpers live under `src/support/`
-
-This structure is intentional: public data model, wire format, I/O orchestration, and low-level support are kept distinct so the crate is easier to navigate and document.
