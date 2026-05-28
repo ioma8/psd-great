@@ -318,6 +318,11 @@ fn build_color_samplers_resource(samplers: &ColorSamplersResource) -> Result<Vec
     bytes.extend_from_slice(&(samplers.samplers.len() as u32).to_be_bytes());
     for sampler in &samplers.samplers {
         let version = sampler.position.version();
+        if version == 1 && sampler.depth.is_some() {
+            return Err(PsdError::InvalidFormat(
+                "Color sampler version 1 must not include depth".to_string(),
+            ));
+        }
         if version >= 2 && sampler.depth.is_none() {
             return Err(PsdError::InvalidFormat(format!(
                 "Color sampler version {version} requires depth to serialize losslessly"
@@ -1929,6 +1934,27 @@ mod tests {
         let err = build_color_samplers_resource_for_test(&resource).unwrap_err();
         assert!(
             err.to_string().contains("requires depth"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn color_sampler_resource_rejects_depth_for_version_one() {
+        let resource = ColorSamplersResource {
+            version: 1,
+            samplers: vec![crate::psd::ColorSampler {
+                position: crate::psd::ColorSamplerPosition::V1 {
+                    horizontal: 1,
+                    vertical: 2,
+                },
+                color_space: 8,
+                depth: Some(16),
+            }],
+        };
+
+        let err = build_color_samplers_resource_for_test(&resource).unwrap_err();
+        assert!(
+            err.to_string().contains("must not include depth"),
             "unexpected error: {err}"
         );
     }
