@@ -4,7 +4,7 @@
 //! Rust's standard library already handles UTF-8 correctly, but these utilities
 //! are provided for cases where manual control is needed.
 
-use crate::error::{PsdError, Result};
+use crate::support::error::{PsdError, Result};
 
 /// Threshold for using manual UTF-8 decoding vs built-in decoder
 const UTF8_MANUAL_DECODE_THRESHOLD: usize = 1000;

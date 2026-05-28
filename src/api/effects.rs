@@ -1,4 +1,4 @@
-use crate::types::*;
+use crate::api::types::*;
 
 /// Effect contour definition
 #[derive(Debug, Clone, PartialEq)]

@@ -4,8 +4,8 @@
 //! color_samplers) to/from the low-level image resource storage (XML strings, typed resources,
 //! descriptor resources).
 
-use crate::error::{PsdError, Result};
-use crate::psd::Psd;
+use crate::support::error::{PsdError, Result};
+use crate::api::psd::Psd;
 use quick_xml::escape::unescape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::XmlVersion;
@@ -56,7 +56,7 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
         }
 
         if let Some(info) = resources.display_info_typed.as_ref() {
-            psd.display_info = Some(crate::psd::DisplayInfo {
+            psd.display_info = Some(crate::api::psd::DisplayInfo {
                 h_res_unit: info.h_res_unit,
                 v_res_unit: info.v_res_unit,
                 width_unit: info.width_unit,
@@ -76,15 +76,15 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
         // Map guides (resource 1032) → psd.guides
         if let Some(ref grid_info) = resources.grid_and_guides {
             if !grid_info.guides.is_empty() {
-                let guides: Vec<crate::psd::GuideInfo> = grid_info
+                let guides: Vec<crate::api::psd::GuideInfo> = grid_info
                     .guides
                     .iter()
                     .map(|g| {
-                        crate::psd::GuideInfo {
+                        crate::api::psd::GuideInfo {
                             location: g.location,
                             direction: match g.direction {
-                                crate::image_resources::GuideDirection::Vertical => crate::types::GuideDirection::Vertical,
-                                crate::image_resources::GuideDirection::Horizontal => crate::types::GuideDirection::Horizontal,
+                                crate::format::image_resources::GuideDirection::Vertical => crate::api::types::GuideDirection::Vertical,
+                                crate::format::image_resources::GuideDirection::Horizontal => crate::api::types::GuideDirection::Horizontal,
                             },
                         }
                     })
@@ -113,11 +113,11 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
         // Map slices (resource 1050) → psd.slices
         if let Some(ref slices) = resources.slices {
             psd.slices = Some(match &slices.descriptor {
-                Some(descriptor) => crate::psd::DocumentSlices::Descriptor {
+                Some(descriptor) => crate::api::psd::DocumentSlices::Descriptor {
                     version: slices.version,
                     descriptor: descriptor.clone(),
                 },
-                None => crate::psd::DocumentSlices::Legacy(slices.clone()),
+                None => crate::api::psd::DocumentSlices::Legacy(slices.clone()),
             });
         }
 
@@ -146,7 +146,7 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
             .collect();
         if values.iter().any(|value| !*value) {
             resources.resource_visibility_typed =
-                Some(crate::image_resources::ResourceVisibility { values });
+                Some(crate::format::image_resources::ResourceVisibility { values });
         }
     }
 
@@ -172,15 +172,15 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
     }
 
     if let Some(points) = psd.color_samplers.as_ref() {
-        let version = crate::image_resources::infer_color_sampler_version(points)?.unwrap_or(2);
-        resources.color_samplers_typed = Some(crate::image_resources::ColorSamplersResource {
+        let version = crate::format::image_resources::infer_color_sampler_version(points)?.unwrap_or(2);
+        resources.color_samplers_typed = Some(crate::format::image_resources::ColorSamplersResource {
             version,
             samplers: points.clone(),
         });
     }
 
     if let Some(info) = psd.display_info.as_ref() {
-        resources.display_info_typed = Some(crate::image_resources::DisplayInfoResource {
+        resources.display_info_typed = Some(crate::format::image_resources::DisplayInfoResource {
             version: 1,
             h_res_unit: info.h_res_unit,
             v_res_unit: info.v_res_unit,
@@ -195,21 +195,21 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
 
     // Map resolution → resource 1005
     if let Some(dpi) = psd.resolution {
-        resources.resolution_info = Some(crate::image_resources::ResolutionInfo {
+        resources.resolution_info = Some(crate::format::image_resources::ResolutionInfo {
             horizontal_res: dpi,
-            horizontal_res_unit: crate::image_resources::ResolutionUnit::PixelsPerInch,
-            width_unit: crate::image_resources::MeasurementUnit::Inches,
+            horizontal_res_unit: crate::format::image_resources::ResolutionUnit::PixelsPerInch,
+            width_unit: crate::format::image_resources::MeasurementUnit::Inches,
             vertical_res: dpi,
-            vertical_res_unit: crate::image_resources::ResolutionUnit::PixelsPerInch,
-            height_unit: crate::image_resources::MeasurementUnit::Inches,
+            vertical_res_unit: crate::format::image_resources::ResolutionUnit::PixelsPerInch,
+            height_unit: crate::format::image_resources::MeasurementUnit::Inches,
         });
     }
 
     // Map guides → resource 1032
     if let Some(ref guides) = psd.guides {
         let grid_guides = resources.grid_and_guides.get_or_insert_with(|| {
-            crate::image_resources::GridAndGuides {
-                grid: crate::image_resources::Grid {
+            crate::format::image_resources::GridAndGuides {
+                grid: crate::format::image_resources::Grid {
                     horizontal: 0,
                     vertical: 0,
                 },
@@ -220,20 +220,20 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
             .iter()
             .map(|g| {
                 let dir = match g.direction {
-                    crate::types::GuideDirection::Vertical => {
-                        Ok(crate::image_resources::GuideDirection::Vertical)
+                    crate::api::types::GuideDirection::Vertical => {
+                        Ok(crate::format::image_resources::GuideDirection::Vertical)
                     }
-                    crate::types::GuideDirection::Horizontal => {
-                        Ok(crate::image_resources::GuideDirection::Horizontal)
+                    crate::api::types::GuideDirection::Horizontal => {
+                        Ok(crate::format::image_resources::GuideDirection::Horizontal)
                     }
-                    crate::types::GuideDirection::Other(code) => Err(PsdError::InvalidFormat(
+                    crate::api::types::GuideDirection::Other(code) => Err(PsdError::InvalidFormat(
                         format!(
                             "Guide direction code {:?} cannot be serialized to resource 1032",
                             std::str::from_utf8(&code).unwrap_or("????")
                         ),
                     )),
                 }?;
-                Ok(crate::image_resources::Guide {
+                Ok(crate::format::image_resources::Guide {
                     location: g.location,
                     direction: dir,
                 })
@@ -259,11 +259,11 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
     // Map slices → resource 1050
     if let Some(ref slices) = psd.slices {
         resources.slices = Some(match slices {
-            crate::psd::DocumentSlices::Legacy(slices) => slices.clone(),
-            crate::psd::DocumentSlices::Descriptor {
+            crate::api::psd::DocumentSlices::Legacy(slices) => slices.clone(),
+            crate::api::psd::DocumentSlices::Descriptor {
                 version,
                 descriptor,
-            } => crate::image_resources::Slices {
+            } => crate::format::image_resources::Slices {
                 version: *version,
                 bounds: None,
                 group_name: None,
@@ -284,7 +284,7 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
 // ── XML helpers (porting TS document-postprocess.ts behavior) ────────────────
 
 /// Parse variables XML into typed VariableSet vectors.
-fn parse_variables_xml(xml: &str) -> Vec<crate::psd::VariableSet> {
+fn parse_variables_xml(xml: &str) -> Vec<crate::api::psd::VariableSet> {
     let mut variables = Vec::new();
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
@@ -318,7 +318,7 @@ fn parse_variables_xml(xml: &str) -> Vec<crate::psd::VariableSet> {
                     }
                 }
 
-                variables.push(crate::psd::VariableSet {
+                variables.push(crate::api::psd::VariableSet {
                     var_name,
                     trait_name,
                     doc_ref,
@@ -336,7 +336,7 @@ fn parse_variables_xml(xml: &str) -> Vec<crate::psd::VariableSet> {
 }
 
 /// Build variables XML from typed VariableSet vectors.
-fn build_variables_xml(variables: &[crate::psd::VariableSet]) -> String {
+fn build_variables_xml(variables: &[crate::api::psd::VariableSet]) -> String {
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     writer
         .write_event(Event::Start(BytesStart::new("variableSets")))

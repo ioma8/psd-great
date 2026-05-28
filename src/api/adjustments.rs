@@ -1,6 +1,6 @@
 //! Adjustment layer binary data parsing and serialisation.
 
-use crate::error::{PsdError, Result};
+use crate::support::error::{PsdError, Result};
 
 // ── Lab colour helpers ────────────────────────────────────────────────────────
 

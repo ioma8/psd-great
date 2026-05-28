@@ -746,17 +746,20 @@ fn test_canonical_shared_types_are_constructible_from_public_api() {
 fn test_no_remaining_duplicate_public_model_type_names() {
     let source_files = [
         (
-            "src/additional_info.rs",
-            include_str!("../src/additional_info.rs"),
+            "src/format/additional_info.rs",
+            include_str!("../src/format/additional_info.rs"),
         ),
-        ("src/adjustments.rs", include_str!("../src/adjustments.rs")),
         (
-            "src/image_resources.rs",
-            include_str!("../src/image_resources.rs"),
+            "src/api/adjustments.rs",
+            include_str!("../src/api/adjustments.rs"),
         ),
-        ("src/layer.rs", include_str!("../src/layer.rs")),
-        ("src/psd.rs", include_str!("../src/psd.rs")),
-        ("src/types.rs", include_str!("../src/types.rs")),
+        (
+            "src/format/image_resources.rs",
+            include_str!("../src/format/image_resources.rs"),
+        ),
+        ("src/api/layer.rs", include_str!("../src/api/layer.rs")),
+        ("src/api/psd.rs", include_str!("../src/api/psd.rs")),
+        ("src/api/types.rs", include_str!("../src/api/types.rs")),
     ];
 
     let audited_names = [
@@ -813,16 +816,16 @@ fn test_no_remaining_duplicate_public_model_type_names() {
 fn test_no_duplicate_public_type_names_for_canonical_models() {
     let files = [
         (
-            "src/additional_info.rs",
-            include_str!("../src/additional_info.rs"),
+            "src/format/additional_info.rs",
+            include_str!("../src/format/additional_info.rs"),
         ),
         (
-            "src/image_resources.rs",
-            include_str!("../src/image_resources.rs"),
+            "src/format/image_resources.rs",
+            include_str!("../src/format/image_resources.rs"),
         ),
-        ("src/layer.rs", include_str!("../src/layer.rs")),
-        ("src/psd.rs", include_str!("../src/psd.rs")),
-        ("src/types.rs", include_str!("../src/types.rs")),
+        ("src/api/layer.rs", include_str!("../src/api/layer.rs")),
+        ("src/api/psd.rs", include_str!("../src/api/psd.rs")),
+        ("src/api/types.rs", include_str!("../src/api/types.rs")),
     ];
 
     let mut seen: HashMap<&str, Vec<&str>> = HashMap::new();

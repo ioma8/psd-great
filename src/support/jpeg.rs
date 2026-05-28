@@ -2,7 +2,7 @@
 //!
 //! Provides JPEG decompression for PSD image data using the jpeg-decoder crate.
 
-use crate::error::{PsdError, Result};
+use crate::support::error::{PsdError, Result};
 use jpeg_decoder::{Decoder, PixelFormat};
 
 /// Decode JPEG data to RGBA format

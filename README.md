@@ -31,7 +31,7 @@ fn main() -> Result<()> {
 
     if let Some(ref mut layers) = psd.children {
         for layer in layers {
-            layer.opacity = Some(200.0);
+            layer.opacity = Some(128.0);
         }
     }
 
@@ -40,6 +40,23 @@ fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+## Crate Layout
+
+The codebase is organized into a few top-level groups:
+
+- `api` - public document model types such as `Psd`, `Layer`, `Color`, `DisplayInfo`, and related enums/structs
+- `format` - PSD/PSB wire-format sections such as image resources, tagged blocks, and document postprocess logic
+- `io` - high-level reader and writer entry points
+- `support` - internal helpers such as descriptor parsing, compression, JPEG helpers, and binary record support
+- `formats` - additional Adobe-related formats such as ABR, ASE, and CSH
+
+The crate root still re-exports the main user-facing types and functions for ergonomic use:
+
+- `read_psd`, `write_psd`
+- `Psd`, `Layer`
+- `ReadOptions`, `WriteOptions`
+- core enums and data types such as `BlendMode`, `ColorMode`, `Compression`, and `Color`
 
 ## What It Supports
 
@@ -56,11 +73,11 @@ fn main() -> Result<()> {
 | Area | Status | Notes |
 |---|---|---|
 | PSD/PSB structure | Broad support | Reader and writer cover the main parser/writer surface |
-| Layers, masks, effects | Complete for targeted parity | Includes vector masks and pattern overlay structures |
+| Layers, masks, effects | Broad support | Includes vector masks, many tagged blocks, and effect structures |
 | Text layers | Partial | Rich text structures are supported, but not every Photoshop text workflow is exhaustively validated |
-| Color modes | Partial | Indexed palettes and generic color-mode data are supported; some composite-image paths still vary by mode |
-| 16/32-bit depth | Partial | Structural support exists, but image interpretation and write behavior are not complete across all paths |
-| Smart objects / smart filters | Partial | Typed structures exist, but not every workflow is fully validated end to end |
+| Color modes | Partial | Indexed palettes and generic color-mode data are supported; some composite-image behavior still varies by mode |
+| 16/32-bit depth | Partial | Structural support exists, but not every path is fully validated end to end |
+| Smart objects / linked data | Partial | Typed structures exist, but not every Photoshop workflow is exhaustively covered |
 
 ## Limitations
 
@@ -85,9 +102,19 @@ cargo run --example create_psd
 - Main layer type: `Layer`
 - Core enums: `BlendMode`, `ColorMode`, `Compression`
 - I/O options: `ReadOptions`, `WriteOptions`
+- Additional file formats: `read_abr`, `read_ase`, `write_ase`, `read_csh`
 
 Generate API docs locally with:
 
 ```bash
 cargo doc --open
 ```
+
+## Notes For Contributors
+
+- The public model lives under `src/api/`
+- PSD/PSB wire-format logic lives under `src/format/`
+- Reader/writer entry points live under `src/io/`
+- Internal helpers live under `src/support/`
+
+This structure is intentional: public data model, wire format, I/O orchestration, and low-level support are kept distinct so the crate is easier to navigate and document.

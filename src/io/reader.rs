@@ -2,18 +2,18 @@
 //!
 //! Provides functionality to read PSD files and parse their structure.
 
-use crate::binrw_support::{
+use crate::support::binrw_support::{
     decode_be, ChannelInfoRecord, GlobalLayerMaskRecord, LayerBlendRecord, LayerMaskPrefixRecord,
     LayerRecordBounds, PsbChannelInfoRecord, PsdHeaderRecord,
 };
-use crate::compression;
-use crate::error::{PsdError, Result};
-use crate::helpers::{
+use crate::support::compression;
+use crate::support::error::{PsdError, Result};
+use crate::support::helpers::{
     setup_grayscale, to_blend_mode, LayerBlendFlags, LayerMaskParameterFlags, LayerMaskStateBits,
 };
-use crate::layer::{Layer, LayerMaskData, LayerRawData, LayerRawDataChannel};
-use crate::psd::{GlobalLayerMaskInfo, Psd, ReadOptions};
-use crate::types::{ChannelID, ColorMode, Compression, PixelData, SectionDividerType};
+use crate::api::layer::{Layer, LayerMaskData, LayerRawData, LayerRawDataChannel};
+use crate::api::psd::{GlobalLayerMaskInfo, Psd, ReadOptions};
+use crate::api::types::{ChannelID, ColorMode, Compression, PixelData, SectionDividerType};
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::{Read, Seek, SeekFrom};
 
@@ -256,8 +256,8 @@ impl<R: Read + Seek> PsdReader<R> {
     }
 
     /// Read a color value
-    pub fn read_color(&mut self) -> Result<crate::types::Color> {
-        use crate::types::{Color, Grayscale, CMYK};
+    pub fn read_color(&mut self) -> Result<crate::api::types::Color> {
+        use crate::api::types::{Color, Grayscale, CMYK};
         let color_space = self.read_u16()?;
         let c1 = self.read_u16()?;
         let c2 = self.read_u16()?;
@@ -405,7 +405,7 @@ pub fn read_psd<R: Read + Seek>(mut reader: R, options: ReadOptions) -> Result<P
     read_layer_and_mask_info(&mut psd_reader, &mut psd)?;
 
     // Apply document resource postprocess (after layers are available)
-    crate::document_resource_postprocess::apply_document_postprocess(&mut psd)?;
+    crate::format::document_resource_postprocess::apply_document_postprocess(&mut psd)?;
 
     // Read image data section
     if !psd_reader
@@ -438,7 +438,7 @@ fn read_color_mode_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd
             // Read red values
             for _ in 0..256 {
                 let r = reader.read_u8()?;
-                palette.push(crate::types::RGB { r, g: 0, b: 0 });
+                palette.push(crate::api::types::RGB { r, g: 0, b: 0 });
             }
 
             // Read green values
@@ -452,11 +452,11 @@ fn read_color_mode_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd
             }
 
             psd.palette = Some(palette);
-            psd.color_mode_data = Some(crate::psd::ColorModeSectionData { bytes: Vec::new() });
+            psd.color_mode_data = Some(crate::api::psd::ColorModeSectionData { bytes: Vec::new() });
         } else {
             // Preserve generic color mode data
             let remaining = reader.bytes_left(end_offset);
-            psd.color_mode_data = Some(crate::psd::ColorModeSectionData {
+            psd.color_mode_data = Some(crate::api::psd::ColorModeSectionData {
                 bytes: reader.read_bytes(remaining as usize)?,
             });
         }
@@ -470,7 +470,7 @@ fn read_image_resources<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd
     reader.read_section(1, |reader, end_offset| {
         let remaining = reader.bytes_left(end_offset) as usize;
         if remaining > 0 {
-            let resources = crate::image_resources::read_image_resources(reader, remaining)?;
+            let resources = crate::format::image_resources::read_image_resources(reader, remaining)?;
             // Map descriptor resource 3000 to psd.path_selection_descriptor
             if let Some(descriptor) = resources.descriptor_resources.get(&3000) {
                 psd.path_selection_descriptor = Some(descriptor.clone());
@@ -505,7 +505,7 @@ fn read_layer_and_mask_info<R: Read + Seek>(
         }
 
         if reader.bytes_left(end_offset) > 0 {
-            psd.additional_info = crate::additional_info::read_layer_additional_info(
+            psd.additional_info = crate::format::additional_info::read_layer_additional_info(
                 reader,
                 reader.bytes_left(end_offset),
             )?;
@@ -618,7 +618,7 @@ fn read_layer_record<R: Read + Seek>(
         if remaining > 0 {
             let existing_mask = layer.additional_info.mask.take();
             let existing_real_mask = layer.additional_info.real_mask.take();
-            let mut info = crate::additional_info::read_layer_additional_info(reader, remaining)?;
+            let mut info = crate::format::additional_info::read_layer_additional_info(reader, remaining)?;
             if info.mask.is_none() {
                 info.mask = existing_mask;
             }
@@ -1345,17 +1345,17 @@ fn normalize_channel_data(mut data: Vec<u8>, expected_len: usize) -> Vec<u8> {
     data
 }
 
-fn parse_layer_blending_ranges(bytes: &[u8]) -> Option<crate::layer::LayerBlendingRangesData> {
+fn parse_layer_blending_ranges(bytes: &[u8]) -> Option<crate::api::layer::LayerBlendingRangesData> {
     if bytes.is_empty() {
         return None;
     }
     let mut offset = 0;
     let read_pair =
-        |buf: &[u8], offset: &mut usize| -> Option<crate::layer::LayerBlendingRangePair> {
+        |buf: &[u8], offset: &mut usize| -> Option<crate::api::layer::LayerBlendingRangePair> {
             if *offset + 4 > buf.len() {
                 return None;
             }
-            let pair = crate::layer::LayerBlendingRangePair {
+            let pair = crate::api::layer::LayerBlendingRangePair {
                 src_black: buf[*offset],
                 src_white: buf[*offset + 1],
                 dst_black: buf[*offset + 2],
@@ -1371,7 +1371,7 @@ fn parse_layer_blending_ranges(bytes: &[u8]) -> Option<crate::layer::LayerBlendi
         channels.push(pair);
     }
 
-    Some(crate::layer::LayerBlendingRangesData {
+    Some(crate::api::layer::LayerBlendingRangesData {
         composite_gray,
         channels,
     })
@@ -1474,7 +1474,7 @@ mod tests {
         let color = reader.read_color().unwrap();
         assert_eq!(
             color,
-            crate::types::Color::CMYK(crate::types::CMYK {
+            crate::api::types::Color::CMYK(crate::api::types::CMYK {
                 c: 65535,
                 m: 32896,
                 y: 16448,
@@ -1494,7 +1494,7 @@ mod tests {
         let color = reader.read_color().unwrap();
         assert_eq!(
             color,
-            crate::types::Color::Grayscale(crate::types::Grayscale { k: 10000 })
+            crate::api::types::Color::Grayscale(crate::api::types::Grayscale { k: 10000 })
         );
     }
 
@@ -1508,7 +1508,7 @@ mod tests {
         let color = reader.read_color().unwrap();
         assert_eq!(
             color,
-            crate::types::Color::OpaqueColorSpace {
+            crate::api::types::Color::OpaqueColorSpace {
                 color_space: 3,
                 components: [1, 2, 3, 4],
             }

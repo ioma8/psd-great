@@ -3,19 +3,19 @@
 //! Handles layer-specific additional information sections like text layers,
 //! vector masks, layer effects, smart objects, and other layer properties.
 
-use crate::adjustments::AdjustmentLayer;
-use crate::binrw_support::{
+use crate::api::adjustments::AdjustmentLayer;
+use crate::support::binrw_support::{
     decode_be, encode_be, AnnotationHeaderRecord, LayerColorRecord, NameSourceRecord,
     ProtectedFlagsRecord, SectionDividerBaseRecord, SectionDividerExtendedRecord,
     U32ValueRecord, U8BoolRecord, UsingAlignedRenderingRecord,
 };
-use crate::compression;
-use crate::descriptor::{Descriptor, DescriptorValue};
-use crate::error::{PsdError, Result};
+use crate::support::compression;
+use crate::support::descriptor::{Descriptor, DescriptorValue};
+use crate::support::error::{PsdError, Result};
 /// Read a pascal-style string with 4-byte length prefix (matching TS readPascalStringWithPadding).
 fn read_pascal_string_with_padding<R: Read + std::io::Seek>(
-    reader: &mut crate::reader::PsdReader<R>,
-) -> crate::error::Result<String> {
+    reader: &mut crate::io::reader::PsdReader<R>,
+) -> crate::support::error::Result<String> {
     let length_plus_one = reader.read_u32()? as usize;
     if length_plus_one == 0 {
         return Ok(String::new());
@@ -28,9 +28,9 @@ fn read_pascal_string_with_padding<R: Read + std::io::Seek>(
 
 /// Write a pascal-style string with 4-byte length prefix (matching TS writePascalStringWithPadding).
 fn write_pascal_string_with_padding(
-    writer: &mut crate::writer::PsdWriter,
+    writer: &mut crate::io::writer::PsdWriter,
     text: &str,
-) -> crate::error::Result<()> {
+) -> crate::support::error::Result<()> {
     let bytes = text.as_bytes();
     writer.write_u32((bytes.len() + 1) as u32)?;
     writer.write_bytes(bytes)?;
@@ -175,18 +175,18 @@ fn validate_linked_file_item(item: &LinkedFile) -> Result<()> {
 
     Ok(())
 }
-use crate::helpers::{from_blend_mode, to_blend_mode, ProtectedFlagsBits, VectorMaskFlagsBits};
-use crate::layer::{
+use crate::support::helpers::{from_blend_mode, to_blend_mode, ProtectedFlagsBits, VectorMaskFlagsBits};
+use crate::api::layer::{
     KeyDescriptorItem, Layer, LinkedFile, LinkedFileInfo, RRectRadii, VectorOrigination,
 };
-use crate::reader::PsdReader;
-use crate::text::UnitsBounds;
-use crate::types::Color;
-use crate::types::{
+use crate::io::reader::PsdReader;
+use crate::api::text::UnitsBounds;
+use crate::api::types::Color;
+use crate::api::types::{
     BlendMode, LinkedFileDataKind, PixelData, Point, PsdIntCode, PsdStringCode, PsdU32Code,
     SectionDividerType, Units, UnitsValue, RGB,
 };
-use crate::writer::PsdWriter;
+use crate::io::writer::PsdWriter;
 use std::collections::HashMap;
 use std::io::{Read, Seek};
 
@@ -208,11 +208,11 @@ pub struct LayerAdditionalInfo {
     /// Layer ID
     pub id: Option<i32>,
     /// Layer mask data
-    pub mask: Option<crate::layer::LayerMaskData>,
+    pub mask: Option<crate::api::layer::LayerMaskData>,
     /// Real layer mask data
-    pub real_mask: Option<crate::layer::LayerMaskData>,
+    pub real_mask: Option<crate::api::layer::LayerMaskData>,
     /// Layer color
-    pub layer_color: Option<crate::types::LayerColor>,
+    pub layer_color: Option<crate::api::types::LayerColor>,
     /// Section divider (layer group)
     pub section_divider: Option<SectionDivider>,
     /// Blend clipped elements
@@ -290,7 +290,7 @@ pub struct LayerAdditionalInfo {
 /// Text engine block (Txt2) containing engine data
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextEngineBlock {
-    pub data: crate::engine_data::EngineValue,
+    pub data: crate::support::engine_data::EngineValue,
 }
 
 /// Annotation item (Anno)
@@ -537,7 +537,7 @@ pub struct ArtboardData {
 pub struct MetadataEntry {
     pub key: String,
     pub copy_on_sheet_change: bool,
-    pub descriptor: Option<crate::descriptor::Descriptor>,
+    pub descriptor: Option<crate::support::descriptor::Descriptor>,
     pub raw_data: Vec<u8>,
 }
 
@@ -598,7 +598,7 @@ impl<R: Read + Seek> PsdReader<R> {
         }
     }
 
-    fn descriptor_points(desc: &Descriptor, key: &str) -> Option<Vec<crate::types::Point>> {
+    fn descriptor_points(desc: &Descriptor, key: &str) -> Option<Vec<crate::api::types::Point>> {
         match desc.items.get(key) {
             Some(DescriptorValue::Descriptor(inner)) => match inner.items.get("points") {
                 Some(DescriptorValue::List(items)) => {
@@ -617,7 +617,7 @@ impl<R: Read + Seek> PsdReader<R> {
                             DescriptorValue::Integer(v) => *v as f64,
                             _ => 0.0,
                         };
-                        points.push(crate::types::Point { x, y });
+                        points.push(crate::api::types::Point { x, y });
                     }
                     Some(points)
                 }
@@ -987,7 +987,7 @@ impl<R: Read + Seek> PsdReader<R> {
             "Lr16" | "Lr32" => {
                 let data = self.read_bytes(length)?;
                 let bits = if key == "Lr16" { 16 } else { 32 };
-                let layers = crate::reader::read_nested_layer_info_block(&data, bits)?;
+                let layers = crate::io::reader::read_nested_layer_info_block(&data, bits)?;
                 info.high_depth_layer_data = Some(HighDepthLayerInfo {
                     key: PsdStringCode::from(key),
                     layers,
@@ -1146,7 +1146,7 @@ impl<R: Read + Seek> PsdReader<R> {
             "Txt2" => {
                 let inner_length = self.read_u32()? as usize;
                 let raw = self.read_bytes(inner_length.min(length.saturating_sub(4)))?;
-                let parsed = crate::engine_data::parse_engine_data(&raw)
+                let parsed = crate::support::engine_data::parse_engine_data(&raw)
                     .map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
                 info.text_engine = Some(TextEngineBlock { data: parsed });
             }
@@ -1501,14 +1501,14 @@ impl<R: Read + Seek> PsdReader<R> {
     fn read_layer_color(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
         let record: LayerColorRecord = decode_be(&self.read_bytes(8)?, "layer color")?;
         info.layer_color = Some(match record.color_value {
-            0 => crate::types::LayerColor::None,
-            1 => crate::types::LayerColor::Red,
-            2 => crate::types::LayerColor::Orange,
-            3 => crate::types::LayerColor::Yellow,
-            4 => crate::types::LayerColor::Green,
-            5 => crate::types::LayerColor::Blue,
-            6 => crate::types::LayerColor::Violet,
-            7 => crate::types::LayerColor::Gray,
+            0 => crate::api::types::LayerColor::None,
+            1 => crate::api::types::LayerColor::Red,
+            2 => crate::api::types::LayerColor::Orange,
+            3 => crate::api::types::LayerColor::Yellow,
+            4 => crate::api::types::LayerColor::Green,
+            5 => crate::api::types::LayerColor::Blue,
+            6 => crate::api::types::LayerColor::Violet,
+            7 => crate::api::types::LayerColor::Gray,
             value => {
                 return Err(PsdError::InvalidFormat(format!(
                     "Invalid layer color: {}",
@@ -2305,14 +2305,14 @@ impl PsdWriter {
             "lclr" => {
                 if let Some(color) = info.layer_color {
                     let color_value = match color {
-                        crate::types::LayerColor::None => 0,
-                        crate::types::LayerColor::Red => 1,
-                        crate::types::LayerColor::Orange => 2,
-                        crate::types::LayerColor::Yellow => 3,
-                        crate::types::LayerColor::Green => 4,
-                        crate::types::LayerColor::Blue => 5,
-                        crate::types::LayerColor::Violet => 6,
-                        crate::types::LayerColor::Gray => 7,
+                        crate::api::types::LayerColor::None => 0,
+                        crate::api::types::LayerColor::Red => 1,
+                        crate::api::types::LayerColor::Orange => 2,
+                        crate::api::types::LayerColor::Yellow => 3,
+                        crate::api::types::LayerColor::Green => 4,
+                        crate::api::types::LayerColor::Blue => 5,
+                        crate::api::types::LayerColor::Violet => 6,
+                        crate::api::types::LayerColor::Gray => 7,
                     };
                     temp_writer.write_bytes(&encode_be(
                         &LayerColorRecord {
@@ -2483,7 +2483,7 @@ impl PsdWriter {
                         temp_writer.write_zeros(3)?;
                         // Write descriptor data or raw data
                         if let Some(ref desc) = entry.descriptor {
-                            let mut desc_writer = crate::writer::PsdWriter::new(256);
+                            let mut desc_writer = crate::io::writer::PsdWriter::new(256);
                             desc_writer.write_u32(16)?; // version
                             desc_writer.write_descriptor_structure(desc)?;
                             let desc_bytes = desc_writer.into_buffer();
@@ -2705,7 +2705,7 @@ impl PsdWriter {
             }
             "artb" | "artd" => {
                 if let Some(ref ab) = info.artboard {
-                    use crate::descriptor::{Descriptor, DescriptorValue};
+                    use crate::support::descriptor::{Descriptor, DescriptorValue};
                     let mut rect_desc = Descriptor {
                         name: String::new(),
                         class_id: "Rct1".to_string(),
@@ -2761,7 +2761,7 @@ impl PsdWriter {
                 if let Some(ref block) = info.high_depth_layer_data {
                     if block.key.as_ref() == key {
                         let bits = if key == "Lr16" { 16 } else { 32 };
-                        crate::writer::write_nested_layer_info_block(
+                        crate::io::writer::write_nested_layer_info_block(
                             &mut temp_writer,
                             &block.layers,
                             bits,
@@ -2923,7 +2923,7 @@ impl PsdWriter {
             }
             "Txt2" => {
                 if let Some(ref text_engine) = info.text_engine {
-                    let bytes = crate::engine_data::serialize_engine_data(&text_engine.data, true)
+                    let bytes = crate::support::engine_data::serialize_engine_data(&text_engine.data, true)
                         .map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
                     temp_writer.write_u32(bytes.len() as u32)?;
                     temp_writer.write_bytes(&bytes)?;
@@ -3300,7 +3300,7 @@ mod tests {
 
     #[test]
     fn vstk_descriptor_roundtrip() {
-        use crate::descriptor::{Descriptor, DescriptorValue};
+        use crate::support::descriptor::{Descriptor, DescriptorValue};
         let mut desc = Descriptor {
             name: String::new(),
             class_id: "vstk".to_string(),
@@ -3357,7 +3357,7 @@ mod tests {
     #[test]
     fn test_layer_color_roundtrip() {
         let mut info = LayerAdditionalInfo::default();
-        info.layer_color = Some(crate::types::LayerColor::Blue);
+        info.layer_color = Some(crate::api::types::LayerColor::Blue);
 
         let mut writer = PsdWriter::new(128);
         let length = writer.write_additional_info("lclr", &info).unwrap();
@@ -3373,7 +3373,7 @@ mod tests {
             .read_additional_info("lclr", length, &mut read_info)
             .unwrap();
 
-        assert_eq!(read_info.layer_color, Some(crate::types::LayerColor::Blue));
+        assert_eq!(read_info.layer_color, Some(crate::api::types::LayerColor::Blue));
     }
 
     #[test]
@@ -3449,8 +3449,8 @@ mod tests {
                 key_origin_rrect_radii: None,
                 key_origin_shape_bounding_box: None,
                 key_origin_box_corners: Some(vec![
-                    crate::types::Point { x: 1.0, y: 2.0 },
-                    crate::types::Point { x: 3.0, y: 4.0 },
+                    crate::api::types::Point { x: 1.0, y: 2.0 },
+                    crate::api::types::Point { x: 3.0, y: 4.0 },
                 ]),
                 transform: Some(vec![1.0, 0.0, 0.0, 1.0, 10.0, 20.0]),
             }],
@@ -3795,14 +3795,14 @@ mod tests {
             left: Some(0),
             bottom: Some(1),
             right: Some(1),
-            blend_mode: Some(crate::types::BlendMode::Normal),
+            blend_mode: Some(crate::api::types::BlendMode::Normal),
             opacity: Some(1.0),
-            raw_data: Some(crate::layer::LayerRawData {
-                color_mode: crate::types::ColorMode::RGB,
+            raw_data: Some(crate::api::layer::LayerRawData {
+                color_mode: crate::api::types::ColorMode::RGB,
                 bits_per_channel: 16,
-                channels: vec![crate::layer::LayerRawDataChannel {
-                    id: crate::types::ChannelID::Color0,
-                    compression: crate::types::Compression::RawData,
+                channels: vec![crate::api::layer::LayerRawDataChannel {
+                    id: crate::api::types::ChannelID::Color0,
+                    compression: crate::api::types::Compression::RawData,
                     data: Some(vec![0x12, 0x34]),
                 }],
                 large: false,
@@ -3831,7 +3831,7 @@ mod tests {
 
     #[test]
     fn adjustment_brit_roundtrip() {
-        use crate::adjustments::{AdjustmentLayer, BrightnessContrast};
+        use crate::api::adjustments::{AdjustmentLayer, BrightnessContrast};
 
         let mut info = LayerAdditionalInfo::default();
         // brit writer emits 8 zero bytes (legacy block)
@@ -3989,9 +3989,9 @@ mod tests {
     #[test]
     fn txt2_roundtrip_engine_data() {
         use std::collections::HashMap;
-        let engine = crate::engine_data::EngineValue::Object(HashMap::from([(
+        let engine = crate::support::engine_data::EngineValue::Object(HashMap::from([(
             "_DocumentObjects".to_string(),
-            crate::engine_data::EngineValue::Object(HashMap::new()),
+            crate::support::engine_data::EngineValue::Object(HashMap::new()),
         )]));
         let mut info = LayerAdditionalInfo::default();
         info.text_engine = Some(TextEngineBlock {
@@ -4012,9 +4012,9 @@ mod tests {
     #[test]
     fn txt2_writes_inner_length_prefix() {
         use std::collections::HashMap;
-        let engine = crate::engine_data::EngineValue::Object(HashMap::from([(
+        let engine = crate::support::engine_data::EngineValue::Object(HashMap::from([(
             "_DocumentObjects".to_string(),
-            crate::engine_data::EngineValue::Object(HashMap::new()),
+            crate::support::engine_data::EngineValue::Object(HashMap::new()),
         )]));
         let mut info = LayerAdditionalInfo::default();
         info.text_engine = Some(TextEngineBlock { data: engine });

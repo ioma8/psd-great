@@ -2,18 +2,18 @@
 //!
 //! Provides functionality to write PSD files.
 
-use crate::binrw_support::{
+use crate::support::binrw_support::{
     encode_be, ChannelInfoRecord, GlobalLayerMaskRecord, LayerBlendRecord, LayerMaskPrefixRecord,
     LayerRecordBounds, PsbChannelInfoRecord, PsdHeaderRecord,
 };
-use crate::compression;
-use crate::error::{PsdError, Result};
-use crate::helpers::{
+use crate::support::compression;
+use crate::support::error::{PsdError, Result};
+use crate::support::helpers::{
     clamp, from_blend_mode, has_alpha, LayerBlendFlags, LayerMaskParameterFlags, LayerMaskStateBits,
 };
-use crate::layer::Layer;
-use crate::psd::{GlobalLayerMaskInfo, Psd, WriteOptions};
-use crate::types::{BlendMode, ChannelID, Color, ColorMode, Compression};
+use crate::api::layer::Layer;
+use crate::api::psd::{GlobalLayerMaskInfo, Psd, WriteOptions};
+use crate::api::types::{BlendMode, ChannelID, Color, ColorMode, Compression};
 use byteorder::{BigEndian, WriteBytesExt};
 use std::io::Cursor;
 
@@ -357,7 +357,7 @@ pub fn write_psd(psd: &Psd, options: &WriteOptions) -> Result<Vec<u8>> {
     // Apply prewrite passes
     let mut psd = psd.clone();
     apply_resource_prewrite(&mut psd);
-    crate::document_resource_postprocess::apply_document_prewrite(&mut psd)?;
+    crate::format::document_resource_postprocess::apply_document_prewrite(&mut psd)?;
     apply_text_prewrite(&mut psd)?;
 
     let header = PsdHeaderRecord {
@@ -419,7 +419,7 @@ fn write_color_mode_data(writer: &mut PsdWriter, psd: &Psd) -> Result<()> {
 fn write_image_resources(writer: &mut PsdWriter, psd: &Psd, _options: &WriteOptions) -> Result<()> {
     writer.write_section(1, false, |writer| {
         if let Some(ref resources) = psd.image_resources {
-            crate::image_resources::write_image_resources(writer, resources)?;
+            crate::format::image_resources::write_image_resources(writer, resources)?;
         }
         Ok(())
     })
@@ -441,7 +441,7 @@ fn write_layer_and_mask_info(
         write_global_layer_mask_info(writer, psd.global_layer_mask_info.as_ref())?;
 
         // Write document-level tagged blocks
-        crate::additional_info::write_layer_additional_info_with_options(
+        crate::format::additional_info::write_layer_additional_info_with_options(
             writer,
             &psd.additional_info,
             psb,
@@ -687,7 +687,7 @@ fn write_layer_record(
         writer.write_pascal_string(name, 4)?;
 
         // Write tagged blocks (additional layer info)
-        crate::additional_info::write_layer_additional_info_with_options(
+        crate::format::additional_info::write_layer_additional_info_with_options(
             writer,
             &layer.additional_info,
             psb,
@@ -1055,7 +1055,7 @@ fn expand_samples_for_depth(samples: &[u8], bits_per_channel: u8) -> Vec<u8> {
 }
 
 fn extract_layer_channel_data(
-    image_data: Option<&crate::types::PixelData>,
+    image_data: Option<&crate::api::types::PixelData>,
     width: usize,
     height: usize,
     offset: usize,
@@ -1094,9 +1094,9 @@ fn extract_channel_data_from_rgba(
     out
 }
 
-fn serialize_layer_blending_ranges(ranges: &crate::layer::LayerBlendingRangesData) -> Vec<u8> {
+fn serialize_layer_blending_ranges(ranges: &crate::api::layer::LayerBlendingRangesData) -> Vec<u8> {
     let mut out = Vec::new();
-    let mut write_pair = |pair: &crate::layer::LayerBlendingRangePair| {
+    let mut write_pair = |pair: &crate::api::layer::LayerBlendingRangePair| {
         out.push(pair.src_black);
         out.push(pair.src_white);
         out.push(pair.dst_black);
@@ -1124,7 +1124,7 @@ fn apply_resource_prewrite(psd: &mut Psd) {
 
 /// Apply text prewrite: synthesize Txt2 engine data from TySh layer text data
 fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
-    use crate::engine_data::EngineValue;
+    use crate::support::engine_data::EngineValue;
     use std::collections::HashMap;
 
     let mut text_objects = Vec::new();
@@ -1138,7 +1138,7 @@ fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
                 if let Some(ref mut desc) = text.text_data {
                     desc.items.insert(
                         "TextIndex".to_string(),
-                        crate::descriptor::DescriptorValue::Integer(text_index),
+                        crate::support::descriptor::DescriptorValue::Integer(text_index),
                     );
                 }
 
@@ -1146,11 +1146,11 @@ fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
                 let mut paragraph_run_array = Vec::new();
 
                 if let Some(ref text_desc) = text.text_data {
-                    if let Some(crate::descriptor::DescriptorValue::DataBytes(engine_bytes)) =
+                    if let Some(crate::support::descriptor::DescriptorValue::DataBytes(engine_bytes)) =
                         text_desc.items.get("EngineData")
                     {
                         if let Ok(EngineValue::Object(engine_map)) =
-                            crate::engine_data::parse_engine_data(engine_bytes)
+                            crate::support::engine_data::parse_engine_data(engine_bytes)
                         {
                             if let Some(EngineValue::Object(engine_dict)) =
                                 engine_map.get("EngineDict")
@@ -1236,7 +1236,7 @@ fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
                 .or_insert(doc_resources);
         }
 
-        psd.additional_info.text_engine = Some(crate::additional_info::TextEngineBlock {
+        psd.additional_info.text_engine = Some(crate::format::additional_info::TextEngineBlock {
             data: EngineValue::Object(synthesized),
         });
     }

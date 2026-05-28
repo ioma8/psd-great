@@ -2,7 +2,7 @@
 //!
 //! Provides reading and writing of ASE color palette files.
 
-use crate::error::{PsdError, Result};
+use crate::support::error::{PsdError, Result};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Write};
 

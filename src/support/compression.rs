@@ -2,7 +2,7 @@
 //!
 //! Supports RLE and ZIP compression methods used in PSD files.
 
-use crate::error::{PsdError, Result};
+use crate::support::error::{PsdError, Result};
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use flate2::Compression as FlateCompression;

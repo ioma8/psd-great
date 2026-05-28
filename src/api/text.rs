@@ -1,4 +1,4 @@
-use crate::types::*;
+use crate::api::types::*;
 
 /// Font information
 #[derive(Debug, Clone, PartialEq)]

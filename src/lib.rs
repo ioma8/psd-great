@@ -6,47 +6,27 @@
 //! since grown into a broader PSD/PSB implementation with expanded feature
 //! coverage and typed data structures for working with Photoshop files.
 //!
-//! ## Modules
+//! ## Module Groups
 //!
-//! - `types` - Core types including blend modes, color modes, and basic data structures
-//! - `effects` - Layer effects structures (shadows, glows, strokes, overlays, etc.)
-//! - `text` - Text layer related structures
-//! - `layer` - Layer structure and related types including adjustments
-//! - `psd` - Main Psd structure and image resources
-//! - `error` - Error types using thiserror
-//! - `reader` - PSD file reading functionality
-//! - `writer` - PSD file writing functionality
-//! - `helpers` - Helper utilities for PSD operations
-//! - `compression` - Compression and decompression algorithms
-//! - `descriptor` - Descriptor structure parsing and writing
-//! - `image_resources` - Image resource handlers
-//! - `additional_info` - Layer additional information handlers
+//! - `api` - Public PSD document model types
+//! - `format` - PSD/PSB wire-format sections and transforms
+//! - `io` - High-level readers and writers
+//! - `support` - Shared low-level helpers
+//! - `formats` - Additional Adobe/Photoshop-adjacent file formats
 
-pub mod additional_info;
-pub mod adjustments;
-pub mod compression;
-pub mod descriptor;
-pub mod document_resource_postprocess;
-pub mod effects;
-pub mod error;
-pub mod helpers;
-pub mod image_resources;
-pub mod layer;
-pub mod psd;
-pub mod reader;
-pub mod text;
-pub mod types;
-pub mod writer;
+pub mod api;
+pub mod format;
+pub mod io;
+pub mod support;
+pub mod formats;
 
-// Additional format support modules
-pub mod abr;
-pub mod ase;
-mod binrw_support;
-pub mod csh;
+pub use api::{adjustments, effects, layer, psd, text, types};
+pub use format::{additional_info, document_resource_postprocess, image_resources};
+pub use formats::{abr, ase, csh};
+pub use io::{reader, writer};
+pub use support::{compression, descriptor, engine_data, error, helpers, jpeg, utf8};
+
 pub mod effects_helpers;
-pub mod engine_data;
-pub mod jpeg;
-pub mod utf8;
 
 // Re-export commonly used types at the crate root
 pub use additional_info::LayerAdditionalInfo;

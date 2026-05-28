@@ -100,7 +100,7 @@ pub enum ColorMode {
 }
 
 impl ColorMode {
-    pub fn from_u16(value: u16) -> crate::error::Result<Self> {
+    pub fn from_u16(value: u16) -> crate::support::error::Result<Self> {
         match value {
             0 => Ok(ColorMode::Bitmap),
             1 => Ok(ColorMode::Grayscale),
@@ -110,7 +110,7 @@ impl ColorMode {
             7 => Ok(ColorMode::Multichannel),
             8 => Ok(ColorMode::Duotone),
             9 => Ok(ColorMode::Lab),
-            _ => Err(crate::error::PsdError::InvalidColorMode(value as u8)),
+            _ => Err(crate::support::error::PsdError::InvalidColorMode(value as u8)),
         }
     }
 }
@@ -628,13 +628,13 @@ pub enum Compression {
 }
 
 impl Compression {
-    pub fn from_u16(value: u16) -> crate::error::Result<Self> {
+    pub fn from_u16(value: u16) -> crate::support::error::Result<Self> {
         match value {
             0 => Ok(Compression::RawData),
             1 => Ok(Compression::RleCompressed),
             2 => Ok(Compression::ZipWithoutPrediction),
             3 => Ok(Compression::ZipWithPrediction),
-            _ => Err(crate::error::PsdError::Compression(format!(
+            _ => Err(crate::support::error::PsdError::Compression(format!(
                 "Invalid compression type: {}",
                 value
             ))),

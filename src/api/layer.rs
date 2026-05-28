@@ -1,5 +1,5 @@
-use crate::effects::LayerEffectsInfo;
-use crate::types::*;
+use crate::api::effects::LayerEffectsInfo;
+use crate::api::types::*;
 
 /// Layer mask data
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -309,8 +309,8 @@ pub struct GradientMapAdjustment {
     pub reverse: Option<bool>,
     pub method: Option<InterpolationMethod>,
     pub smoothness: Option<f64>,
-    pub color_stops: Option<Vec<crate::effects::ColorStop>>,
-    pub opacity_stops: Option<Vec<crate::effects::OpacityStop>>,
+    pub color_stops: Option<Vec<crate::api::effects::ColorStop>>,
+    pub opacity_stops: Option<Vec<crate::api::effects::OpacityStop>>,
     pub roughness: Option<f64>,
     pub color_model: Option<String>,
     pub random_seed: Option<i32>,
@@ -349,12 +349,12 @@ pub struct LinkedFile {
     pub creator: Option<PsdStringCode>,
     pub data: Option<Vec<u8>>,
     pub time: Option<String>,
-    pub descriptor: Option<crate::descriptor::Descriptor>,
+    pub descriptor: Option<crate::support::descriptor::Descriptor>,
     pub child_document_id: Option<String>,
     pub asset_mod_time: Option<f64>,
     pub asset_locked_state: Option<u8>,
     pub linked_file: Option<LinkedFileInfo>,
-    pub open_descriptor: Option<crate::descriptor::Descriptor>,
+    pub open_descriptor: Option<crate::support::descriptor::Descriptor>,
 }
 
 /// Linked file info
@@ -374,7 +374,7 @@ pub struct KeyDescriptorItem {
     pub key_origin_type: Option<PsdIntCode>,
     pub key_origin_resolution: Option<f64>,
     pub key_origin_rrect_radii: Option<RRectRadii>,
-    pub key_origin_shape_bounding_box: Option<crate::text::UnitsBounds>,
+    pub key_origin_shape_bounding_box: Option<crate::api::text::UnitsBounds>,
     pub key_origin_box_corners: Option<Vec<Point>>,
     pub transform: Option<Vec<f64>>,
 }
@@ -703,7 +703,7 @@ pub struct Layer {
     pub opened: Option<bool>,
     pub link_group: Option<i32>,
     pub link_group_enabled: Option<bool>,
-    pub additional_info: crate::additional_info::LayerAdditionalInfo,
+    pub additional_info: crate::format::additional_info::LayerAdditionalInfo,
     pub blending_ranges_data: Option<LayerBlendingRangesData>,
 }
 

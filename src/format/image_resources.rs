@@ -3,20 +3,20 @@
 //! Image resources contain document-level information like resolution,
 //! guides, grids, color profiles, and thumbnails.
 
-use crate::binrw_support::{
+use crate::support::binrw_support::{
     decode_be, encode_be, DisplayInfoRecord, GridAndGuidesHeaderRecord, GuideRecord,
     ImageResourceHeaderRecord, ImageResourceLengthRecord, LayerStateRecord, PrintFlagsRecord,
     PrintScaleRecord, ResolutionInfoRecord, SignedI32Record, ThumbnailHeaderRecord,
     U16ListCountRecord, U32ValueRecord, U8BoolRecord,
 };
-use crate::descriptor::Descriptor;
-use crate::error::{PsdError, Result};
-use crate::reader::PsdReader;
-use crate::types::{
+use crate::support::descriptor::Descriptor;
+use crate::support::error::{PsdError, Result};
+use crate::io::reader::PsdReader;
+use crate::api::types::{
     BlendMode, Color, DisplayUnit, Fraction, LayerCompCapturedInfo, Point, RenderingIntent,
     SliceAlignment, SliceOrigin, SliceSourceType, SliceType,
 };
-use crate::writer::PsdWriter;
+use crate::io::writer::PsdWriter;
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek};
 
@@ -111,7 +111,7 @@ pub struct ResourceVisibility {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorSamplersResource {
     pub version: u32,
-    pub samplers: Vec<crate::psd::ColorSampler>,
+    pub samplers: Vec<crate::api::psd::ColorSampler>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -238,16 +238,16 @@ fn parse_color_samplers_resource(bytes: &[u8]) -> ColorSamplersResource {
             bytes[offset + 7],
         ]);
         let position = match version {
-            1 => crate::psd::ColorSamplerPosition::V1 {
+            1 => crate::api::psd::ColorSamplerPosition::V1 {
                 horizontal,
                 vertical,
             },
-            2 => crate::psd::ColorSamplerPosition::V2 {
+            2 => crate::api::psd::ColorSamplerPosition::V2 {
                 horizontal,
                 vertical,
                 depth: u16::from_be_bytes([bytes[offset + 10], bytes[offset + 11]]),
             },
-            _ => crate::psd::ColorSamplerPosition::Unsupported {
+            _ => crate::api::psd::ColorSamplerPosition::Unsupported {
                 version,
                 horizontal,
                 vertical,
@@ -258,7 +258,7 @@ fn parse_color_samplers_resource(bytes: &[u8]) -> ColorSamplersResource {
                 },
             },
         };
-        samplers.push(crate::psd::ColorSampler {
+        samplers.push(crate::api::psd::ColorSampler {
             position,
             color_space: i16::from_be_bytes([bytes[offset + 8], bytes[offset + 9]]),
         });
@@ -268,7 +268,7 @@ fn parse_color_samplers_resource(bytes: &[u8]) -> ColorSamplersResource {
 }
 
 pub(crate) fn infer_color_sampler_version(
-    samplers: &[crate::psd::ColorSampler],
+    samplers: &[crate::api::psd::ColorSampler],
 ) -> Result<Option<u32>> {
     let Some(first) = samplers.first() else {
         return Ok(None);
@@ -306,11 +306,11 @@ fn build_color_samplers_resource(samplers: &ColorSamplersResource) -> Result<Vec
         bytes.extend_from_slice(&vertical.to_be_bytes());
         bytes.extend_from_slice(&(sampler.color_space as u16).to_be_bytes());
         match &sampler.position {
-            crate::psd::ColorSamplerPosition::V1 { .. } => {}
-            crate::psd::ColorSamplerPosition::V2 { depth, .. } => {
+            crate::api::psd::ColorSamplerPosition::V1 { .. } => {}
+            crate::api::psd::ColorSamplerPosition::V2 { depth, .. } => {
                 bytes.extend_from_slice(&depth.to_be_bytes());
             }
-            crate::psd::ColorSamplerPosition::Unsupported { version, depth, .. } => {
+            crate::api::psd::ColorSamplerPosition::Unsupported { version, depth, .. } => {
                 if *version >= 2 {
                     let depth = depth.ok_or_else(|| {
                         PsdError::InvalidFormat(format!(
@@ -1733,7 +1733,7 @@ mod tests {
         };
         desc.items.insert(
             "path".to_string(),
-            crate::descriptor::DescriptorValue::Text("selection".to_string()),
+            crate::support::descriptor::DescriptorValue::Text("selection".to_string()),
         );
         resources.descriptor_resources.insert(3000, desc.clone());
 
@@ -1776,7 +1776,7 @@ mod tests {
 
     #[test]
     fn thumbnail_header_roundtrips_via_binrw() {
-        let record = crate::binrw_support::ThumbnailHeaderRecord {
+        let record = crate::support::binrw_support::ThumbnailHeaderRecord {
             format: 1,
             width: 5,
             height: 7,
@@ -1788,7 +1788,7 @@ mod tests {
         };
 
         let bytes = encode_be(&record, "thumbnail header").expect("encode");
-        let reparsed: crate::binrw_support::ThumbnailHeaderRecord =
+        let reparsed: crate::support::binrw_support::ThumbnailHeaderRecord =
             decode_be(&bytes, "thumbnail header").expect("decode");
 
         assert_eq!(reparsed, record);
@@ -1798,8 +1798,8 @@ mod tests {
     fn color_sampler_roundtrips_color_space_and_depth() {
         let resource = ColorSamplersResource {
             version: 2,
-            samplers: vec![crate::psd::ColorSampler {
-                position: crate::psd::ColorSamplerPosition::V2 {
+            samplers: vec![crate::api::psd::ColorSampler {
+                position: crate::api::psd::ColorSamplerPosition::V2 {
                     horizontal: 100,
                     vertical: 200,
                     depth: 16,
@@ -1817,8 +1817,8 @@ mod tests {
     fn color_sampler_resource_v1_roundtrips_versioned_position() {
         let resource = ColorSamplersResource {
             version: 1,
-            samplers: vec![crate::psd::ColorSampler {
-                position: crate::psd::ColorSamplerPosition::V1 {
+            samplers: vec![crate::api::psd::ColorSampler {
+                position: crate::api::psd::ColorSamplerPosition::V1 {
                     horizontal: 123,
                     vertical: 456,
                 },
@@ -1837,8 +1837,8 @@ mod tests {
     fn color_sampler_resource_v2_roundtrips_depth_and_position() {
         let resource = ColorSamplersResource {
             version: 2,
-            samplers: vec![crate::psd::ColorSampler {
-                position: crate::psd::ColorSamplerPosition::V2 {
+            samplers: vec![crate::api::psd::ColorSampler {
+                position: crate::api::psd::ColorSamplerPosition::V2 {
                     horizontal: -32,
                     vertical: 4096,
                     depth: 16,
@@ -1858,8 +1858,8 @@ mod tests {
     fn color_sampler_resource_preserves_unsupported_version() {
         let resource = ColorSamplersResource {
             version: 3,
-            samplers: vec![crate::psd::ColorSampler {
-                position: crate::psd::ColorSamplerPosition::Unsupported {
+            samplers: vec![crate::api::psd::ColorSampler {
+                position: crate::api::psd::ColorSamplerPosition::Unsupported {
                     version: 3,
                     horizontal: 7,
                     vertical: 9,
@@ -1881,16 +1881,16 @@ mod tests {
         let resource = ColorSamplersResource {
             version: 2,
             samplers: vec![
-                crate::psd::ColorSampler {
-                    position: crate::psd::ColorSamplerPosition::V2 {
+                crate::api::psd::ColorSampler {
+                    position: crate::api::psd::ColorSamplerPosition::V2 {
                         horizontal: 1,
                         vertical: 2,
                         depth: 16,
                     },
                     color_space: 8,
                 },
-                crate::psd::ColorSampler {
-                    position: crate::psd::ColorSamplerPosition::V1 {
+                crate::api::psd::ColorSampler {
+                    position: crate::api::psd::ColorSamplerPosition::V1 {
                         horizontal: 3,
                         vertical: 4,
                     },
@@ -1910,8 +1910,8 @@ mod tests {
     fn color_sampler_resource_rejects_version_shape_mismatch() {
         let resource = ColorSamplersResource {
             version: 1,
-            samplers: vec![crate::psd::ColorSampler {
-                position: crate::psd::ColorSamplerPosition::V2 {
+            samplers: vec![crate::api::psd::ColorSampler {
+                position: crate::api::psd::ColorSamplerPosition::V2 {
                     horizontal: 1,
                     vertical: 2,
                     depth: 16,
@@ -1931,8 +1931,8 @@ mod tests {
     fn color_sampler_resource_rejects_missing_depth_for_unsupported_version_two_or_higher() {
         let resource = ColorSamplersResource {
             version: 9,
-            samplers: vec![crate::psd::ColorSampler {
-                position: crate::psd::ColorSamplerPosition::Unsupported {
+            samplers: vec![crate::api::psd::ColorSampler {
+                position: crate::api::psd::ColorSamplerPosition::Unsupported {
                     version: 9,
                     horizontal: 1,
                     vertical: 2,
@@ -1951,8 +1951,8 @@ mod tests {
 
     #[test]
     fn color_sampler_public_model_carries_depth_in_position() {
-        let sampler = crate::psd::ColorSampler {
-            position: crate::psd::ColorSamplerPosition::V2 {
+        let sampler = crate::api::psd::ColorSampler {
+            position: crate::api::psd::ColorSamplerPosition::V2 {
                 horizontal: 1,
                 vertical: 2,
                 depth: 16,
@@ -1961,7 +1961,7 @@ mod tests {
         };
 
         match sampler.position {
-            crate::psd::ColorSamplerPosition::V2 { depth, .. } => assert_eq!(depth, 16),
+            crate::api::psd::ColorSamplerPosition::V2 { depth, .. } => assert_eq!(depth, 16),
             _ => panic!("expected version 2 sampler"),
         }
     }
@@ -2011,10 +2011,10 @@ mod tests {
             slices: vec![Slice {
                 id: 1,
                 group_id: 2,
-                origin: crate::types::SliceOrigin::LayerBased,
+                origin: crate::api::types::SliceOrigin::LayerBased,
                 associated_layer_id: 3,
                 name: "slice".to_string(),
-                slice_type: crate::types::SliceType::NoImage,
+                slice_type: crate::api::types::SliceType::NoImage,
                 bounds: SliceBounds {
                     top: 10,
                     left: 20,
@@ -2026,8 +2026,8 @@ mod tests {
                 message: "msg".to_string(),
                 alt_tag: "alt".to_string(),
                 cell_text: "cell".to_string(),
-                horizontal_align: crate::types::SliceAlignment::RightOrBottom,
-                vertical_align: crate::types::SliceAlignment::Other(5),
+                horizontal_align: crate::api::types::SliceAlignment::RightOrBottom,
+                vertical_align: crate::api::types::SliceAlignment::Other(5),
                 alpha: 255,
                 bg_color: [255, 2, 3, 4],
                 cell_is_html: true,

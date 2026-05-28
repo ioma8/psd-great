@@ -3,9 +3,9 @@
 //! Handles Adobe Photoshop descriptor structures used throughout PSD files.
 //! Descriptors are key-value data structures with typed values.
 
-use crate::error::{PsdError, Result};
-use crate::reader::PsdReader;
-use crate::writer::PsdWriter;
+use crate::support::error::{PsdError, Result};
+use crate::io::reader::PsdReader;
+use crate::io::writer::PsdWriter;
 use std::collections::HashMap;
 use std::io::{Read, Seek};
 

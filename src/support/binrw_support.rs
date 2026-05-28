@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use binrw::{BinRead, BinReaderExt, BinWrite, BinWriterExt};
 
-use crate::error::{PsdError, Result};
+use crate::support::error::{PsdError, Result};
 
 /// Display info record (resource 1077) with mixed endianness:
 /// version is big-endian, unit fields are little-endian.
@@ -36,8 +36,8 @@ impl DisplayInfoRecord {
     }
 }
 
-impl From<crate::image_resources::DisplayInfoResource> for DisplayInfoRecord {
-    fn from(info: crate::image_resources::DisplayInfoResource) -> Self {
+impl From<crate::format::image_resources::DisplayInfoResource> for DisplayInfoRecord {
+    fn from(info: crate::format::image_resources::DisplayInfoResource) -> Self {
         Self {
             version: info.version,
             h_res_unit_raw: info.h_res_unit.to_u16().to_le_bytes(),
@@ -53,14 +53,14 @@ impl From<crate::image_resources::DisplayInfoResource> for DisplayInfoRecord {
     }
 }
 
-impl From<DisplayInfoRecord> for crate::image_resources::DisplayInfoResource {
+impl From<DisplayInfoRecord> for crate::format::image_resources::DisplayInfoResource {
     fn from(record: DisplayInfoRecord) -> Self {
-        crate::image_resources::DisplayInfoResource {
+        crate::format::image_resources::DisplayInfoResource {
             version: record.version,
-            h_res_unit: crate::types::DisplayUnit::from_u16(record.h_res_unit()),
-            v_res_unit: crate::types::DisplayUnit::from_u16(record.v_res_unit()),
-            width_unit: crate::types::DisplayUnit::from_u16(record.width_unit()),
-            height_unit: crate::types::DisplayUnit::from_u16(record.height_unit()),
+            h_res_unit: crate::api::types::DisplayUnit::from_u16(record.h_res_unit()),
+            v_res_unit: crate::api::types::DisplayUnit::from_u16(record.v_res_unit()),
+            width_unit: crate::api::types::DisplayUnit::from_u16(record.width_unit()),
+            height_unit: crate::api::types::DisplayUnit::from_u16(record.height_unit()),
         }
     }
 }

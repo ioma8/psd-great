@@ -2,9 +2,9 @@
 //!
 //! Includes blend mode conversion, color space utilities, and image data handling.
 
-use crate::compression;
-use crate::error::{PsdError, Result};
-use crate::types::{BlendMode, ChannelID, PixelData};
+use crate::support::compression;
+use crate::support::error::{PsdError, Result};
+use crate::api::types::{BlendMode, ChannelID, PixelData};
 use bitflags::bitflags;
 use std::collections::HashMap;
 

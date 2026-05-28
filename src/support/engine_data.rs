@@ -2,7 +2,7 @@
 //!
 //! Provides parsing and serialization of Adobe engine data format used for text layers.
 
-use crate::error::{PsdError, Result};
+use crate::support::error::{PsdError, Result};
 use std::collections::HashMap;
 
 /// Engine data value types

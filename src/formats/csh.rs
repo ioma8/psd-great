@@ -2,9 +2,9 @@
 //!
 //! Provides reading of Adobe Photoshop Custom Shape files.
 
-use crate::error::{PsdError, Result};
-use crate::layer::{BezierKnot, BezierPath};
-use crate::types::BooleanOperation;
+use crate::support::error::{PsdError, Result};
+use crate::api::layer::{BezierKnot, BezierPath};
+use crate::api::types::BooleanOperation;
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::{Cursor, Read};
 
@@ -226,7 +226,7 @@ fn read_vector_mask_paths(
                     open: false,
                     operation: Some(BooleanOperation::Combine),
                     knots,
-                    fill_rule: crate::types::PsdStringCode::from("nonzero"),
+                    fill_rule: crate::api::types::PsdStringCode::from("nonzero"),
                 });
             }
             3 => {
@@ -246,7 +246,7 @@ fn read_vector_mask_paths(
                     open: true,
                     operation: Some(BooleanOperation::Combine),
                     knots,
-                    fill_rule: crate::types::PsdStringCode::from("nonzero"),
+                    fill_rule: crate::api::types::PsdStringCode::from("nonzero"),
                 });
             }
             _ => {

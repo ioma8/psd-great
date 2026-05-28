@@ -2,11 +2,11 @@
 //!
 //! Provides reading of Adobe Photoshop brush preset files.
 
-use crate::descriptor::Descriptor;
-use crate::error::{PsdError, Result};
-use crate::layer::PatternInfo;
-use crate::psd::ReadOptions;
-use crate::reader::PsdReader;
+use crate::support::descriptor::Descriptor;
+use crate::support::error::{PsdError, Result};
+use crate::api::layer::PatternInfo;
+use crate::api::psd::ReadOptions;
+use crate::io::reader::PsdReader;
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::{Cursor, Read};
 
@@ -344,7 +344,7 @@ fn descriptor_to_brush(descriptor: &Descriptor) -> Option<Brush> {
         .items
         .get("Nm  ")
         .and_then(|v| {
-            if let crate::descriptor::DescriptorValue::Text(s) = v {
+            if let crate::support::descriptor::DescriptorValue::Text(s) = v {
                 Some(s.clone())
             } else {
                 None

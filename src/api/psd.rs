@@ -1,6 +1,6 @@
-use crate::additional_info::LayerAdditionalInfo;
-use crate::layer::{Layer, LinkedFile};
-use crate::types::*;
+use crate::format::additional_info::LayerAdditionalInfo;
+use crate::api::layer::{Layer, LinkedFile};
+use crate::api::types::*;
 
 /// Animations definition
 #[derive(Debug, Clone, PartialEq)]
@@ -276,10 +276,10 @@ pub struct ColorSampler {
 /// Document slices (resource 1050)
 #[derive(Debug, Clone, PartialEq)]
 pub enum DocumentSlices {
-    Legacy(crate::image_resources::Slices),
+    Legacy(crate::format::image_resources::Slices),
     Descriptor {
         version: u32,
-        descriptor: crate::descriptor::Descriptor,
+        descriptor: crate::support::descriptor::Descriptor,
     },
 }
 
@@ -309,7 +309,7 @@ pub struct Psd {
     pub palette: Option<Vec<RGB>>,
     pub children: Option<Vec<Layer>>,
     pub image_data: Option<PixelData>,
-    pub image_resources: Option<crate::image_resources::ImageResources>,
+    pub image_resources: Option<crate::format::image_resources::ImageResources>,
     pub linked_files: Option<Vec<LinkedFile>>,
     pub artboards: Option<ArtboardsInfo>,
     pub global_layer_mask_info: Option<GlobalLayerMaskInfo>,
@@ -327,14 +327,14 @@ pub struct Psd {
     /// ICC color profile bytes (from resource 1039)
     pub icc_profile: Option<Vec<u8>>,
     /// Document path selection descriptor (resource 3000)
-    pub path_selection_descriptor: Option<crate::descriptor::Descriptor>,
+    pub path_selection_descriptor: Option<crate::support::descriptor::Descriptor>,
     /// Document slices (from resource 1050)
     pub slices: Option<DocumentSlices>,
     pub variable_sets: Option<Vec<VariableSet>>,
     pub data_sets: Option<Vec<Vec<String>>>,
-    pub descriptor_1065: Option<crate::descriptor::Descriptor>,
-    pub descriptor_1074: Option<crate::descriptor::Descriptor>,
-    pub descriptor_1075: Option<crate::descriptor::Descriptor>,
+    pub descriptor_1065: Option<crate::support::descriptor::Descriptor>,
+    pub descriptor_1074: Option<crate::support::descriptor::Descriptor>,
+    pub descriptor_1075: Option<crate::support::descriptor::Descriptor>,
     pub layer_group_ids: Option<Vec<u16>>,
     pub color_samplers: Option<Vec<ColorSampler>>,
     pub display_info: Option<DisplayInfo>,

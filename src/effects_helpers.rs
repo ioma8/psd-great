@@ -2,15 +2,15 @@
 //!
 //! Provides utilities for reading and writing layer effects from PSD files.
 
-use crate::binrw_support::{
+use crate::support::binrw_support::{
     decode_be, encode_be, EffectBlockHeaderRecord, EffectsCommonStateRecord, EffectsHeaderRecord,
 };
-use crate::effects::*;
-use crate::error::{PsdError, Result};
-use crate::helpers::{clamp, from_blend_mode, to_blend_mode};
-use crate::reader::PsdReader;
-use crate::types::{BevelDirection, BevelStyle, BlendMode, Color, Units, UnitsValue};
-use crate::writer::PsdWriter;
+use crate::api::effects::*;
+use crate::support::error::{PsdError, Result};
+use crate::support::helpers::{clamp, from_blend_mode, to_blend_mode};
+use crate::io::reader::PsdReader;
+use crate::api::types::{BevelDirection, BevelStyle, BlendMode, Color, Units, UnitsValue};
+use crate::io::writer::PsdWriter;
 use std::io::{Read, Seek};
 
 /// Default black color used when no color is specified.
@@ -638,7 +638,7 @@ mod tests {
 
         let data = writer.get_buffer().to_vec();
         let cursor = std::io::Cursor::new(data);
-        let mut reader = PsdReader::new(cursor, crate::psd::ReadOptions::default());
+        let mut reader = PsdReader::new(cursor, crate::api::psd::ReadOptions::default());
 
         assert!((read_fixed_point8(&mut reader).unwrap() - 0.0).abs() < 0.01);
         assert!((read_fixed_point8(&mut reader).unwrap() - 0.5).abs() < 0.01);
