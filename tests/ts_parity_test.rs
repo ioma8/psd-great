@@ -1986,9 +1986,9 @@ mod remaining_tagged_block_parity {
             position: psd_great::ColorSamplerPosition::V2 {
                 horizontal: 12,
                 vertical: 34,
+                depth: 16,
             },
             color_space: 8,
-            depth: Some(16),
         }]);
 
         let bytes = write_psd(&psd, &WriteOptions::default()).expect("write");
@@ -2066,7 +2066,6 @@ mod remaining_tagged_block_parity {
                 vertical: 20,
             },
             color_space: 0,
-            depth: None,
         }]);
         psd.display_info = Some(psd_great::psd::DisplayInfo {
             h_res_unit: psd_great::PsdU16Code(1),
@@ -2129,9 +2128,9 @@ mod remaining_tagged_block_parity {
             position: psd_great::ColorSamplerPosition::V2 {
                 horizontal: 4,
                 vertical: 8,
+                depth: 8,
             },
             color_space: 0,
-            depth: Some(8),
         }]);
         psd.display_info = Some(psd_great::psd::DisplayInfo {
             h_res_unit: psd_great::PsdU16Code(1),
@@ -2176,16 +2175,15 @@ mod remaining_tagged_block_parity {
                     vertical: 2,
                 },
                 color_space: 0,
-                depth: None,
             },
             psd_great::psd::ColorSampler {
                 position: psd_great::ColorSamplerPosition::Unsupported {
                     version: 9,
                     horizontal: 3,
                     vertical: 4,
+                    depth: Some(16),
                 },
                 color_space: 8,
-                depth: Some(16),
             },
         ]);
 
@@ -2283,5 +2281,72 @@ mod remaining_tagged_block_parity {
                 "unexpected error: {err}"
             );
         }
+    }
+
+    #[test]
+    fn write_effects_accepts_public_rgba_colors_via_raw_record_conversion() {
+        use psd_great::{
+            read_effects, write_effects, BlendMode, Color, LayerEffectShadow, LayerEffectsInfo,
+            PsdReader, PsdWriter, ReadOptions, Units, UnitsValue, RGBA,
+        };
+        use std::io::Cursor;
+
+        let effects = LayerEffectsInfo {
+            disabled: Some(false),
+            scale: Some(100.0),
+            drop_shadow: Some(vec![LayerEffectShadow {
+                present: Some(true),
+                show_in_dialog: None,
+                enabled: Some(true),
+                size: Some(UnitsValue {
+                    units: Units::Pixels,
+                    value: 5.0,
+                }),
+                intensity: Some(75.0),
+                angle: Some(120.0),
+                distance: Some(UnitsValue {
+                    units: Units::Pixels,
+                    value: 10.0,
+                }),
+                color: Some(Color::RGBA(RGBA {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                    a: 0xff,
+                })),
+                blend_mode: Some(BlendMode::Multiply),
+                opacity: Some(0.75),
+                use_global_light: Some(true),
+                antialiased: None,
+                contour: None,
+                choke: None,
+                layer_conceals: None,
+            }]),
+            inner_shadow: None,
+            outer_glow: None,
+            inner_glow: None,
+            bevel: None,
+            satin: None,
+            solid_fill: None,
+            gradient_overlay: None,
+            pattern_overlay: None,
+            stroke: None,
+        };
+
+        let mut writer = PsdWriter::new(256);
+        write_effects(&mut writer, &effects).unwrap();
+
+        let bytes = writer.into_buffer();
+        let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
+        let reparsed = read_effects(&mut reader).unwrap();
+
+        assert_eq!(
+            reparsed.drop_shadow.as_ref().unwrap()[0].color,
+            Some(Color::Rgb48 {
+                red: 0x1212,
+                green: 0x3434,
+                blue: 0x5656,
+            })
+        );
     }
 }

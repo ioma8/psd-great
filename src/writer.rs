@@ -9,8 +9,7 @@ use crate::binrw_support::{
 use crate::compression;
 use crate::error::{PsdError, Result};
 use crate::helpers::{
-    clamp, from_blend_mode, has_alpha, LayerBlendFlags, LayerMaskParameterFlags,
-    LayerMaskStateBits,
+    clamp, from_blend_mode, has_alpha, LayerBlendFlags, LayerMaskParameterFlags, LayerMaskStateBits,
 };
 use crate::layer::Layer;
 use crate::psd::{GlobalLayerMaskInfo, Psd, WriteOptions};
@@ -815,7 +814,9 @@ fn write_image_data(
             }
         }
         Compression::ZipWithoutPrediction => {
-            let mut planar = Vec::with_capacity(width * height * offsets.len() * bytes_per_sample(bits_per_channel));
+            let mut planar = Vec::with_capacity(
+                width * height * offsets.len() * bytes_per_sample(bits_per_channel),
+            );
             for &offset in offsets {
                 let raw = extract_channel_data_from_rgba(image_data, width, height, offset);
                 planar.extend_from_slice(&expand_samples_for_depth(&raw, bits_per_channel));
@@ -824,7 +825,9 @@ fn write_image_data(
             writer.write_bytes(&compressed)?;
         }
         Compression::ZipWithPrediction => {
-            let mut planar = Vec::with_capacity(width * height * offsets.len() * bytes_per_sample(bits_per_channel));
+            let mut planar = Vec::with_capacity(
+                width * height * offsets.len() * bytes_per_sample(bits_per_channel),
+            );
             for &offset in offsets {
                 let raw = extract_channel_data_from_rgba(image_data, width, height, offset);
                 planar.extend_from_slice(&expand_samples_for_depth(&raw, bits_per_channel));
@@ -1210,7 +1213,11 @@ fn apply_text_prewrite(psd: &mut Psd) -> Result<()> {
     }
 
     if !text_objects.is_empty() {
-        let existing = psd.additional_info.text_engine.as_ref().map(|b| b.data.clone());
+        let existing = psd
+            .additional_info
+            .text_engine
+            .as_ref()
+            .map(|b| b.data.clone());
         let mut synthesized = match existing {
             Some(EngineValue::Object(map)) => map,
             _ => HashMap::new(),

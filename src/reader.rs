@@ -9,8 +9,7 @@ use crate::binrw_support::{
 use crate::compression;
 use crate::error::{PsdError, Result};
 use crate::helpers::{
-    setup_grayscale, to_blend_mode, LayerBlendFlags, LayerMaskParameterFlags,
-    LayerMaskStateBits,
+    setup_grayscale, to_blend_mode, LayerBlendFlags, LayerMaskParameterFlags, LayerMaskStateBits,
 };
 use crate::layer::{Layer, LayerMaskData, LayerRawData, LayerRawDataChannel};
 use crate::psd::{GlobalLayerMaskInfo, Psd, ReadOptions};
@@ -258,7 +257,7 @@ impl<R: Read + Seek> PsdReader<R> {
 
     /// Read a color value
     pub fn read_color(&mut self) -> Result<crate::types::Color> {
-        use crate::types::{CMYK, Color, Grayscale};
+        use crate::types::{Color, Grayscale, CMYK};
         let color_space = self.read_u16()?;
         let c1 = self.read_u16()?;
         let c2 = self.read_u16()?;
@@ -710,10 +709,10 @@ fn read_layer_mask_data<R: Read + Seek>(
                 if has_real_mask_channel && reader.bytes_left(end_offset) >= 18 {
                     mask.real_flags_byte = Some(reader.read_u8()?);
                     mask.real_default_color = Some(reader.read_u8()?);
-                    mask.real_top    = Some(reader.read_i32()?);
-                    mask.real_left   = Some(reader.read_i32()?);
+                    mask.real_top = Some(reader.read_i32()?);
+                    mask.real_left = Some(reader.read_i32()?);
                     mask.real_bottom = Some(reader.read_i32()?);
-                    mask.real_right  = Some(reader.read_i32()?);
+                    mask.real_right = Some(reader.read_i32()?);
                 }
                 let param_flags = LayerMaskParameterFlags::from_bits_retain(reader.read_u8()?);
                 if param_flags.contains(LayerMaskParameterFlags::USER_MASK_DENSITY)
@@ -746,12 +745,12 @@ fn read_layer_mask_data<R: Read + Seek>(
             && !channel_ids.contains(&-3)
         {
             // Old format: extra bytes are the real mask (only if no -3 channel to avoid over-read)
-            mask.real_flags_byte    = Some(reader.read_u8()?);
+            mask.real_flags_byte = Some(reader.read_u8()?);
             mask.real_default_color = Some(reader.read_u8()?);
-            mask.real_top    = Some(reader.read_i32()?);
-            mask.real_left   = Some(reader.read_i32()?);
+            mask.real_top = Some(reader.read_i32()?);
+            mask.real_left = Some(reader.read_i32()?);
             mask.real_bottom = Some(reader.read_i32()?);
-            mask.real_right  = Some(reader.read_i32()?);
+            mask.real_right = Some(reader.read_i32()?);
         }
 
         // Skip any remaining mask data
@@ -1154,7 +1153,13 @@ fn read_image_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd) -> 
             let mut data = compression::decompress_zip(&compressed, expected_total)?;
             data = normalize_channel_data(data, expected_total);
             if compression == Compression::ZipWithPrediction {
-                reverse_prediction_planar(&mut data, width, height, total_channels, bits_per_channel);
+                reverse_prediction_planar(
+                    &mut data,
+                    width,
+                    height,
+                    total_channels,
+                    bits_per_channel,
+                );
             }
             for (idx, plane) in planes.iter_mut().enumerate() {
                 let start = idx * channel_len_bytes;
@@ -1193,7 +1198,7 @@ fn read_image_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd) -> 
             let m = planes.get(1).and_then(|p| p.get(i)).copied().unwrap_or(0) as u32;
             let y = planes.get(2).and_then(|p| p.get(i)).copied().unwrap_or(0) as u32;
             let k = planes.get(3).and_then(|p| p.get(i)).copied().unwrap_or(0) as u32;
-            rgba[i * 4]     = ((255 * (255 - c) * (255 - k)) / (255 * 255)) as u8;
+            rgba[i * 4] = ((255 * (255 - c) * (255 - k)) / (255 * 255)) as u8;
             rgba[i * 4 + 1] = ((255 * (255 - m) * (255 - k)) / (255 * 255)) as u8;
             rgba[i * 4 + 2] = ((255 * (255 - y) * (255 - k)) / (255 * 255)) as u8;
             if total_channels <= 4 {
@@ -1306,8 +1311,6 @@ fn sample_to_u8(channel: &[u8], index: usize, depth: u16) -> u8 {
     }
 }
 
-
-
 fn channel_offset(id: ChannelID, cmyk: bool) -> i32 {
     match id {
         ChannelID::Color0 => 0,
@@ -1347,19 +1350,20 @@ fn parse_layer_blending_ranges(bytes: &[u8]) -> Option<crate::layer::LayerBlendi
         return None;
     }
     let mut offset = 0;
-    let read_pair = |buf: &[u8], offset: &mut usize| -> Option<crate::layer::LayerBlendingRangePair> {
-        if *offset + 4 > buf.len() {
-            return None;
-        }
-        let pair = crate::layer::LayerBlendingRangePair {
-            src_black: buf[*offset],
-            src_white: buf[*offset + 1],
-            dst_black: buf[*offset + 2],
-            dst_white: buf[*offset + 3],
+    let read_pair =
+        |buf: &[u8], offset: &mut usize| -> Option<crate::layer::LayerBlendingRangePair> {
+            if *offset + 4 > buf.len() {
+                return None;
+            }
+            let pair = crate::layer::LayerBlendingRangePair {
+                src_black: buf[*offset],
+                src_white: buf[*offset + 1],
+                dst_black: buf[*offset + 2],
+                dst_white: buf[*offset + 3],
+            };
+            *offset += 4;
+            Some(pair)
         };
-        *offset += 4;
-        Some(pair)
-    };
 
     let composite_gray = read_pair(bytes, &mut offset);
     let mut channels = Vec::new();
@@ -1484,9 +1488,7 @@ mod tests {
         let bytes = [
             0x00, 0x08, // grayscale
             0x27, 0x10, // 10000
-            0x00, 0x00,
-            0x00, 0x00,
-            0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
         let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
         let color = reader.read_color().unwrap();
@@ -1500,10 +1502,7 @@ mod tests {
     fn test_read_color_preserves_opaque_custom_space() {
         let bytes = [
             0x00, 0x03, // custom space
-            0x00, 0x01,
-            0x00, 0x02,
-            0x00, 0x03,
-            0x00, 0x04,
+            0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04,
         ];
         let mut reader = PsdReader::new(Cursor::new(bytes), ReadOptions::default());
         let color = reader.read_color().unwrap();

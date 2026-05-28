@@ -12,7 +12,9 @@ use crate::compression;
 use crate::descriptor::{Descriptor, DescriptorValue};
 use crate::error::{PsdError, Result};
 /// Read a pascal-style string with 4-byte length prefix (matching TS readPascalStringWithPadding).
-fn read_pascal_string_with_padding<R: Read + std::io::Seek>(reader: &mut crate::reader::PsdReader<R>) -> crate::error::Result<String> {
+fn read_pascal_string_with_padding<R: Read + std::io::Seek>(
+    reader: &mut crate::reader::PsdReader<R>,
+) -> crate::error::Result<String> {
     let length_plus_one = reader.read_u32()? as usize;
     if length_plus_one == 0 {
         return Ok(String::new());
@@ -282,6 +284,8 @@ pub struct LayerAdditionalInfo {
     pub filter_effects: Option<FilterEffectsBlock>,
     /// Pixel source data (PxSD)
     pub pixel_source_data: Option<PixelSourceDataBlock>,
+    /// Opaque payloads for recognized tagged blocks that are not yet semantically modeled.
+    pub raw_blocks: HashMap<String, Vec<u8>>,
 }
 
 /// Text engine block (Txt2) containing engine data
@@ -747,11 +751,11 @@ impl<R: Read + Seek> PsdReader<R> {
                 let indexed = channels.first()?;
                 for index in 0..pixel_count {
                     let color_index = *indexed.get(index).unwrap_or(&0) as usize;
-                    let color = palette.get(color_index).cloned().unwrap_or(RGB {
-                        r: 0,
-                        g: 0,
-                        b: 0,
-                    });
+                    let color =
+                        palette
+                            .get(color_index)
+                            .cloned()
+                            .unwrap_or(RGB { r: 0, g: 0, b: 0 });
                     rgba[index * 4] = color.r;
                     rgba[index * 4 + 1] = color.g;
                     rgba[index * 4 + 2] = color.b;
@@ -820,33 +824,33 @@ impl<R: Read + Seek> PsdReader<R> {
         if let Some(slot) = red {
             let count = pixel_count.min(slot.channel_data.data.len() / depth.max(1).div_ceil(8));
             for index in 0..count {
-                rgba[index * 4] =
-                    Self::sample_to_byte(&slot.channel_data.data, index, depth);
+                rgba[index * 4] = Self::sample_to_byte(&slot.channel_data.data, index, depth);
             }
         }
         if let Some(slot) = green {
             let count = pixel_count.min(slot.channel_data.data.len() / depth.max(1).div_ceil(8));
             for index in 0..count {
-                rgba[index * 4 + 1] =
-                    Self::sample_to_byte(&slot.channel_data.data, index, depth);
+                rgba[index * 4 + 1] = Self::sample_to_byte(&slot.channel_data.data, index, depth);
             }
         }
         if let Some(slot) = blue {
             let count = pixel_count.min(slot.channel_data.data.len() / depth.max(1).div_ceil(8));
             for index in 0..count {
-                rgba[index * 4 + 2] =
-                    Self::sample_to_byte(&slot.channel_data.data, index, depth);
+                rgba[index * 4 + 2] = Self::sample_to_byte(&slot.channel_data.data, index, depth);
             }
         }
         if let Some(slot) = alpha {
             let count = pixel_count.min(slot.channel_data.data.len() / depth.max(1).div_ceil(8));
             for index in 0..count {
-                rgba[index * 4 + 3] =
-                    Self::sample_to_byte(&slot.channel_data.data, index, depth);
+                rgba[index * 4 + 3] = Self::sample_to_byte(&slot.channel_data.data, index, depth);
             }
         }
 
-        PixelData { data: rgba, width, height }
+        PixelData {
+            data: rgba,
+            width,
+            height,
+        }
     }
 
     fn read_pattern_entry(&mut self, length: usize) -> Result<PatternBlockEntry> {
@@ -1141,10 +1145,19 @@ impl<R: Read + Seek> PsdReader<R> {
                 info.descriptor_blocks.insert(key.to_string(), descriptor);
             }
             "Txt2" => {
-                let raw = self.read_bytes(length)?;
+                let inner_length = self.read_u32()? as usize;
+                let raw = self.read_bytes(inner_length.min(length.saturating_sub(4)))?;
                 let parsed = crate::engine_data::parse_engine_data(&raw)
                     .map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
                 info.text_engine = Some(TextEngineBlock { data: parsed });
+            }
+            "LMsk" | "Mtrn" | "Mt16" | "Mt32" | "FXid" => {
+                info.raw_blocks
+                    .insert(key.to_string(), self.read_bytes(length)?);
+            }
+            "abdd" | "anFX" | "cinf" | "SoLE" => {
+                info.raw_blocks
+                    .insert(key.to_string(), self.read_bytes(length)?);
             }
             "Anno" => {
                 let _major = self.read_u16()?;
@@ -1248,8 +1261,10 @@ impl<R: Read + Seek> PsdReader<R> {
                                     <= (chunk_start + chunk_length).saturating_sub(self.offset)
                                 {
                                     let slot_bytes = self.read_bytes(slot_length as usize)?;
-                                    let width = (rect.unwrap().right - rect.unwrap().left).max(0) as usize;
-                                    let height = (rect.unwrap().bottom - rect.unwrap().top).max(0) as usize;
+                                    let width =
+                                        (rect.unwrap().right - rect.unwrap().left).max(0) as usize;
+                                    let height =
+                                        (rect.unwrap().bottom - rect.unwrap().top).max(0) as usize;
                                     // Slot data: first 2 bytes are compression type
                                     let comp = if slot_bytes.len() >= 2 {
                                         u16::from_be_bytes([slot_bytes[0], slot_bytes[1]])
@@ -1266,24 +1281,41 @@ impl<R: Read + Seek> PsdReader<R> {
                                             // PackBits: row-length table (u16 per row) then data
                                             let row_table_bytes = height * 2;
                                             if slot_bytes.len() >= 2 + row_table_bytes {
-                                                let row_lengths: Vec<u16> = slot_bytes[2..2 + row_table_bytes]
+                                                let row_lengths: Vec<u16> = slot_bytes
+                                                    [2..2 + row_table_bytes]
                                                     .chunks_exact(2)
                                                     .map(|b| u16::from_be_bytes([b[0], b[1]]))
                                                     .collect();
                                                 let encoded = &slot_bytes[2 + row_table_bytes..];
                                                 let mut out = vec![0u8; output_size];
-                                                let _ = compression::decompress_rle(encoded, &mut out, row_width, height, &row_lengths);
+                                                let _ = compression::decompress_rle(
+                                                    encoded,
+                                                    &mut out,
+                                                    row_width,
+                                                    height,
+                                                    &row_lengths,
+                                                );
                                                 out
                                             } else {
                                                 slot_bytes.get(2..).unwrap_or(&[]).to_vec()
                                             }
                                         }
-                                        2 => compression::decompress_zip(&slot_bytes[2..], output_size)
-                                            .unwrap_or_else(|_| slot_bytes.get(2..).unwrap_or(&[]).to_vec()),
-                                        3 => compression::decompress_zip_with_prediction(
-                                            &slot_bytes[2..], width, height, slot_depth as u16,
+                                        2 => compression::decompress_zip(
+                                            &slot_bytes[2..],
+                                            output_size,
                                         )
-                                        .unwrap_or_else(|_| slot_bytes.get(2..).unwrap_or(&[]).to_vec()),
+                                        .unwrap_or_else(|_| {
+                                            slot_bytes.get(2..).unwrap_or(&[]).to_vec()
+                                        }),
+                                        3 => compression::decompress_zip_with_prediction(
+                                            &slot_bytes[2..],
+                                            width,
+                                            height,
+                                            slot_depth as u16,
+                                        )
+                                        .unwrap_or_else(|_| {
+                                            slot_bytes.get(2..).unwrap_or(&[]).to_vec()
+                                        }),
                                         _ => slot_bytes.get(2..).unwrap_or(&[]).to_vec(),
                                     };
                                     slots.push(FilterEffectsSlot {
@@ -1316,7 +1348,8 @@ impl<R: Read + Seek> PsdReader<R> {
                                 } else {
                                     Vec::new()
                                 };
-                                let width = (preview_rect.right - preview_rect.left).max(0) as usize;
+                                let width =
+                                    (preview_rect.right - preview_rect.left).max(0) as usize;
                                 let height =
                                     (preview_rect.bottom - preview_rect.top).max(0) as usize;
                                 preview = Some(FilterEffectsPreview {
@@ -1512,8 +1545,7 @@ impl<R: Read + Seek> PsdReader<R> {
 
         if length >= 16 {
             sub_type = Some(PsdU32Code(
-                decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "section divider subtype")?
-                    .value,
+                decode_be::<U32ValueRecord>(&self.read_bytes(4)?, "section divider subtype")?.value,
             ));
         }
 
@@ -2050,7 +2082,7 @@ impl<R: Read + Seek> PsdReader<R> {
 
     /// Read using aligned rendering (sn2P)
     fn read_using_aligned_rendering(&mut self, info: &mut LayerAdditionalInfo) -> Result<()> {
-        info.using_aligned_rendering = Some(self.read_u8()? != 0);
+        info.using_aligned_rendering = Some(self.read_u32()? != 0);
         Ok(())
     }
 
@@ -2069,10 +2101,8 @@ impl<R: Read + Seek> PsdReader<R> {
             let descriptor = if raw.len() >= 4 {
                 let ver = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]);
                 if ver == 16 {
-                    let mut sub = PsdReader::new(
-                        std::io::Cursor::new(&raw[4..]),
-                        Default::default(),
-                    );
+                    let mut sub =
+                        PsdReader::new(std::io::Cursor::new(&raw[4..]), Default::default());
                     sub.read_descriptor_structure().ok()
                 } else {
                     None
@@ -2381,7 +2411,9 @@ impl PsdWriter {
                         flags |= ProtectedFlagsBits::ARTBOARDS;
                     }
                     temp_writer.write_bytes(&encode_be(
-                        &ProtectedFlagsRecord { flags: flags.bits() },
+                        &ProtectedFlagsRecord {
+                            flags: flags.bits(),
+                        },
                         "protected flags",
                     )?)?;
                 }
@@ -2553,10 +2585,8 @@ impl PsdWriter {
                             );
                         }
                         if let Some(v) = item.key_origin_type {
-                            items.insert(
-                                "keyOriginType".to_string(),
-                                DescriptorValue::Integer(v.0),
-                            );
+                            items
+                                .insert("keyOriginType".to_string(), DescriptorValue::Integer(v.0));
                         }
                         if let Some(v) = item.key_origin_resolution {
                             items.insert(
@@ -2707,7 +2737,7 @@ impl PsdWriter {
             }
             "sn2P" => {
                 if let Some(using) = info.using_aligned_rendering {
-                    temp_writer.write_u8(if using { 1 } else { 0 })?;
+                    temp_writer.write_u32(if using { 1 } else { 0 })?;
                 }
             }
             "brit" | "levl" | "curv" | "expA" | "blnc" | "phfl" | "hue2" | "selc" | "mixr"
@@ -2893,7 +2923,13 @@ impl PsdWriter {
                 if let Some(ref text_engine) = info.text_engine {
                     let bytes = crate::engine_data::serialize_engine_data(&text_engine.data, true)
                         .map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
+                    temp_writer.write_u32(bytes.len() as u32)?;
                     temp_writer.write_bytes(&bytes)?;
+                }
+            }
+            "LMsk" | "Mtrn" | "Mt16" | "Mt32" | "FXid" | "abdd" | "anFX" | "cinf" | "SoLE" => {
+                if let Some(raw) = info.raw_blocks.get(key) {
+                    temp_writer.write_bytes(raw)?;
                 }
             }
             "Anno" => {
@@ -2917,14 +2953,20 @@ impl PsdWriter {
                         item_writer.write_i32(141)?;
                         // Write color: 8 bytes (colorSpace + 3 scaled channels + padding)
                         item_writer.write_u16(0)?;
-                        item_writer.write_u16(((item.color_l as u32 * 65535 + 127) / 255) as u16)?;
-                        item_writer.write_u16(((item.color_o as u32 * 65535 + 127) / 255) as u16)?;
-                        item_writer.write_u16(((item.color_c as u32 * 65535 + 127) / 255) as u16)?;
+                        item_writer
+                            .write_u16(((item.color_l as u32 * 65535 + 127) / 255) as u16)?;
+                        item_writer
+                            .write_u16(((item.color_o as u32 * 65535 + 127) / 255) as u16)?;
+                        item_writer
+                            .write_u16(((item.color_c as u32 * 65535 + 127) / 255) as u16)?;
                         item_writer.write_u16(0)?;
                         // Strings use 4-byte length prefix format
                         write_pascal_string_with_padding(&mut item_writer, &item.author)?;
                         write_pascal_string_with_padding(&mut item_writer, "")?;
-                        write_pascal_string_with_padding(&mut item_writer, "D:20211012120233+01'00'")?;
+                        write_pascal_string_with_padding(
+                            &mut item_writer,
+                            "D:20211012120233+01'00'",
+                        )?;
                         item_writer.write_u32((12 + 2 + item.text.len() * 2) as u32)?;
                         item_writer.write_signature("txtC")?;
                         item_writer.write_u32((2 + item.text.len() * 2) as u32)?;
@@ -3106,20 +3148,69 @@ pub fn read_layer_additional_info<R: Read + Seek>(
         };
         reader.read_additional_info(&key, data_length, &mut info)?;
 
-        // Tagged blocks are padded to a 4-byte boundary (spec §13.1)
-        let remainder = data_length % 4;
-        if remainder != 0 {
-            reader.skip_bytes(4 - remainder)?;
+        // Most blocks follow even-byte padding. Some real-world files align
+        // these blocks to 4-byte boundaries, so accept both layouts.
+        let even_padding = (2 - (data_length % 2)) % 2;
+        if even_padding != 0 {
+            reader.skip_bytes(even_padding)?;
+        }
+        if (reader.offset - start_offset) < length as u64 {
+            let next = reader.peek_signature()?;
+            if next != "8BIM" && next != "8B64" {
+                let four_padding = (4 - (data_length % 4)) % 4;
+                if four_padding > even_padding {
+                    reader.skip_bytes(four_padding - even_padding)?;
+                }
+            }
         }
     }
 
     Ok(info)
 }
 
-/// Write all additional info sections for a layer
-pub fn write_layer_additional_info(
+fn tagged_block_uses_u64_length(key: &str, large: bool) -> bool {
+    large
+        && matches!(
+            key,
+            "LMsk"
+                | "Lr16"
+                | "Lr32"
+                | "Layr"
+                | "Mt16"
+                | "Mt32"
+                | "Mtrn"
+                | "Alph"
+                | "FMsk"
+                | "lnk2"
+                | "FEid"
+                | "FXid"
+                | "PxSD"
+        )
+}
+
+fn write_tagged_block(writer: &mut PsdWriter, key: &str, data: &[u8], large: bool) -> Result<()> {
+    let signature = if tagged_block_uses_u64_length(key, large) {
+        "8B64"
+    } else {
+        "8BIM"
+    };
+    writer.write_signature(signature)?;
+    writer.write_signature(key)?;
+    if signature == "8B64" {
+        writer.write_u32(0)?;
+    }
+    writer.write_u32(data.len() as u32)?;
+    writer.write_bytes(data)?;
+    if data.len() % 2 != 0 {
+        writer.write_u8(0)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn write_layer_additional_info_with_options(
     writer: &mut PsdWriter,
     info: &LayerAdditionalInfo,
+    large: bool,
 ) -> Result<()> {
     fn disk_key(key: &str) -> &str {
         match key {
@@ -3135,7 +3226,8 @@ pub fn write_layer_additional_info(
         "lmgm", "vmgm", "fcmy", "brst", "fxrp", "TySh", "Txt2", "SoCo", "GdFl", "PtFl", "vstk",
         "vscg", "vmsk", "vogk", "lfx2", "lrFX", "clrL", "rplc", "PlLd", "SoLd", "artb", "sn2P",
         "shmd", "FMsk", "shpa", "pths", "CgEd", "vibA", "PxSc", "phry", "Lr16", "Lr32", "lnk2",
-        "lnkD", "lnkD__", "lnk3", "FEid", "PxSD", "Anno",
+        "lnkD", "lnkD__", "lnk3", "FEid", "PxSD", "Anno", "LMsk", "Mtrn", "Mt16", "Mt32", "FXid",
+        "abdd", "anFX", "cinf", "SoLE",
     ];
 
     for key in sections {
@@ -3144,18 +3236,7 @@ pub fn write_layer_additional_info(
         let length = temp_writer.write_additional_info(key, info)?;
 
         if length > 0 {
-            // Write section header
-            writer.write_signature("8BIM")?;
-            writer.write_signature(disk_key(key))?;
-            writer.write_u32(length as u32)?;
-            // Write data
-            writer.write_bytes(temp_writer.get_buffer())?;
-
-            // Pad to 4-byte boundary (spec §13.1)
-            let remainder = length % 4;
-            if remainder != 0 {
-                writer.write_zeros((4 - remainder) as usize)?;
-            }
+            write_tagged_block(writer, disk_key(key), temp_writer.get_buffer(), large)?;
         }
     }
 
@@ -3165,14 +3246,7 @@ pub fn write_layer_additional_info(
         let data = adj
             .to_bytes()
             .map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
-        writer.write_signature("8BIM")?;
-        writer.write_signature(&adj_key)?;
-        writer.write_u32(data.len() as u32)?;
-        writer.write_bytes(&data)?;
-        let remainder = data.len() % 4;
-        if remainder != 0 {
-            writer.write_zeros(4 - remainder)?;
-        }
+        write_tagged_block(writer, &adj_key, &data, large)?;
     }
 
     // Write layer effects descriptor (lmfx)
@@ -3181,14 +3255,7 @@ pub fn write_layer_additional_info(
         lmfx_writer.write_u32(0)?; // version
         lmfx_writer.write_version_and_descriptor(16, desc)?;
         let data = lmfx_writer.into_buffer();
-        writer.write_signature("8BIM")?;
-        writer.write_signature("lmfx")?;
-        writer.write_u32(data.len() as u32)?;
-        writer.write_bytes(&data)?;
-        let remainder = data.len() % 4;
-        if remainder != 0 {
-            writer.write_zeros(4 - remainder)?;
-        }
+        write_tagged_block(writer, "lmfx", &data, large)?;
     }
 
     // Write pattern block (Patt/Pat2/Pat3)
@@ -3206,17 +3273,18 @@ pub fn write_layer_additional_info(
             }
         }
         let data = pattern_writer.into_buffer();
-        writer.write_signature("8BIM")?;
-        writer.write_signature(block.key.as_ref())?;
-        writer.write_u32(data.len() as u32)?;
-        writer.write_bytes(&data)?;
-        let remainder = data.len() % 4;
-        if remainder != 0 {
-            writer.write_zeros(4 - remainder)?;
-        }
+        write_tagged_block(writer, block.key.as_ref(), &data, large)?;
     }
 
     Ok(())
+}
+
+/// Write all additional info sections for a layer
+pub fn write_layer_additional_info(
+    writer: &mut PsdWriter,
+    info: &LayerAdditionalInfo,
+) -> Result<()> {
+    write_layer_additional_info_with_options(writer, info, false)
 }
 
 #[cfg(test)]
@@ -3822,10 +3890,16 @@ mod tests {
         assert_eq!(meta.entries.len(), 2);
         assert_eq!(meta.entries[0].key, "mlst");
         assert_eq!(meta.entries[0].copy_on_sheet_change, false);
-        assert_eq!(meta.entries[0].raw_data, vec![0x00, 0x00, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(
+            meta.entries[0].raw_data,
+            vec![0x00, 0x00, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04]
+        );
         assert_eq!(meta.entries[1].key, "cust");
         assert_eq!(meta.entries[1].copy_on_sheet_change, true);
-        assert_eq!(meta.entries[1].raw_data, vec![0x00, 0x00, 0x00, 0x02, 0xAB, 0xCD]);
+        assert_eq!(
+            meta.entries[1].raw_data,
+            vec![0x00, 0x00, 0x00, 0x02, 0xAB, 0xCD]
+        );
     }
 
     #[test]
@@ -3926,5 +4000,39 @@ mod tests {
             .read_additional_info("Txt2", len, &mut reparsed)
             .unwrap();
         assert_eq!(reparsed.text_engine, info.text_engine);
+    }
+
+    #[test]
+    fn txt2_writes_inner_length_prefix() {
+        use std::collections::HashMap;
+        let engine = crate::engine_data::EngineValue::Object(HashMap::from([(
+            "_DocumentObjects".to_string(),
+            crate::engine_data::EngineValue::Object(HashMap::new()),
+        )]));
+        let mut info = LayerAdditionalInfo::default();
+        info.text_engine = Some(TextEngineBlock { data: engine });
+
+        let mut w = PsdWriter::new(256);
+        let len = w.write_additional_info("Txt2", &info).unwrap() as usize;
+        let buf = w.into_buffer();
+
+        assert!(len >= 4);
+        assert_eq!(
+            u32::from_be_bytes(buf[0..4].try_into().unwrap()) as usize,
+            len - 4
+        );
+    }
+
+    #[test]
+    fn sn2p_is_u32() {
+        let mut info = LayerAdditionalInfo::default();
+        info.using_aligned_rendering = Some(true);
+
+        let mut w = PsdWriter::new(16);
+        let len = w.write_additional_info("sn2P", &info).unwrap();
+        let buf = w.into_buffer();
+
+        assert_eq!(len, 4);
+        assert_eq!(buf, vec![0, 0, 0, 1]);
     }
 }

@@ -43,9 +43,10 @@ pub fn decompress_rle(
             let header = input[input_pos];
             input_pos += 1;
 
-            if header >= 128 {
+            if header == 128 {
+                continue;
+            } else if header > 128 {
                 // Repeat next byte (257 - header) times.
-                // header=128 → repeat 129 times (matching Photoshop/TS, not Apple NOP spec)
                 let count = 257usize - header as usize;
                 if input_pos >= input.len() {
                     return Err(PsdError::Compression(
@@ -62,7 +63,7 @@ pub fn decompress_rle(
                     output[output_pos] = value;
                     output_pos += 1;
                 }
-            } else if header < 128 {
+            } else {
                 // Copy next (header + 1) bytes
                 let count = header as usize + 1;
                 for _ in 0..count {
@@ -78,8 +79,6 @@ pub fn decompress_rle(
                     input_pos += 1;
                     output_pos += 1;
                 }
-            } else {
-                // 128 is a NOP in PackBits.
             }
         }
 
