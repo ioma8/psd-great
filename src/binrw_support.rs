@@ -40,13 +40,13 @@ impl From<crate::image_resources::DisplayInfoResource> for DisplayInfoRecord {
     fn from(info: crate::image_resources::DisplayInfoResource) -> Self {
         Self {
             version: info.version,
-            h_res_unit_raw: info.h_res_unit.0.to_le_bytes(),
+            h_res_unit_raw: info.h_res_unit.to_u16().to_le_bytes(),
             h_width_unit_tag: 1,
-            v_res_unit_raw: info.v_res_unit.0.to_le_bytes(),
+            v_res_unit_raw: info.v_res_unit.to_u16().to_le_bytes(),
             v_width_unit_tag: 1,
-            width_unit_raw: info.width_unit.0.to_le_bytes(),
+            width_unit_raw: info.width_unit.to_u16().to_le_bytes(),
             width_unit_tag: 1,
-            height_unit_raw: info.height_unit.0.to_le_bytes(),
+            height_unit_raw: info.height_unit.to_u16().to_le_bytes(),
             height_unit_tag: 1,
             padding: [0; 10],
         }
@@ -57,12 +57,25 @@ impl From<DisplayInfoRecord> for crate::image_resources::DisplayInfoResource {
     fn from(record: DisplayInfoRecord) -> Self {
         crate::image_resources::DisplayInfoResource {
             version: record.version,
-            h_res_unit: crate::types::PsdU16Code(record.h_res_unit()),
-            v_res_unit: crate::types::PsdU16Code(record.v_res_unit()),
-            width_unit: crate::types::PsdU16Code(record.width_unit()),
-            height_unit: crate::types::PsdU16Code(record.height_unit()),
+            h_res_unit: crate::types::DisplayUnit::from_u16(record.h_res_unit()),
+            v_res_unit: crate::types::DisplayUnit::from_u16(record.v_res_unit()),
+            width_unit: crate::types::DisplayUnit::from_u16(record.width_unit()),
+            height_unit: crate::types::DisplayUnit::from_u16(record.height_unit()),
         }
     }
+}
+
+#[derive(binrw::BinRead, binrw::BinWrite, Debug, Clone, PartialEq, Eq)]
+#[brw(big)]
+pub(crate) struct ThumbnailHeaderRecord {
+    pub format: u32,
+    pub width: u32,
+    pub height: u32,
+    pub width_bytes: u32,
+    pub total_size: u32,
+    pub compressed_size: u32,
+    pub bits_per_pixel: u16,
+    pub planes: u16,
 }
 
 #[derive(binrw::BinRead, binrw::BinWrite, Debug, Clone, PartialEq, Eq)]

@@ -75,8 +75,9 @@ pub use types::{
     AntiAlias, BlendMode, BooleanOperation, ChannelID, Color, ColorMode, Compression, DisplayUnit,
     Fraction, GradientStyle, Grayscale, GuideDirection, InterpolationMethod, Justification,
     LayerColor, LayerCompCapturedInfo, LinkedFileDataKind, Orientation, PixelData, Point,
-    PsdIntCode, PsdStringCode, PsdU16Code, PsdU32Code, RenderingIntent, SectionDividerType, Units,
-    UnitsValue, WarpStyle, CMYK, FRGB, RGB, RGBA,
+    PsdIntCode, PsdStringCode, PsdU16Code, PsdU32Code, RenderingIntent, SectionDividerType,
+    SliceAlignment, SliceOrigin, SliceSourceType, SliceType, Units, UnitsValue, WarpStyle, CMYK,
+    FRGB, RGB, RGBA,
 };
 pub use writer::{write_psd, PsdWriter};
 

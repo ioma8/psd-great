@@ -6,15 +6,15 @@
 use crate::binrw_support::{
     decode_be, encode_be, DisplayInfoRecord, GridAndGuidesHeaderRecord, GuideRecord,
     ImageResourceHeaderRecord, ImageResourceLengthRecord, LayerStateRecord, PrintFlagsRecord,
-    PrintScaleRecord, ResolutionInfoRecord, SignedI32Record, U16ListCountRecord, U32ValueRecord,
-    U8BoolRecord,
+    PrintScaleRecord, ResolutionInfoRecord, SignedI32Record, ThumbnailHeaderRecord,
+    U16ListCountRecord, U32ValueRecord, U8BoolRecord,
 };
 use crate::descriptor::Descriptor;
 use crate::error::{PsdError, Result};
 use crate::reader::PsdReader;
 use crate::types::{
-    BlendMode, Color, Fraction, LayerCompCapturedInfo, Point, PsdIntCode, PsdU16Code, PsdU32Code,
-    RenderingIntent,
+    BlendMode, Color, DisplayUnit, Fraction, LayerCompCapturedInfo, Point, RenderingIntent,
+    SliceAlignment, SliceOrigin, SliceSourceType, SliceType,
 };
 use crate::writer::PsdWriter;
 use std::collections::HashMap;
@@ -117,30 +117,20 @@ pub struct ColorSamplersResource {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayInfoResource {
     pub version: u16,
-    pub h_res_unit: PsdU16Code,
-    pub v_res_unit: PsdU16Code,
-    pub width_unit: PsdU16Code,
-    pub height_unit: PsdU16Code,
+    pub h_res_unit: DisplayUnit,
+    pub v_res_unit: DisplayUnit,
+    pub width_unit: DisplayUnit,
+    pub height_unit: DisplayUnit,
 }
 
 fn parse_thumbnail_resource(bytes: &[u8]) -> Option<Thumbnail> {
-    if bytes.len() < 28 {
-        return None;
-    }
-    let format = u32::from_be_bytes(bytes[0..4].try_into().ok()?);
-    let width = u32::from_be_bytes(bytes[4..8].try_into().ok()?);
-    let height = u32::from_be_bytes(bytes[8..12].try_into().ok()?);
-    let _width_bytes = u32::from_be_bytes(bytes[12..16].try_into().ok()?);
-    let _total_size = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
-    let compressed_size = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
-    let _bits_per_pixel = u16::from_be_bytes(bytes[24..26].try_into().ok()?);
-    let _planes = u16::from_be_bytes(bytes[26..28].try_into().ok()?);
-    let data_end = 28 + compressed_size as usize;
+    let header: ThumbnailHeaderRecord = decode_be(bytes.get(..28)?, "thumbnail header").ok()?;
+    let data_end = 28 + header.compressed_size as usize;
     let data = bytes.get(28..data_end)?.to_vec();
     Some(Thumbnail {
-        width,
-        height,
-        format: if format == 1 {
+        width: header.width,
+        height: header.height,
+        format: if header.format == 1 {
             ThumbnailFormat::JpegRgb
         } else {
             ThumbnailFormat::RawRgb
@@ -157,15 +147,17 @@ fn build_thumbnail_resource(thumbnail: &Thumbnail) -> Vec<u8> {
     let width_bytes = ((thumbnail.width * 24 + 31) / 32) * 4;
     let total_size = width_bytes * thumbnail.height;
     let compressed_size = thumbnail.data.len() as u32;
-    let mut bytes = Vec::with_capacity(28 + thumbnail.data.len());
-    bytes.extend_from_slice(&format.to_be_bytes());
-    bytes.extend_from_slice(&thumbnail.width.to_be_bytes());
-    bytes.extend_from_slice(&thumbnail.height.to_be_bytes());
-    bytes.extend_from_slice(&width_bytes.to_be_bytes());
-    bytes.extend_from_slice(&total_size.to_be_bytes());
-    bytes.extend_from_slice(&compressed_size.to_be_bytes());
-    bytes.extend_from_slice(&24u16.to_be_bytes());
-    bytes.extend_from_slice(&1u16.to_be_bytes());
+    let header = ThumbnailHeaderRecord {
+        format,
+        width: thumbnail.width,
+        height: thumbnail.height,
+        width_bytes,
+        total_size,
+        compressed_size,
+        bits_per_pixel: 24,
+        planes: 1,
+    };
+    let mut bytes = encode_be(&header, "thumbnail header").unwrap_or_else(|_| vec![0u8; 28]);
     bytes.extend_from_slice(&thumbnail.data);
     bytes
 }
@@ -199,16 +191,16 @@ pub enum MeasurementUnit {
 }
 
 fn parse_display_info_resource(bytes: &[u8]) -> Option<DisplayInfoResource> {
-    if bytes.len() < 18 {
+    if bytes.len() < 28 {
         return None;
     }
     let record: DisplayInfoRecord = decode_be(bytes, "display info resource").ok()?;
     Some(DisplayInfoResource {
         version: record.version,
-        h_res_unit: PsdU16Code(record.h_res_unit()),
-        v_res_unit: PsdU16Code(record.v_res_unit()),
-        width_unit: PsdU16Code(record.width_unit()),
-        height_unit: PsdU16Code(record.height_unit()),
+        h_res_unit: DisplayUnit::from_u16(record.h_res_unit()),
+        v_res_unit: DisplayUnit::from_u16(record.v_res_unit()),
+        width_unit: DisplayUnit::from_u16(record.width_unit()),
+        height_unit: DisplayUnit::from_u16(record.height_unit()),
     })
 }
 
@@ -462,23 +454,23 @@ pub struct Slices {
 pub struct Slice {
     pub id: u32,
     pub group_id: u32,
-    pub origin: PsdU32Code,
+    pub origin: SliceOrigin,
     pub associated_layer_id: u32,
     pub name: String,
-    pub slice_type: PsdU32Code,
+    pub slice_type: SliceType,
     pub bounds: SliceBounds,
     pub url: String,
     pub target: String,
     pub message: String,
     pub alt_tag: String,
     pub cell_text: String,
-    pub horizontal_align: PsdIntCode,
-    pub vertical_align: PsdIntCode,
+    pub horizontal_align: SliceAlignment,
+    pub vertical_align: SliceAlignment,
     pub alpha: u8,
     pub bg_color: [u8; 4],
     pub cell_is_html: bool,
     pub source_id: Option<u32>,
-    pub source_type: Option<PsdU32Code>,
+    pub source_type: Option<SliceSourceType>,
     pub descriptor: Option<Descriptor>,
 }
 
@@ -581,10 +573,10 @@ fn parse_legacy_slice<R: Read + Seek>(
     Ok(Slice {
         id,
         group_id,
-        origin: PsdU32Code(origin),
+        origin: SliceOrigin::from_u32(origin),
         associated_layer_id,
         name,
-        slice_type: PsdU32Code(slice_type),
+        slice_type: SliceType::from_u32(slice_type),
         bounds: SliceBounds {
             top,
             left,
@@ -596,8 +588,8 @@ fn parse_legacy_slice<R: Read + Seek>(
         message,
         alt_tag,
         cell_text,
-        horizontal_align: PsdIntCode(horizontal_align),
-        vertical_align: PsdIntCode(vertical_align),
+        horizontal_align: SliceAlignment::from_i32(horizontal_align),
+        vertical_align: SliceAlignment::from_i32(vertical_align),
         alpha,
         bg_color,
         cell_is_html,
@@ -1496,12 +1488,12 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
                 }
                 w.write_i32(slice.id as i32)?;
                 w.write_i32(slice.group_id as i32)?;
-                w.write_i32(slice.origin.0 as i32)?;
-                if slice.origin.0 == 1 {
+                w.write_i32(slice.origin.to_u32() as i32)?;
+                if slice.origin == SliceOrigin::LayerBased {
                     w.write_i32(slice.associated_layer_id as i32)?;
                 }
                 w.write_unicode_string(&slice.name)?;
-                w.write_i32(slice.slice_type.0 as i32)?;
+                w.write_i32(slice.slice_type.to_u32() as i32)?;
                 w.write_i32(slice.bounds.left)?;
                 w.write_i32(slice.bounds.top)?;
                 w.write_i32(slice.bounds.right)?;
@@ -1512,8 +1504,8 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
                 w.write_unicode_string(&slice.alt_tag)?;
                 w.write_u8(u8::from(slice.cell_is_html))?;
                 w.write_unicode_string(&slice.cell_text)?;
-                w.write_i32(slice.horizontal_align.0)?;
-                w.write_i32(slice.vertical_align.0)?;
+                w.write_i32(slice.horizontal_align.to_i32())?;
+                w.write_i32(slice.vertical_align.to_i32())?;
                 w.write_u8(slice.alpha)?;
                 w.write_u8(slice.bg_color[1])?;
                 w.write_u8(slice.bg_color[2])?;
@@ -1783,6 +1775,26 @@ mod tests {
     }
 
     #[test]
+    fn thumbnail_header_roundtrips_via_binrw() {
+        let record = crate::binrw_support::ThumbnailHeaderRecord {
+            format: 1,
+            width: 5,
+            height: 7,
+            width_bytes: 16,
+            total_size: 112,
+            compressed_size: 13,
+            bits_per_pixel: 24,
+            planes: 1,
+        };
+
+        let bytes = encode_be(&record, "thumbnail header").expect("encode");
+        let reparsed: crate::binrw_support::ThumbnailHeaderRecord =
+            decode_be(&bytes, "thumbnail header").expect("decode");
+
+        assert_eq!(reparsed, record);
+    }
+
+    #[test]
     fn color_sampler_roundtrips_color_space_and_depth() {
         let resource = ColorSamplersResource {
             version: 2,
@@ -1999,10 +2011,10 @@ mod tests {
             slices: vec![Slice {
                 id: 1,
                 group_id: 2,
-                origin: PsdU32Code(1),
+                origin: crate::types::SliceOrigin::LayerBased,
                 associated_layer_id: 3,
                 name: "slice".to_string(),
-                slice_type: PsdU32Code(1),
+                slice_type: crate::types::SliceType::NoImage,
                 bounds: SliceBounds {
                     top: 10,
                     left: 20,
@@ -2014,8 +2026,8 @@ mod tests {
                 message: "msg".to_string(),
                 alt_tag: "alt".to_string(),
                 cell_text: "cell".to_string(),
-                horizontal_align: PsdIntCode(3),
-                vertical_align: PsdIntCode(5),
+                horizontal_align: crate::types::SliceAlignment::RightOrBottom,
+                vertical_align: crate::types::SliceAlignment::Other(5),
                 alpha: 255,
                 bg_color: [255, 2, 3, 4],
                 cell_is_html: true,

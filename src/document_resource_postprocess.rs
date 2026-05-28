@@ -4,7 +4,7 @@
 //! color_samplers) to/from the low-level image resource storage (XML strings, typed resources,
 //! descriptor resources).
 
-use crate::error::Result;
+use crate::error::{PsdError, Result};
 use crate::psd::Psd;
 use quick_xml::escape::unescape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
@@ -57,10 +57,10 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
 
         if let Some(info) = resources.display_info_typed.as_ref() {
             psd.display_info = Some(crate::psd::DisplayInfo {
-                h_res_unit: crate::types::DisplayUnit::from_u16(info.h_res_unit.0),
-                v_res_unit: crate::types::DisplayUnit::from_u16(info.v_res_unit.0),
-                width_unit: crate::types::DisplayUnit::from_u16(info.width_unit.0),
-                height_unit: crate::types::DisplayUnit::from_u16(info.height_unit.0),
+                h_res_unit: info.h_res_unit,
+                v_res_unit: info.v_res_unit,
+                width_unit: info.width_unit,
+                height_unit: info.height_unit,
             });
         }
 
@@ -182,10 +182,10 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
     if let Some(info) = psd.display_info.as_ref() {
         resources.display_info_typed = Some(crate::image_resources::DisplayInfoResource {
             version: 1,
-            h_res_unit: crate::types::PsdU16Code(info.h_res_unit.to_u16()),
-            v_res_unit: crate::types::PsdU16Code(info.v_res_unit.to_u16()),
-            width_unit: crate::types::PsdU16Code(info.width_unit.to_u16()),
-            height_unit: crate::types::PsdU16Code(info.height_unit.to_u16()),
+            h_res_unit: info.h_res_unit,
+            v_res_unit: info.v_res_unit,
+            width_unit: info.width_unit,
+            height_unit: info.height_unit,
         });
     }
 
@@ -220,15 +220,25 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
             .iter()
             .map(|g| {
                 let dir = match g.direction {
-                    crate::types::GuideDirection::Vertical => crate::image_resources::GuideDirection::Vertical,
-                    crate::types::GuideDirection::Horizontal => crate::image_resources::GuideDirection::Horizontal,
-                };
-                crate::image_resources::Guide {
+                    crate::types::GuideDirection::Vertical => {
+                        Ok(crate::image_resources::GuideDirection::Vertical)
+                    }
+                    crate::types::GuideDirection::Horizontal => {
+                        Ok(crate::image_resources::GuideDirection::Horizontal)
+                    }
+                    crate::types::GuideDirection::Other(code) => Err(PsdError::InvalidFormat(
+                        format!(
+                            "Guide direction code {:?} cannot be serialized to resource 1032",
+                            std::str::from_utf8(&code).unwrap_or("????")
+                        ),
+                    )),
+                }?;
+                Ok(crate::image_resources::Guide {
                     location: g.location,
                     direction: dir,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
     }
 
     // Map alpha_channel_names → resource 1045
