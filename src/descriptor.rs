@@ -521,7 +521,7 @@ impl PsdWriter {
                 self.write_u32(*low)?;
             }
             DescriptorValue::Boolean(v) => self.write_u8(if *v { 1 } else { 0 })?,
-            DescriptorValue::Text(s) => self.write_unicode_string(s)?,
+            DescriptorValue::Text(s) => self.write_unicode_string_with_padding(s)?,
             DescriptorValue::Enum { enum_type, value } => {
                 // Write as "Enmr" format: class_structure(name, class_id) + type_id + value
                 self.write_class_structure("", enum_type)?;
@@ -659,7 +659,7 @@ impl PsdWriter {
                 } => {
                     self.write_signature("name")?;
                     self.write_class_structure(name, class_id)?;
-                    self.write_unicode_string(value)?;
+                    self.write_unicode_string_with_padding(value)?;
                 }
             }
         }

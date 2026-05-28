@@ -1045,12 +1045,41 @@ impl<R: Read + Seek> PsdReader<R> {
                                     let slot_bytes = self.read_bytes(slot_length as usize)?;
                                     let width = (rect.unwrap().right - rect.unwrap().left).max(0) as usize;
                                     let height = (rect.unwrap().bottom - rect.unwrap().top).max(0) as usize;
-                                    // Slot data: first 2 bytes are compression type, rest is compressed pixel data
-                                    // Store raw data; decompression handled upstream if needed
-                                    let pixel_data = if slot_bytes.len() >= 2 && slot_bytes[0] == 0 && slot_bytes[1] == 0 {
-                                        slot_bytes[2..].to_vec() // Raw (uncompressed)
+                                    // Slot data: first 2 bytes are compression type
+                                    let comp = if slot_bytes.len() >= 2 {
+                                        u16::from_be_bytes([slot_bytes[0], slot_bytes[1]])
                                     } else {
-                                        slot_bytes.to_vec() // Store as-is for compressed formats
+                                        0
+                                    };
+                                    let slot_depth = depth.unwrap_or(8) as usize;
+                                    let bytes_per_sample = slot_depth.max(8) / 8;
+                                    let row_width = width * bytes_per_sample;
+                                    let output_size = row_width * height;
+                                    let pixel_data = match comp {
+                                        0 => slot_bytes.get(2..).unwrap_or(&[]).to_vec(),
+                                        1 => {
+                                            // PackBits: row-length table (u16 per row) then data
+                                            let row_table_bytes = height * 2;
+                                            if slot_bytes.len() >= 2 + row_table_bytes {
+                                                let row_lengths: Vec<u16> = slot_bytes[2..2 + row_table_bytes]
+                                                    .chunks_exact(2)
+                                                    .map(|b| u16::from_be_bytes([b[0], b[1]]))
+                                                    .collect();
+                                                let encoded = &slot_bytes[2 + row_table_bytes..];
+                                                let mut out = vec![0u8; output_size];
+                                                let _ = compression::decompress_rle(encoded, &mut out, row_width, height, &row_lengths);
+                                                out
+                                            } else {
+                                                slot_bytes.get(2..).unwrap_or(&[]).to_vec()
+                                            }
+                                        }
+                                        2 => compression::decompress_zip(&slot_bytes[2..], output_size)
+                                            .unwrap_or_else(|_| slot_bytes.get(2..).unwrap_or(&[]).to_vec()),
+                                        3 => compression::decompress_zip_with_prediction(
+                                            &slot_bytes[2..], width, height, slot_depth as u16,
+                                        )
+                                        .unwrap_or_else(|_| slot_bytes.get(2..).unwrap_or(&[]).to_vec()),
+                                        _ => slot_bytes.get(2..).unwrap_or(&[]).to_vec(),
                                     };
                                     slots.push(FilterEffectsSlot {
                                         slot: slot_index,
@@ -1381,7 +1410,7 @@ impl<R: Read + Seek> PsdReader<R> {
             )));
         }
 
-        // Read text descriptor
+        // Read text descriptor (with u32 version prefix — matches original behavior)
         let text_descriptor = self.read_version_and_descriptor()?;
 
         // Read warp version
@@ -1831,11 +1860,27 @@ impl<R: Read + Seek> PsdReader<R> {
             self.skip_bytes(3)?;
             let data_length = self.read_u32()? as usize;
             let raw = self.read_bytes(data_length)?;
+            // Each entry is a versioned descriptor when the first u32 == 16
+            let descriptor = if raw.len() >= 4 {
+                let ver = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]);
+                if ver == 16 {
+                    let mut sub = PsdReader::new(
+                        std::io::Cursor::new(&raw[4..]),
+                        Default::default(),
+                    );
+                    sub.read_descriptor_structure().ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let has_descriptor = descriptor.is_some();
             entries.push(MetadataEntry {
                 key,
                 copy_on_sheet_change,
-                descriptor: None,
-                raw_data: raw,
+                descriptor,
+                raw_data: if has_descriptor { Vec::new() } else { raw },
             });
         }
         info.metadata = Some(Metadata { entries });
@@ -2221,7 +2266,7 @@ impl PsdWriter {
                     }
                     temp_writer.write_i16(50)?; // text version
                     if let Some(ref td) = text.text_data {
-                            temp_writer.write_version_and_descriptor(text.descriptor_version, td)?;
+                        temp_writer.write_version_and_descriptor(text.descriptor_version, td)?;
                     }
                     temp_writer.write_i16(text.warp_version as i16)?;
                     if let Some(ref wd) = text.warp_data {
@@ -2644,7 +2689,9 @@ impl PsdWriter {
                                 if let Some(slot_raw) = slot_map.get(&slot_index) {
                                     item_writer.write_u32(1)?;
                                     item_writer.write_u32(0)?;
-                                    item_writer.write_u32(slot_raw.data.len() as u32)?;
+                                    // 2-byte compression header (0x00 0x00 = raw/uncompressed) + data
+                                    item_writer.write_u32(2 + slot_raw.data.len() as u32)?;
+                                    item_writer.write_u16(0)?; // compression type: raw
                                     item_writer.write_bytes(&slot_raw.data)?;
                                 } else {
                                     item_writer.write_u32(0)?;
