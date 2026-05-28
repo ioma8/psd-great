@@ -268,7 +268,7 @@ fn parse_color_samplers_resource(bytes: &[u8]) -> ColorSamplersResource {
             version,
             position,
             color_space: i16::from_be_bytes([bytes[offset + 8], bytes[offset + 9]]),
-            depth: if version == 2 {
+            depth: if version >= 2 {
                 Some(u16::from_be_bytes([bytes[offset + 10], bytes[offset + 11]]))
             } else {
                 None
