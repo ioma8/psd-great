@@ -43,8 +43,9 @@ pub fn decompress_rle(
             let header = input[input_pos];
             input_pos += 1;
 
-            if header > 128 {
-                // Repeat next byte (257 - header) times
+            if header >= 128 {
+                // Repeat next byte (257 - header) times.
+                // header=128 → repeat 129 times (matching Photoshop/TS, not Apple NOP spec)
                 let count = 257usize - header as usize;
                 if input_pos >= input.len() {
                     return Err(PsdError::Compression(
@@ -216,22 +217,13 @@ pub fn decompress_zip_with_prediction(
             }
         }
         16 => {
-            // Big-endian u16 delta encoding (decode path).
-            // Uses BE16 arithmetic which round-trips correctly for any width.
-            // The TS reference uses LE16 but that approach only round-trips
-            // correctly at width=1 (the only case TS tests verify internally).
-            // PSD uses BE for all other numeric fields; this BE16 approach
-            // matches that convention and is correct at any row width.
+            // Byte-level delta (same as 8-bit path) applied to raw byte stream.
+            // Each row is width * 2 bytes. Left-to-right prefix sum.
+            let row_bytes = width * 2;
             for row in 0..height {
-                let value_start = row * width;
-                for vi in (value_start + 1)..(value_start + width) {
-                    let bi = vi * 2;
-                    let pi = bi - 2;
-                    let delta = ((data[bi] as u16) << 8) | data[bi + 1] as u16;
-                    let prev = ((data[pi] as u16) << 8) | data[pi + 1] as u16;
-                    let val = delta.wrapping_add(prev);
-                    data[bi] = (val >> 8) as u8;
-                    data[bi + 1] = (val & 0xff) as u8;
+                let start = row * row_bytes;
+                for i in start + 1..start + row_bytes {
+                    data[i] = data[i].wrapping_add(data[i - 1]);
                 }
             }
         }
@@ -296,19 +288,13 @@ pub fn compress_zip_with_prediction(
             }
         }
         16 => {
-            // Big-endian u16 delta encoding (encode path).
-            // Right-to-left BE16 delta: delta[i] = val[i] - val[i-1] (wrapping).
-            // Pairs with the BE16 decode above; both round-trip at any width.
+            // Byte-level delta (same as 8-bit path) applied to raw byte stream.
+            // Each row is width * 2 bytes. Right-to-left byte delta.
+            let row_bytes = width * 2;
             for row in 0..height {
-                let value_start = row * width;
-                for vi in (value_start + 1..value_start + width).rev() {
-                    let bi = vi * 2;
-                    let pi = bi - 2;
-                    let cur = ((predicted[bi] as u16) << 8) | predicted[bi + 1] as u16;
-                    let prev = ((predicted[pi] as u16) << 8) | predicted[pi + 1] as u16;
-                    let delta = cur.wrapping_sub(prev);
-                    predicted[bi] = (delta >> 8) as u8;
-                    predicted[bi + 1] = (delta & 0xff) as u8;
+                let start = row * row_bytes;
+                for i in (start + 1..start + row_bytes).rev() {
+                    predicted[i] = predicted[i].wrapping_sub(predicted[i - 1]);
                 }
             }
         }

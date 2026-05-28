@@ -344,7 +344,13 @@ pub fn read_psd<R: Read + Seek>(mut reader: R, options: ReadOptions) -> Result<P
         annotations: None,
         additional_info: Default::default(),
         color_mode_data: None,
+        resolution: None,
+        guides: None,
+        alpha_channel_names: None,
+        selected_layer_ids: None,
+        icc_profile: None,
         path_selection_descriptor: None,
+        slices: None,
         variable_sets: None,
         data_sets: None,
         descriptor_1065: None,
@@ -559,7 +565,8 @@ fn read_layer_record<R: Read + Seek>(
     // Read extra data
     reader.read_section(1, |reader, end_offset| {
         // Read layer mask data
-        read_layer_mask_data(reader, &mut layer)?;
+        let channel_ids: Vec<i16> = channels.iter().map(|c| c.id as i16).collect();
+        read_layer_mask_data(reader, &mut layer, &channel_ids)?;
 
         // Read blending ranges
         let blending_len = reader.read_u32()? as usize;
@@ -632,6 +639,7 @@ pub(crate) fn read_nested_layer_info_block(
 fn read_layer_mask_data<R: Read + Seek>(
     reader: &mut PsdReader<R>,
     layer: &mut Layer,
+    channel_ids: &[i16],
 ) -> Result<()> {
     reader.read_section(1, |reader, end_offset| {
         if reader.bytes_left(end_offset) == 0 {
@@ -661,9 +669,16 @@ fn read_layer_mask_data<R: Read + Seek>(
         if remaining >= 18 {
             // Check for mask parameters flag (bit 4 in flags byte)
             if flags.contains(LayerMaskStateBits::HAS_PARAMETERS) {
-                let _real_flags = reader.read_u8()?;
-                let _real_default = reader.read_u8()?;
-                reader.skip_bytes(16)?; // real mask rect (4×i32)
+                // Real mask fields are only present when channel -3 (RealUserMask) exists
+                let has_real_mask_channel = channel_ids.contains(&-3);
+                if has_real_mask_channel && reader.bytes_left(end_offset) >= 18 {
+                    mask.real_flags_byte = Some(reader.read_u8()?);
+                    mask.real_default_color = Some(reader.read_u8()?);
+                    mask.real_top    = Some(reader.read_i32()?);
+                    mask.real_left   = Some(reader.read_i32()?);
+                    mask.real_bottom = Some(reader.read_i32()?);
+                    mask.real_right  = Some(reader.read_i32()?);
+                }
                 let param_flags = LayerMaskParameterFlags::from_bits_retain(reader.read_u8()?);
                 if param_flags.contains(LayerMaskParameterFlags::USER_MASK_DENSITY)
                     && reader.bytes_left(end_offset) > 0
@@ -686,6 +701,21 @@ fn read_layer_mask_data<R: Read + Seek>(
                     mask.vector_mask_feather = Some(reader.read_f64()?);
                 }
             }
+        }
+
+        // For old format (pre-HAS_PARAMETERS), check if remaining bytes are the real mask
+        let remaining_after_params = reader.bytes_left(end_offset) as usize;
+        if !flags.contains(LayerMaskStateBits::HAS_PARAMETERS)
+            && remaining_after_params >= 18
+            && !channel_ids.contains(&-3)
+        {
+            // Old format: extra bytes are the real mask (only if no -3 channel to avoid over-read)
+            mask.real_flags_byte    = Some(reader.read_u8()?);
+            mask.real_default_color = Some(reader.read_u8()?);
+            mask.real_top    = Some(reader.read_i32()?);
+            mask.real_left   = Some(reader.read_i32()?);
+            mask.real_bottom = Some(reader.read_i32()?);
+            mask.real_right  = Some(reader.read_i32()?);
         }
 
         // Skip any remaining mask data
@@ -1104,13 +1134,13 @@ fn read_image_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd) -> 
             }
         }
         if color_mode == ColorMode::CMYK {
-            let c = planes.get(0).and_then(|p| p.get(i)).copied().unwrap_or(0) as u16;
-            let m = planes.get(1).and_then(|p| p.get(i)).copied().unwrap_or(0) as u16;
-            let y = planes.get(2).and_then(|p| p.get(i)).copied().unwrap_or(0) as u16;
-            let k = planes.get(3).and_then(|p| p.get(i)).copied().unwrap_or(0) as u16;
-            rgba[i * 4] = ((c * k) / 255) as u8;
-            rgba[i * 4 + 1] = ((m * k) / 255) as u8;
-            rgba[i * 4 + 2] = ((y * k) / 255) as u8;
+            let c = planes.get(0).and_then(|p| p.get(i)).copied().unwrap_or(0) as u32;
+            let m = planes.get(1).and_then(|p| p.get(i)).copied().unwrap_or(0) as u32;
+            let y = planes.get(2).and_then(|p| p.get(i)).copied().unwrap_or(0) as u32;
+            let k = planes.get(3).and_then(|p| p.get(i)).copied().unwrap_or(0) as u32;
+            rgba[i * 4]     = ((255 * (255 - c) * (255 - k)) / (255 * 255)) as u8;
+            rgba[i * 4 + 1] = ((255 * (255 - m) * (255 - k)) / (255 * 255)) as u8;
+            rgba[i * 4 + 2] = ((255 * (255 - y) * (255 - k)) / (255 * 255)) as u8;
             if total_channels <= 4 {
                 rgba[i * 4 + 3] = 255;
             }
@@ -1127,9 +1157,8 @@ fn read_image_data<R: Read + Seek>(reader: &mut PsdReader<R>, psd: &mut Psd) -> 
     if color_mode == ColorMode::Grayscale {
         setup_grayscale(&mut pixel_data);
     }
-    if reader.global_alpha {
-        remove_white_matte(&mut pixel_data);
-    }
+    // Note: TS source of truth stores raw channel data without white-matte removal.
+    // Removing white matte is intentionally omitted to match TS behavior.
     psd.image_data = Some(pixel_data);
 
     Ok(())
@@ -1149,19 +1178,7 @@ fn reverse_prediction_planar_u8(data: &mut [u8], width: usize, height: usize, ch
     }
 }
 
-fn remove_white_matte(pixel_data: &mut PixelData) {
-    for px in pixel_data.data.chunks_exact_mut(4) {
-        let pa = px[3];
-        if pa != 0 && pa != 255 {
-            let a = pa as f32 / 255.0;
-            let ra = 1.0 / a;
-            let inv_a = 255.0 * (1.0 - ra);
-            px[0] = ((px[0] as f32 * ra + inv_a).clamp(0.0, 255.0)) as u8;
-            px[1] = ((px[1] as f32 * ra + inv_a).clamp(0.0, 255.0)) as u8;
-            px[2] = ((px[2] as f32 * ra + inv_a).clamp(0.0, 255.0)) as u8;
-        }
-    }
-}
+
 
 fn channel_offset(id: ChannelID, cmyk: bool) -> i32 {
     match id {

@@ -1043,7 +1043,8 @@ mod document_tagged_blocks_parity {
                     entries: vec![MetadataEntry {
                         key: "cust".to_string(),
                         copy_on_sheet_change: true,
-                        data: vec![0x01, 0x02, 0x03, 0x04],
+                        descriptor: None,
+                        raw_data: vec![0x00, 0x00, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04],
                     }],
                 }),
                 ..Default::default()
@@ -1067,7 +1068,7 @@ mod document_tagged_blocks_parity {
             .expect("expected document shmd metadata");
         assert_eq!(metadata.entries.len(), 1);
         assert_eq!(metadata.entries[0].key, "cust");
-        assert_eq!(metadata.entries[0].data, vec![0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(metadata.entries[0].raw_data, vec![0x00, 0x00, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04]);
     }
 }
 

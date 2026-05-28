@@ -11,6 +11,26 @@ use crate::binrw_support::{
 use crate::compression;
 use crate::descriptor::{Descriptor, DescriptorValue};
 use crate::error::{PsdError, Result};
+/// Read a pascal-style string with 4-byte length prefix (matching TS readPascalStringWithPadding).
+fn read_pascal_string_with_padding<R: Read + std::io::Seek>(reader: &mut crate::reader::PsdReader<R>) -> crate::error::Result<String> {
+    let length_plus_one = reader.read_u32()? as usize;
+    if length_plus_one == 0 {
+        return Ok(String::new());
+    }
+    let length = length_plus_one - 1;
+    let bytes = reader.read_bytes(length)?;
+    let _null = reader.read_u8()?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// Write a pascal-style string with 4-byte length prefix (matching TS writePascalStringWithPadding).
+fn write_pascal_string_with_padding(writer: &mut crate::writer::PsdWriter, text: &str) -> crate::error::Result<()> {
+    let bytes = text.as_bytes();
+    writer.write_u32((bytes.len() + 1) as u32)?;
+    writer.write_bytes(bytes)?;
+    writer.write_u8(0)?;
+    Ok(())
+}
 use crate::helpers::{
     from_blend_mode, to_blend_mode, ProtectedFlagsBits, VectorMaskFlagsBits,
 };
@@ -371,7 +391,8 @@ pub struct ArtboardData {
 pub struct MetadataEntry {
     pub key: String,
     pub copy_on_sheet_change: bool,
-    pub data: Vec<u8>,
+    pub descriptor: Option<crate::descriptor::Descriptor>,
+    pub raw_data: Vec<u8>,
 }
 
 /// Metadata (shmd block - zero or more tagged entries)
@@ -843,7 +864,17 @@ impl<R: Read + Seek> PsdReader<R> {
                     let payload_high = self.read_u32()? as u64;
                     let payload_low = self.read_u32()? as u64;
                     let payload_length = (payload_high << 32) | payload_low;
-                    let _open = self.read_u8()?;
+                    let open = self.read_u8()?;
+                    // When open != 0, consume the open-descriptor before the payload
+                    if open != 0 {
+                        let _version = self.read_u32()?;
+                        let descriptor_start = self.offset;
+                        self.read_descriptor_structure()?;
+                        // 2-byte alignment after descriptor
+                        if (self.offset - descriptor_start) % 2 != 0 {
+                            self.skip_bytes(1)?;
+                        }
+                    }
                     let data = self.read_bytes(payload_length as usize)?;
                     let remaining =
                         (chunk_start + chunk_length).saturating_sub(self.offset) as usize;
@@ -929,12 +960,16 @@ impl<R: Read + Seek> PsdReader<R> {
                     let x = self.read_i32()?;
                     let y = self.read_i32()?;
                     self.skip_bytes(24)?;
-                    let color_l = self.read_u16()?;
-                    let color_o = self.read_u16()?;
-                    let color_c = self.read_u16()?;
-                    let author = self.read_pascal_string(2)?;
-                    let _ = self.read_pascal_string(2)?;
-                    let _ = self.read_pascal_string(2)?;
+                    // Read color: 4×u16 (colorSpace + 3 scaled channels + padding)
+                    let _color_space = self.read_u16()?;
+                    let color_r = ((self.read_u16()? as u32 * 255 + 32767) / 65535) as u8;
+                    let color_g = ((self.read_u16()? as u32 * 255 + 32767) / 65535) as u8;
+                    let color_b = ((self.read_u16()? as u32 * 255 + 32767) / 65535) as u8;
+                    let _color_pad = self.read_u16()?;
+                    // Read author/date strings with 4-byte length prefix format
+                    let author = read_pascal_string_with_padding(self)?;
+                    let _empty = read_pascal_string_with_padding(self)?;
+                    let _date = read_pascal_string_with_padding(self)?;
                     let _text_len = self.read_u32()? as usize;
                     let block = self.read_signature()?;
                     if block != "txtC" {
@@ -953,9 +988,9 @@ impl<R: Read + Seek> PsdReader<R> {
                     items.push(AnnotationItem {
                         x,
                         y,
-                        color_l,
-                        color_o,
-                        color_c,
+                        color_l: color_r as u16,
+                        color_o: color_g as u16,
+                        color_c: color_b as u16,
                         author,
                         text,
                     });
@@ -978,7 +1013,7 @@ impl<R: Read + Seek> PsdReader<R> {
                         None
                     };
                     if self.offset + 4 <= chunk_start + chunk_length {
-                        let _ = self.read_u32()?;
+                        let _constant_8 = self.read_u32()?;
                     }
                     let mut rect = None;
                     let mut depth = None;
@@ -1007,15 +1042,22 @@ impl<R: Read + Seek> PsdReader<R> {
                                 if slot_length
                                     <= (chunk_start + chunk_length).saturating_sub(self.offset)
                                 {
-                                    let slot_raw = self.read_bytes(slot_length as usize)?;
+                                    let slot_bytes = self.read_bytes(slot_length as usize)?;
                                     let width = (rect.unwrap().right - rect.unwrap().left).max(0) as usize;
                                     let height = (rect.unwrap().bottom - rect.unwrap().top).max(0) as usize;
+                                    // Slot data: first 2 bytes are compression type, rest is compressed pixel data
+                                    // Store raw data; decompression handled upstream if needed
+                                    let pixel_data = if slot_bytes.len() >= 2 && slot_bytes[0] == 0 && slot_bytes[1] == 0 {
+                                        slot_bytes[2..].to_vec() // Raw (uncompressed)
+                                    } else {
+                                        slot_bytes.to_vec() // Store as-is for compressed formats
+                                    };
                                     slots.push(FilterEffectsSlot {
                                         slot: slot_index,
                                         channel_data: ChannelImageData {
                                             width,
                                             height,
-                                            data: slot_raw,
+                                            data: pixel_data,
                                         },
                                     });
                                 }
@@ -1351,7 +1393,7 @@ impl<R: Read + Seek> PsdReader<R> {
             )));
         }
 
-        // Read warp descriptor
+        // Read warp descriptor (WITH u32 version prefix = 16)
         let warp_descriptor = self.read_version_and_descriptor()?;
 
         // Read bounds
@@ -1788,11 +1830,12 @@ impl<R: Read + Seek> PsdReader<R> {
             let copy_on_sheet_change = self.read_u8()? != 0;
             self.skip_bytes(3)?;
             let data_length = self.read_u32()? as usize;
-            let data = self.read_bytes(data_length)?;
+            let raw = self.read_bytes(data_length)?;
             entries.push(MetadataEntry {
                 key,
                 copy_on_sheet_change,
-                data,
+                descriptor: None,
+                raw_data: raw,
             });
         }
         info.metadata = Some(Metadata { entries });
@@ -2002,6 +2045,7 @@ impl PsdWriter {
             "iOpa" => {
                 if let Some(value) = info.fill_opacity {
                     temp_writer.write_u8(value)?;
+                    temp_writer.write_zeros(3)?; // pad to 4 bytes
                 }
             }
             "lsct" => {
@@ -2046,6 +2090,7 @@ impl PsdWriter {
                         },
                         "blend clipped",
                     )?)?;
+                    temp_writer.write_zeros(3)?; // pad to 4 bytes
                 }
             }
             "infx" => {
@@ -2056,6 +2101,7 @@ impl PsdWriter {
                         },
                         "blend interior",
                     )?)?;
+                    temp_writer.write_zeros(3)?; // pad to 4 bytes
                 }
             }
             "knko" => {
@@ -2066,6 +2112,7 @@ impl PsdWriter {
                         },
                         "knockout",
                     )?)?;
+                    temp_writer.write_zeros(3)?; // pad to 4 bytes
                 }
             }
             "lspf" => {
@@ -2113,16 +2160,19 @@ impl PsdWriter {
             "lmgm" => {
                 if let Some(value) = info.lmgm {
                     temp_writer.write_u8(value)?;
+                    temp_writer.write_zeros(3)?; // pad to 4 bytes
                 }
             }
             "vmgm" => {
                 if let Some(value) = info.vmgm {
                     temp_writer.write_u8(value)?;
+                    temp_writer.write_zeros(3)?; // pad to 4 bytes
                 }
             }
             "fcmy" => {
                 if let Some(value) = info.fcmy {
                     temp_writer.write_u8(value)?;
+                    temp_writer.write_zeros(3)?; // pad to 4 bytes
                 }
             }
             "brst" => {
@@ -2148,8 +2198,18 @@ impl PsdWriter {
                         temp_writer.write_signature(&entry.key)?;
                         temp_writer.write_u8(if entry.copy_on_sheet_change { 1 } else { 0 })?;
                         temp_writer.write_zeros(3)?;
-                        temp_writer.write_u32(entry.data.len() as u32)?;
-                        temp_writer.write_bytes(&entry.data)?;
+                        // Write descriptor data or raw data
+                        if let Some(ref desc) = entry.descriptor {
+                            let mut desc_writer = crate::writer::PsdWriter::new(256);
+                            desc_writer.write_u32(16)?; // version
+                            desc_writer.write_descriptor_structure(desc)?;
+                            let desc_bytes = desc_writer.into_buffer();
+                            temp_writer.write_u32(desc_bytes.len() as u32)?;
+                            temp_writer.write_bytes(&desc_bytes)?;
+                        } else {
+                            temp_writer.write_u32(entry.raw_data.len() as u32)?;
+                            temp_writer.write_bytes(&entry.raw_data)?;
+                        }
                     }
                 }
             }
@@ -2161,10 +2221,11 @@ impl PsdWriter {
                     }
                     temp_writer.write_i16(50)?; // text version
                     if let Some(ref td) = text.text_data {
-                        temp_writer.write_version_and_descriptor(text.descriptor_version, td)?;
+                            temp_writer.write_version_and_descriptor(text.descriptor_version, td)?;
                     }
                     temp_writer.write_i16(text.warp_version as i16)?;
                     if let Some(ref wd) = text.warp_data {
+                        // Warp descriptor has u32 version prefix (16)
                         temp_writer.write_version_and_descriptor(1, wd)?;
                     }
                     temp_writer.write_f32(text.left)?;
@@ -2527,12 +2588,16 @@ impl PsdWriter {
                         item_writer.write_i32(item.y + 10)?;
                         item_writer.write_i32(241)?;
                         item_writer.write_i32(141)?;
-                        item_writer.write_u16(item.color_l)?;
-                        item_writer.write_u16(item.color_o)?;
-                        item_writer.write_u16(item.color_c)?;
-                        item_writer.write_pascal_string(&item.author, 2)?;
-                        item_writer.write_pascal_string("", 2)?;
-                        item_writer.write_pascal_string("D:20211012120233+01'00'", 2)?;
+                        // Write color: 8 bytes (colorSpace + 3 scaled channels + padding)
+                        item_writer.write_u16(0)?;
+                        item_writer.write_u16(((item.color_l as u32 * 65535 + 127) / 255) as u16)?;
+                        item_writer.write_u16(((item.color_o as u32 * 65535 + 127) / 255) as u16)?;
+                        item_writer.write_u16(((item.color_c as u32 * 65535 + 127) / 255) as u16)?;
+                        item_writer.write_u16(0)?;
+                        // Strings use 4-byte length prefix format
+                        write_pascal_string_with_padding(&mut item_writer, &item.author)?;
+                        write_pascal_string_with_padding(&mut item_writer, "")?;
+                        write_pascal_string_with_padding(&mut item_writer, "D:20211012120233+01'00'")?;
                         item_writer.write_u32((12 + 2 + item.text.len() * 2) as u32)?;
                         item_writer.write_signature("txtC")?;
                         item_writer.write_u32((2 + item.text.len() * 2) as u32)?;
@@ -3154,12 +3219,14 @@ mod tests {
                 MetadataEntry {
                     key: "mlst".to_string(),
                     copy_on_sheet_change: false,
-                    data: vec![0x01, 0x02, 0x03, 0x04],
+                    descriptor: None,
+                    raw_data: vec![0x00, 0x00, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04],
                 },
                 MetadataEntry {
                     key: "cust".to_string(),
                     copy_on_sheet_change: true,
-                    data: vec![0xAB, 0xCD],
+                    descriptor: None,
+                    raw_data: vec![0x00, 0x00, 0x00, 0x02, 0xAB, 0xCD],
                 },
             ],
         });
@@ -3180,10 +3247,10 @@ mod tests {
         assert_eq!(meta.entries.len(), 2);
         assert_eq!(meta.entries[0].key, "mlst");
         assert_eq!(meta.entries[0].copy_on_sheet_change, false);
-        assert_eq!(meta.entries[0].data, vec![0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(meta.entries[0].raw_data, vec![0x00, 0x00, 0x00, 0x04, 0x01, 0x02, 0x03, 0x04]);
         assert_eq!(meta.entries[1].key, "cust");
         assert_eq!(meta.entries[1].copy_on_sheet_change, true);
-        assert_eq!(meta.entries[1].data, vec![0xAB, 0xCD]);
+        assert_eq!(meta.entries[1].raw_data, vec![0x00, 0x00, 0x00, 0x02, 0xAB, 0xCD]);
     }
 
     #[test]

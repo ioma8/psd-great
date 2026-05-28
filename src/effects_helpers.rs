@@ -95,11 +95,13 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
                 let common: EffectsCommonStateRecord =
                     decode_be(&reader.read_bytes(11)?, "effects common state")?;
 
-                if common.size != 7 || common.version != 0 || common.visible == 0 {
+                if common.size != 7 || common.version != 0 {
                     return Err(PsdError::InvalidFormat(
                         "Invalid effects common state".to_string(),
                     ));
                 }
+                // visible == 0 means all effects are disabled — don't error, just mark
+                effects.disabled = Some(common.visible == 0);
             }
             "dsdw" | "isdw" => {
                 // Drop shadow / Inner shadow
@@ -122,7 +124,7 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
                 }
 
                 let size = reader.read_fixed_point_32()?;
-                let _intensity = reader.read_fixed_point_32()?;
+                let intensity = reader.read_fixed_point_32()?;
                 let angle = reader.read_fixed_point_32()?;
                 let distance = reader.read_fixed_point_32()?;
                 let color = reader.read_color()?;
@@ -139,6 +141,7 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
                     present: None,
                     show_in_dialog: None,
                     enabled: Some(enabled),
+                    intensity: Some(intensity),
                     blend_mode: Some(blend_mode),
                     color: Some(color),
                     opacity: Some(opacity),
@@ -185,7 +188,7 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
                 }
 
                 let size = reader.read_fixed_point_32()?;
-                let _intensity = reader.read_fixed_point_32()?;
+                let intensity = reader.read_fixed_point_32()?;
                 let color = reader.read_color()?;
                 let blend_mode = read_blend_mode(reader)?;
                 let enabled = reader.read_u8()? != 0;
@@ -200,6 +203,7 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
                     show_in_dialog: None,
                     enabled: Some(enabled),
                     blend_mode: Some(blend_mode),
+                    intensity: Some(intensity),
                     opacity: Some(opacity),
                     noise: None,
                     color: Some(color),
@@ -236,7 +240,7 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
                 }
 
                 let size = reader.read_fixed_point_32()?;
-                let _intensity = reader.read_fixed_point_32()?;
+                let intensity = reader.read_fixed_point_32()?;
                 let color = reader.read_color()?;
                 let blend_mode = read_blend_mode(reader)?;
                 let enabled = reader.read_u8()? != 0;
@@ -252,6 +256,7 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
                     show_in_dialog: None,
                     enabled: Some(enabled),
                     blend_mode: Some(blend_mode),
+                    intensity: Some(intensity),
                     opacity: Some(opacity),
                     noise: None,
                     color: Some(color),
@@ -376,10 +381,9 @@ pub fn read_effects<R: Read + Seek>(reader: &mut PsdReader<R>) -> Result<LayerEf
                 }]);
             }
             _ => {
-                return Err(PsdError::InvalidFormat(format!(
-                    "Invalid effect type: '{}'",
-                    effect_type
-                )));
+                // Unknown effect type (e.g. ChFX satin, stroke, gradient overlay added in PS 7+)
+                // Break out of the loop gracefully rather than failing
+                break;
             }
         }
     }
@@ -397,7 +401,7 @@ fn write_shadow_info(writer: &mut PsdWriter, shadow: &LayerEffectShadow) -> Resu
         "shadow header",
     )?)?;
     writer.write_fixed_point_32(shadow.size.as_ref().map(|s| s.value).unwrap_or(0.0))?;
-    writer.write_fixed_point_32(0.0)?; // intensity
+    writer.write_fixed_point_32(shadow.intensity.unwrap_or(75.0))?;
     writer.write_fixed_point_32(shadow.angle.unwrap_or(0.0))?;
     writer.write_fixed_point_32(shadow.distance.as_ref().map(|d| d.value).unwrap_or(0.0))?;
     writer.write_color(Some(shadow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
@@ -490,7 +494,7 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
             "outer glow header",
         )?)?;
         writer.write_fixed_point_32(glow.size.as_ref().map(|s| s.value).unwrap_or(0.0))?;
-        writer.write_fixed_point_32(0.0)?; // intensity
+        writer.write_fixed_point_32(glow.intensity.unwrap_or(75.0))?;
         writer.write_color(Some(glow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
         write_blend_mode(writer, glow.blend_mode.unwrap_or(BlendMode::Normal))?;
         writer.write_u8(if glow.enabled.unwrap_or(false) { 1 } else { 0 })?;
@@ -509,7 +513,7 @@ pub fn write_effects(writer: &mut PsdWriter, effects: &LayerEffectsInfo) -> Resu
             "inner glow header",
         )?)?;
         writer.write_fixed_point_32(glow.size.as_ref().map(|s| s.value).unwrap_or(0.0))?;
-        writer.write_fixed_point_32(0.0)?; // intensity
+        writer.write_fixed_point_32(glow.intensity.unwrap_or(75.0))?;
         writer.write_color(Some(glow.color.as_ref().unwrap_or(&DEFAULT_COLOR)))?;
         write_blend_mode(writer, glow.blend_mode.unwrap_or(BlendMode::Normal))?;
         writer.write_u8(if glow.enabled.unwrap_or(false) { 1 } else { 0 })?;

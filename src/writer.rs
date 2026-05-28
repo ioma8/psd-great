@@ -221,15 +221,17 @@ impl PsdWriter {
         let start_offset = self.offset;
         func(self)?;
 
-        // Pad to alignment
+        // Record content length BEFORE padding
+        let content_length = (self.offset - start_offset) as u32;
+
+        // Pad to alignment (padding bytes are NOT counted in length)
         while (self.offset - start_offset) % round != 0 {
             self.write_u8(0)?;
         }
 
-        // Write actual length
-        let actual_length = (self.offset - start_offset) as u32;
+        // Write content length (excludes padding)
         let mut cursor = Cursor::new(&mut self.buffer[length_offset..]);
-        cursor.write_u32::<BigEndian>(actual_length)?;
+        cursor.write_u32::<BigEndian>(content_length)?;
 
         Ok(())
     }
@@ -617,7 +619,15 @@ fn write_layer_record(
                     "layer mask prefix",
                 )?)?;
                 if has_params {
-                    writer.write_zeros(18)?; // real mask rect + real flags (not stored currently)
+                    // Only write real-mask block when real mask data is present
+                    if mask.real_flags_byte.is_some() {
+                        writer.write_u8(mask.real_flags_byte.unwrap_or(0))?;
+                        writer.write_u8(mask.real_default_color.unwrap_or(0))?;
+                        writer.write_i32(mask.real_top.unwrap_or(0))?;
+                        writer.write_i32(mask.real_left.unwrap_or(0))?;
+                        writer.write_i32(mask.real_bottom.unwrap_or(0))?;
+                        writer.write_i32(mask.real_right.unwrap_or(0))?;
+                    }
                     let mut param_flags = LayerMaskParameterFlags::empty();
                     if mask.user_mask_density.is_some() {
                         param_flags |= LayerMaskParameterFlags::USER_MASK_DENSITY;
@@ -645,6 +655,11 @@ fn write_layer_record(
                         writer.write_f64(v)?;
                     }
                 }
+            }
+            // Write uV filler block (required by some Photoshop versions)
+            if layer.additional_info.mask.is_some() {
+                writer.write_u16(0x0006)?;
+                writer.write_zeros(38)?;
             }
             Ok(())
         })?;

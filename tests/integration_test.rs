@@ -115,6 +115,7 @@ fn test_effects() {
         present: Some(true),
         show_in_dialog: Some(true),
         enabled: Some(true),
+        intensity: Some(75.0),
         size: Some(UnitsValue {
             units: Units::Pixels,
             value: 5.0,
@@ -558,6 +559,7 @@ fn test_layer_effects_roundtrip() {
             present: Some(true),
             show_in_dialog: None,
             enabled: Some(true),
+            intensity: Some(75.0),
             blend_mode: Some(BlendMode::Multiply),
             color: Some(Color::RGBA(RGBA {
                 r: 0,

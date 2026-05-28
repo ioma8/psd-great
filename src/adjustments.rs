@@ -626,9 +626,9 @@ fn read_gradient_definition(c: &mut Cursor) -> Result<GradientDefinition> {
         let location = c.read_u32()?;
         let midpoint = c.read_u32()?;
         let _ = c.read_u16()?; // colour space tag
-        let r = ((c.read_u16()? as u32 * 255 + 32767) / 65535) as u8;
-        let g = ((c.read_u16()? as u32 * 255 + 32767) / 65535) as u8;
-        let b = ((c.read_u16()? as u32 * 255 + 32767) / 65535) as u8;
+        let r = ((c.read_u16()? as f64 / 65535.0) * 255.0).round() as u8;
+        let g = ((c.read_u16()? as f64 / 65535.0) * 255.0).round() as u8;
+        let b = ((c.read_u16()? as f64 / 65535.0) * 255.0).round() as u8;
         let _ = c.read_u16()?; // padding
         color_stops.push(GradientColorStop {
             location,
@@ -882,9 +882,9 @@ fn write_gradient_definition(w: &mut Writer, g: &GradientDefinition) {
         w.write_u32(stop.location);
         w.write_u32(stop.midpoint);
         w.write_u16(0); // colour space tag
-        w.write_u16(((stop.color[0] as u32 * 65535 + 127) / 255) as u16);
-        w.write_u16(((stop.color[1] as u32 * 65535 + 127) / 255) as u16);
-        w.write_u16(((stop.color[2] as u32 * 65535 + 127) / 255) as u16);
+        w.write_u16(((stop.color[0] as f64 / 255.0) * 65535.0).round() as u16);
+        w.write_u16(((stop.color[1] as f64 / 255.0) * 65535.0).round() as u16);
+        w.write_u16(((stop.color[2] as f64 / 255.0) * 65535.0).round() as u16);
         w.write_u16(0); // padding
     }
     w.write_u16(g.transparency_stops.len() as u16);

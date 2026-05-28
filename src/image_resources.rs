@@ -151,23 +151,25 @@ fn parse_display_info_resource(bytes: &[u8]) -> Option<DisplayInfoResource> {
     }
     Some(DisplayInfoResource {
         version: u16::from_be_bytes([bytes[0], bytes[1]]),
-        h_res_unit: PsdU16Code(u16::from_be_bytes([bytes[2], bytes[3]])),
-        v_res_unit: PsdU16Code(u16::from_be_bytes([bytes[6], bytes[7]])),
-        width_unit: PsdU16Code(u16::from_be_bytes([bytes[10], bytes[11]])),
-        height_unit: PsdU16Code(u16::from_be_bytes([bytes[14], bytes[15]])),
+        // Unit fields are little-endian per TS (DataView getUint16 with false flag)
+        h_res_unit: PsdU16Code(u16::from_le_bytes([bytes[2], bytes[3]])),
+        v_res_unit: PsdU16Code(u16::from_le_bytes([bytes[6], bytes[7]])),
+        width_unit: PsdU16Code(u16::from_le_bytes([bytes[10], bytes[11]])),
+        height_unit: PsdU16Code(u16::from_le_bytes([bytes[14], bytes[15]])),
     })
 }
 
 fn build_display_info_resource(info: &DisplayInfoResource) -> Vec<u8> {
     let mut bytes = vec![0u8; 28];
     bytes[0..2].copy_from_slice(&info.version.to_be_bytes());
-    bytes[2..4].copy_from_slice(&info.h_res_unit.0.to_be_bytes());
+    // Unit fields are little-endian per TS
+    bytes[2..4].copy_from_slice(&info.h_res_unit.0.to_le_bytes());
     bytes[4..6].copy_from_slice(&1u16.to_be_bytes());
-    bytes[6..8].copy_from_slice(&info.v_res_unit.0.to_be_bytes());
+    bytes[6..8].copy_from_slice(&info.v_res_unit.0.to_le_bytes());
     bytes[8..10].copy_from_slice(&1u16.to_be_bytes());
-    bytes[10..12].copy_from_slice(&info.width_unit.0.to_be_bytes());
+    bytes[10..12].copy_from_slice(&info.width_unit.0.to_le_bytes());
     bytes[12..14].copy_from_slice(&1u16.to_be_bytes());
-    bytes[14..16].copy_from_slice(&info.height_unit.0.to_be_bytes());
+    bytes[14..16].copy_from_slice(&info.height_unit.0.to_le_bytes());
     bytes[16..18].copy_from_slice(&1u16.to_be_bytes());
     bytes
 }
@@ -179,21 +181,22 @@ fn parse_custom_points_resource(bytes: &[u8]) -> CustomPointsResource {
             points: Vec::new(),
         };
     }
-    let version = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-    let count = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    // All fields are little-endian per TS (DataView with false flag)
+    let version = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let count = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
     let mut points = Vec::new();
     let mut offset = 8;
     for _ in 0..count {
         if offset + 14 > bytes.len() {
             break;
         }
-        let y_raw = i32::from_be_bytes([
+        let y_raw = i32::from_le_bytes([
             bytes[offset + 2],
             bytes[offset + 3],
             bytes[offset + 4],
             bytes[offset + 5],
         ]);
-        let x_raw = i32::from_be_bytes([
+        let x_raw = i32::from_le_bytes([
             bytes[offset + 6],
             bytes[offset + 7],
             bytes[offset + 8],
@@ -204,7 +207,7 @@ fn parse_custom_points_resource(bytes: &[u8]) -> CustomPointsResource {
             y: if version >= 2 {
                 y_raw as f64 / 65536.0
             } else {
-                i16::from_be_bytes([bytes[offset + 2], bytes[offset + 3]]) as f64
+                i16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]) as f64
             },
         });
         offset += 14;
@@ -213,17 +216,18 @@ fn parse_custom_points_resource(bytes: &[u8]) -> CustomPointsResource {
 }
 
 fn build_custom_points_resource(points: &CustomPointsResource) -> Vec<u8> {
+    // All fields are little-endian per TS
     let mut bytes = Vec::with_capacity(8 + points.points.len() * 14);
-    bytes.extend_from_slice(&points.version.to_be_bytes());
-    bytes.extend_from_slice(&(points.points.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(&points.version.to_le_bytes());
+    bytes.extend_from_slice(&(points.points.len() as u32).to_le_bytes());
     for point in &points.points {
         let y_fixed = (point.y * 65536.0) as i32;
         let x_fixed = (point.x * 65536.0) as i32;
-        bytes.extend_from_slice(&14i16.to_be_bytes());
-        bytes.extend_from_slice(&y_fixed.to_be_bytes());
-        bytes.extend_from_slice(&x_fixed.to_be_bytes());
-        bytes.extend_from_slice(&(-1i16).to_be_bytes());
-        bytes.extend_from_slice(&8i16.to_be_bytes());
+        bytes.extend_from_slice(&14i16.to_le_bytes());
+        bytes.extend_from_slice(&y_fixed.to_le_bytes());
+        bytes.extend_from_slice(&x_fixed.to_le_bytes());
+        bytes.extend_from_slice(&(-1i16).to_le_bytes());
+        bytes.extend_from_slice(&8i16.to_le_bytes());
     }
     bytes
 }
@@ -742,9 +746,8 @@ impl<R: Read + Seek> PsdReader<R> {
         let mut groups = Vec::new();
         let count = length / 2;
         for _ in 0..count {
-            groups.push(
-                decode_be::<LayerStateRecord>(&self.read_bytes(2)?, "layer group entry")?.state,
-            );
+            let bytes = self.read_bytes(2)?;
+            groups.push(u16::from_le_bytes([bytes[0], bytes[1]]));
         }
         resources.clipping = Some(groups);
         Ok(())
@@ -794,10 +797,17 @@ impl<R: Read + Seek> PsdReader<R> {
         let mut names = Vec::new();
         let mut remaining = length;
 
-        while remaining > 0 {
-            let name = self.read_unicode_string()?;
-            remaining -= name.len() * 2 + 4;
+        while remaining >= 6 {
+            let name_length = self.read_u32()? as usize;
+            if name_length == 0 {
+                break;
+            }
+            // name_length includes null terminator: read (name_length - 1) chars, then skip null
+            let char_count = name_length - 1;
+            let name = self.read_unicode_string_with_length(char_count)?;
+            let _null = self.read_u16()?; // consume null terminator
             names.push(name);
+            remaining = remaining.saturating_sub(4 + char_count * 2 + 2);
         }
 
         resources.alpha_unicode_names = Some(names);
@@ -981,10 +991,8 @@ impl PsdWriter {
     /// Write layers group
     pub fn write_clipping(&mut self, clipping: &[u16]) -> Result<()> {
         for value in clipping {
-            self.write_bytes(&encode_be(
-                &LayerStateRecord { state: *value },
-                "layer group entry",
-            )?)?;
+            // Little-endian u16 per TS
+            self.write_bytes(&value.to_le_bytes())?;
         }
         Ok(())
     }

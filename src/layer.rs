@@ -16,6 +16,12 @@ pub struct LayerMaskData {
     pub user_mask_feather: Option<f64>,
     pub vector_mask_density: Option<f64>,
     pub vector_mask_feather: Option<f64>,
+    pub real_flags_byte: Option<u8>,
+    pub real_default_color: Option<u8>,
+    pub real_top: Option<i32>,
+    pub real_left: Option<i32>,
+    pub real_bottom: Option<i32>,
+    pub real_right: Option<i32>,
     pub image_data: Option<PixelData>,
 }
 

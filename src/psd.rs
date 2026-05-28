@@ -261,8 +261,20 @@ pub struct Psd {
     pub annotations: Option<Vec<Annotation>>,
     pub additional_info: LayerAdditionalInfo,
     pub color_mode_data: Option<ColorModeSectionData>,
+    /// Document resolution in pixels-per-inch (from resource 1005)
+    pub resolution: Option<f64>,
+    /// Guide lines (from resource 1032)
+    pub guides: Option<Vec<GuideInfo>>,
+    /// Alpha channel names (from resource 1045)
+    pub alpha_channel_names: Option<Vec<String>>,
+    /// Currently selected layer IDs (from resource 1069)
+    pub selected_layer_ids: Option<Vec<u32>>,
+    /// ICC color profile bytes (from resource 1039)
+    pub icc_profile: Option<Vec<u8>>,
     /// Document path selection descriptor (resource 3000)
     pub path_selection_descriptor: Option<crate::descriptor::Descriptor>,
+    /// Document slices (from resource 1050)
+    pub slices: Option<Vec<crate::image_resources::Slice>>,
     pub variable_sets: Option<Vec<VariableSet>>,
     pub data_sets: Option<Vec<Vec<String>>>,
     pub descriptor_1065: Option<crate::descriptor::Descriptor>,

@@ -11,6 +11,7 @@ pub enum EngineValue {
     Null,
     Boolean(bool),
     Number(f64),
+    Integer(i64),
     String(String),
     Array(Vec<EngineValue>),
     Object(HashMap<String, EngineValue>),
@@ -159,27 +160,54 @@ impl<'a> EngineDataParser<'a> {
             && self.data[self.index + 1] == 0xFF
         {
             self.index += 2;
-        } else {
-            return Err(PsdError::InvalidEngineData(
-                "Missing UTF-16 BOM".to_string(),
-            ));
+            let mut result = Vec::new();
+
+            loop {
+                if self.index >= self.data.len() {
+                    break;
+                }
+                // Terminate at ')' only when followed by whitespace, newline, or '>'
+                if self.data[self.index] == b')' {
+                    let next = self.data.get(self.index + 1).copied().unwrap_or(0);
+                    if next == b'\n' || next == b' ' || next == b'>' {
+                        break;
+                    }
+                }
+                let high = self.get_text_byte()? as u16;
+                let low = self.get_text_byte()? as u16;
+                let ch = (high << 8) | low;
+                result.push(ch);
+            }
+
+            if self.peek() == Some(b')') {
+                self.advance();
+            }
+
+            return String::from_utf16(&result)
+                .map_err(|e| PsdError::InvalidEngineData(format!("Invalid UTF-16: {}", e)));
         }
 
+        // No BOM: fall back to escaped ASCII string
+        self.read_escaped_ascii_string()
+    }
+
+    fn read_escaped_ascii_string(&mut self) -> Result<String> {
         let mut result = Vec::new();
-
-        while self.index < self.data.len() && self.data[self.index] != b')' {
-            let high = self.get_text_byte()? as u16;
-            let low = self.get_text_byte()? as u16;
-            let ch = (high << 8) | low;
-            result.push(ch);
+        while self.index < self.data.len() {
+            let b = self.data[self.index];
+            if b == b')' {
+                self.index += 1;
+                break;
+            }
+            if b == b'\\' && self.index + 1 < self.data.len() {
+                self.index += 1;
+                result.push(self.data[self.index]);
+            } else {
+                result.push(b);
+            }
+            self.index += 1;
         }
-
-        if self.peek() == Some(b')') {
-            self.advance();
-        }
-
-        String::from_utf16(&result)
-            .map_err(|e| PsdError::InvalidEngineData(format!("Invalid UTF-16: {}", e)))
+        Ok(String::from_utf8_lossy(&result).to_string())
     }
 
     fn push_container(&mut self, value: EngineValue) {
@@ -316,6 +344,18 @@ impl<'a> EngineDataParser<'a> {
                 // Array end
                 self.advance();
                 self.pop()?;
+            } else if self.index + 2 < self.data.len()
+                && &self.data[self.index..self.index + 3] == b"NaN"
+            {
+                // NaN -> float zero
+                self.index += 3;
+                self.push_value(EngineValue::Number(0.0))?;
+            } else if self.index + 8 < self.data.len()
+                && &self.data[self.index..self.index + 9] == b"undefined"
+            {
+                // undefined -> float zero
+                self.index += 9;
+                self.push_value(EngineValue::Number(0.0))?;
             } else if self.index + 3 < self.data.len()
                 && &self.data[self.index..self.index + 4] == b"null"
             {
@@ -457,10 +497,24 @@ impl EngineDataSerializer {
     }
 
     fn serialize_float(&self, value: f64) -> String {
-        format!("{:.5}", value)
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .to_string()
+        if value == value.round() {
+            // Whole number: always emit ".0"
+            return format!("{}.0", value as i64);
+        }
+        let mut text = format!("{:.5}", value);
+        // Strip trailing zeros after decimal, but leave at least one digit after "."
+        while text.ends_with('0') && !text.ends_with(".0") {
+            text.pop();
+        }
+        // Strip leading "0" for values in (0, 1): "0.5" -> ".5"
+        if value > 0.0 && value < 1.0 && text.starts_with("0.") {
+            text = text[1..].to_string();
+        }
+        // Strip leading "-0" for values in (-1, 0): "-0.5" -> "-.5"
+        if value < 0.0 && value > -1.0 && text.starts_with("-0.") {
+            text = format!("-{}", &text[2..]);
+        }
+        text
     }
 
     fn get_keys(map: &HashMap<String, EngineValue>) -> Vec<String> {
@@ -508,6 +562,14 @@ impl EngineDataSerializer {
                     self.write_str(" ");
                 }
                 self.write_str(&self.serialize_number(*n, key));
+            }
+            EngineValue::Integer(i) => {
+                if !in_property {
+                    self.write_indent();
+                } else {
+                    self.write_str(" ");
+                }
+                self.write_str(&i.to_string());
             }
             EngineValue::Boolean(b) => {
                 if !in_property {

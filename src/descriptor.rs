@@ -42,7 +42,8 @@ pub enum DescriptorValue {
         value: f64,
     },
     Property(String),
-    Alias(String),
+    GlobalObject(Descriptor),
+    Alias(Vec<u8>),
     FilePath {
         sig: String,
         path: String,
@@ -239,9 +240,13 @@ impl<R: Read + Seek> PsdReader<R> {
                 }
                 Ok(DescriptorValue::List(items))
             }
-            "Objc" | "GlbO" => {
+            "Objc" => {
                 let desc = self.read_descriptor_structure()?;
                 Ok(DescriptorValue::Descriptor(desc))
+            }
+            "GlbO" => {
+                let desc = self.read_descriptor_structure()?;
+                Ok(DescriptorValue::GlobalObject(desc))
             }
             "doub" => Ok(DescriptorValue::Double(self.read_f64()?)),
             "DBL " => Ok(DescriptorValue::Float(self.read_f32()?)),
@@ -344,30 +349,28 @@ impl<R: Read + Seek> PsdReader<R> {
             "alis" => {
                 let length = self.read_u32()? as usize;
                 let bytes = self.read_bytes(length)?;
-                Ok(DescriptorValue::Alias(
-                    String::from_utf8_lossy(&bytes).to_string(),
-                ))
+                Ok(DescriptorValue::Alias(bytes))
             }
             "Pth " => {
-                // File path alias: u32 total_length + 4-char sig + u32 pad + unicode chars + null u16
-                let length = self.read_u32()? as usize;
+                // File path: u32 total_byte_length + 4-char sig + u32 pad + unicode chars + null u16
+                let total_length = self.read_u32()? as usize;
                 let sig = self.read_signature()?;
-                let _ = self.read_u32()?; // pad
-                                          // Remaining bytes: (length - 8) bytes = chars*2 + null(2)
-                if length < 8 {
+                let _pad = self.read_u32()?;
+                // total_length includes sig(4) + pad(4) + chars*2 + null(2)
+                if total_length < 10 {
                     return Ok(DescriptorValue::FilePath {
                         sig,
                         path: String::new(),
                     });
                 }
-                let byte_len = length - 8;
-                let chars = if byte_len >= 2 { byte_len / 2 - 1 } else { 0 };
+                let byte_len = total_length - 8; // bytes after sig+pad
+                let char_count = byte_len / 2 - 1; // subtract null terminator
                 let mut path = String::new();
-                for _ in 0..chars {
+                for _ in 0..char_count {
                     let ch = self.read_u16()?;
                     path.push(char::from_u32(ch as u32).unwrap_or('\u{FFFD}'));
                 }
-                let _ = self.read_u16()?; // null terminator
+                let _null = self.read_u16()?;
                 Ok(DescriptorValue::FilePath { sig, path })
             }
             _ => Err(PsdError::UnsupportedFeature(format!(
@@ -465,6 +468,14 @@ impl PsdWriter {
         if value.len() == 4 && !is_long_descriptor_id(value) {
             self.write_u32(0)?;
             self.write_signature(value)?;
+        } else if value.len() < 4 && !is_long_descriptor_id(value) {
+            // Short IDs: zero-length prefix + pad to 4 bytes with spaces
+            self.write_u32(0)?;
+            let mut padded = value.to_string();
+            while padded.len() < 4 {
+                padded.push(' ');
+            }
+            self.write_signature(&padded)?;
         } else {
             self.write_u32(value.len() as u32)?;
             self.write_bytes(value.as_bytes())?;
@@ -512,6 +523,8 @@ impl PsdWriter {
             DescriptorValue::Boolean(v) => self.write_u8(if *v { 1 } else { 0 })?,
             DescriptorValue::Text(s) => self.write_unicode_string(s)?,
             DescriptorValue::Enum { enum_type, value } => {
+                // Write as "Enmr" format: class_structure(name, class_id) + type_id + value
+                self.write_class_structure("", enum_type)?;
                 self.write_ascii_string_or_class_id(enum_type)?;
                 self.write_ascii_string_or_class_id(value)?;
             }
@@ -551,10 +564,12 @@ impl PsdWriter {
                 self.write_class_structure("", "")?;
                 self.write_ascii_string_or_class_id(key)?;
             }
-            DescriptorValue::Alias(s) => {
-                let bytes = s.as_bytes();
+            DescriptorValue::Alias(bytes) => {
                 self.write_u32(bytes.len() as u32)?;
                 self.write_bytes(bytes)?;
+            }
+            DescriptorValue::GlobalObject(desc) => {
+                self.write_descriptor_structure(desc)?;
             }
             DescriptorValue::FilePath { sig, path } => {
                 // total_length = 4 (sig) + 4 (pad) + chars*2 + 2 (null)
@@ -668,10 +683,11 @@ fn ostype_sig(value: &DescriptorValue) -> &'static str {
         DescriptorValue::LargeInteger { .. } => "comp",
         DescriptorValue::Boolean(_) => "bool",
         DescriptorValue::Text(_) => "TEXT",
-        DescriptorValue::Enum { .. } => "enum",
+        DescriptorValue::Enum { .. } => "Enmr",
         DescriptorValue::Class { .. } => "type",
         DescriptorValue::Reference(_) => "obj ",
         DescriptorValue::Descriptor(_) => "Objc",
+        DescriptorValue::GlobalObject(_) => "GlbO",
         DescriptorValue::List(_) => "VlLs",
         DescriptorValue::DataBytes(_) => "tdta",
         DescriptorValue::UnitFloat { .. } => "UnFl",

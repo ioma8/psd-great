@@ -67,6 +67,55 @@ pub fn apply_document_postprocess(psd: &mut Psd) -> Result<()> {
                 height_unit: info.height_unit,
             });
         }
+
+        // Map resolution (resource 1005) → psd.resolution
+        if let Some(ref res_info) = resources.resolution_info {
+            psd.resolution = Some(res_info.horizontal_res);
+        }
+
+        // Map guides (resource 1032) → psd.guides
+        if let Some(ref grid_info) = resources.grid_and_guides {
+            if !grid_info.guides.is_empty() {
+                let guides: Vec<crate::psd::GuideInfo> = grid_info.guides.iter().map(|g| {
+                    let dir = match g.direction {
+                        crate::image_resources::GuideDirection::Vertical => "Vrtc",
+                        crate::image_resources::GuideDirection::Horizontal => "Hrzn",
+                    };
+                    crate::psd::GuideInfo {
+                        location: g.location,
+                        direction: crate::types::PsdStringCode::from(dir),
+                    }
+                }).collect();
+                psd.guides = Some(guides);
+            }
+        }
+
+        // Map alpha channel names (resource 1045) → psd.alpha_channel_names
+        if let Some(ref names) = resources.alpha_unicode_names {
+            if !names.is_empty() {
+                psd.alpha_channel_names = Some(names.clone());
+            }
+        }
+
+        // Map selected layer IDs (resource 1069) → psd.selected_layer_ids
+        if let Some(ref ids) = resources.layer_selection_ids {
+            psd.selected_layer_ids = Some(ids.clone());
+        }
+
+        // Map ICC profile (resource 1039) → psd.icc_profile
+        if let Some(ref profile) = resources.icc_profile {
+            psd.icc_profile = Some(profile.clone());
+        }
+
+        // Map slices (resource 1050) → psd.slices
+        if let Some(ref slices) = resources.slices {
+            psd.slices = Some(slices.slices.clone());
+        }
+
+        // Map path selection descriptor (resource 3000) → psd.path_selection_descriptor
+        if let Some(desc) = resources.descriptor_resources.get(&3000) {
+            psd.path_selection_descriptor = Some(desc.clone());
+        }
     }
     Ok(())
 }
@@ -135,6 +184,70 @@ pub fn apply_document_prewrite(psd: &mut Psd) -> Result<()> {
             width_unit: info.width_unit,
             height_unit: info.height_unit,
         });
+    }
+
+    // Map resolution → resource 1005
+    if let Some(dpi) = psd.resolution {
+        resources.resolution_info = Some(crate::image_resources::ResolutionInfo {
+            horizontal_res: dpi,
+            horizontal_res_unit: crate::image_resources::ResolutionUnit::PixelsPerInch,
+            width_unit: crate::image_resources::MeasurementUnit::Inches,
+            vertical_res: dpi,
+            vertical_res_unit: crate::image_resources::ResolutionUnit::PixelsPerInch,
+            height_unit: crate::image_resources::MeasurementUnit::Inches,
+        });
+    }
+
+    // Map guides → resource 1032
+    if let Some(ref guides) = psd.guides {
+        let grid_guides = resources.grid_and_guides.get_or_insert_with(|| {
+            crate::image_resources::GridAndGuides {
+                grid: crate::image_resources::Grid {
+                    horizontal: 0,
+                    vertical: 0,
+                },
+                guides: Vec::new(),
+            }
+        });
+        grid_guides.guides = guides.iter().map(|g| {
+            let dir = if g.direction.as_ref() == "Vrtc" {
+                crate::image_resources::GuideDirection::Vertical
+            } else {
+                crate::image_resources::GuideDirection::Horizontal
+            };
+            crate::image_resources::Guide {
+                location: g.location,
+                direction: dir,
+            }
+        }).collect();
+    }
+
+    // Map alpha_channel_names → resource 1045
+    if let Some(ref names) = psd.alpha_channel_names {
+        resources.alpha_unicode_names = Some(names.clone());
+    }
+
+    // Map selected_layer_ids → resource 1069
+    if let Some(ref ids) = psd.selected_layer_ids {
+        resources.layer_selection_ids = Some(ids.clone());
+    }
+
+    // Map icc_profile → resource 1039
+    if let Some(ref profile) = psd.icc_profile {
+        resources.icc_profile = Some(profile.clone());
+    }
+
+    // Map slices → resource 1050
+    if let Some(ref slices) = psd.slices {
+        resources.slices = Some(crate::image_resources::Slices {
+            version: 8,
+            slices: slices.clone(),
+        });
+    }
+
+    // Map path_selection_descriptor → resource 3000
+    if let Some(ref desc) = psd.path_selection_descriptor {
+        resources.descriptor_resources.insert(3000, desc.clone());
     }
 
     Ok(())
