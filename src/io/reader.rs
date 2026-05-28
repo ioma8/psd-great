@@ -1066,7 +1066,8 @@ fn read_layer_channel_raw_data<R: Read + Seek>(
 
 /// Build layer hierarchy from flat layer list
 fn build_layer_hierarchy(psd: &mut Psd, layers: Vec<Layer>) -> Result<()> {
-    let mut stack: Vec<(Vec<Layer>, Option<bool>)> = vec![(Vec::new(), None)];
+    let mut stack: Vec<(Vec<Layer>, Option<bool>, Option<String>)> =
+        vec![(Vec::new(), None, None)];
 
     for mut layer in layers.into_iter().rev() {
         let section_type = layer
@@ -1078,21 +1079,29 @@ fn build_layer_hierarchy(psd: &mut Psd, layers: Vec<Layer>) -> Result<()> {
 
         match section_type {
             SectionDividerType::BoundingSectionDivider => {
-                let (children, opened) = if stack.len() > 1 {
+                let (children, opened, close_name) = if stack.len() > 1 {
                     stack.pop().unwrap()
                 } else {
-                    (Vec::new(), None)
+                    (Vec::new(), None, None)
                 };
                 if !children.is_empty() {
                     layer.children = Some(children);
                 }
                 layer.opened = opened;
+                if let Some(ref name) = layer.additional_info.name {
+                    if name.starts_with("</") {
+                        if let Some(close_name) = close_name {
+                            layer.additional_info.name = Some(close_name);
+                        }
+                    }
+                }
                 stack.last_mut().unwrap().0.insert(0, layer);
             }
             SectionDividerType::OpenFolder | SectionDividerType::ClosedFolder => {
                 stack.push((
                     Vec::new(),
                     Some(matches!(section_type, SectionDividerType::OpenFolder)),
+                    layer.additional_info.name.clone(),
                 ));
             }
             SectionDividerType::Other => {
@@ -1101,7 +1110,7 @@ fn build_layer_hierarchy(psd: &mut Psd, layers: Vec<Layer>) -> Result<()> {
         }
     }
 
-    psd.children = Some(stack.pop().map(|(layers, _)| layers).unwrap_or_default());
+    psd.children = Some(stack.pop().map(|(layers, _, _)| layers).unwrap_or_default());
     Ok(())
 }
 
@@ -1597,10 +1606,7 @@ mod tests {
             .section_divider
             .as_ref()
             .map(|item| item.divider_type);
-        let name = if matches!(
-            divider,
-            Some(SectionDividerType::OpenFolder | SectionDividerType::ClosedFolder)
-        ) {
+        let name = if divider.is_some() {
             None
         } else {
             layer.additional_info.name.clone()
@@ -1817,6 +1823,57 @@ mod tests {
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].additional_info.name.as_deref(), Some("Group"));
         assert_eq!(roots[0].opened, Some(false));
+        assert_eq!(
+            roots[0]
+                .children
+                .as_ref()
+                .expect("group children")
+                .first()
+                .and_then(|child| child.additional_info.name.as_deref()),
+            Some("Leaf")
+        );
+    }
+
+    #[test]
+    fn test_build_layer_hierarchy_uses_close_marker_name_for_generic_bounding_name() {
+        let mut psd = Psd::default();
+        let group = Layer {
+            additional_info: crate::format::additional_info::LayerAdditionalInfo {
+                name: Some("</Layer group>".to_string()),
+                section_divider: Some(crate::format::additional_info::SectionDivider {
+                    divider_type: SectionDividerType::BoundingSectionDivider,
+                    blend_mode: None,
+                    sub_type: None,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let leaf = Layer {
+            additional_info: crate::format::additional_info::LayerAdditionalInfo {
+                name: Some("Leaf".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let close = Layer {
+            additional_info: crate::format::additional_info::LayerAdditionalInfo {
+                name: Some("top".to_string()),
+                section_divider: Some(crate::format::additional_info::SectionDivider {
+                    divider_type: SectionDividerType::ClosedFolder,
+                    blend_mode: None,
+                    sub_type: None,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        build_layer_hierarchy(&mut psd, vec![group, leaf, close]).expect("build hierarchy");
+
+        let roots = psd.children.expect("root layers");
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].additional_info.name.as_deref(), Some("top"));
         assert_eq!(
             roots[0]
                 .children
