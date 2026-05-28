@@ -1441,6 +1441,108 @@ mod remaining_tagged_block_parity {
     }
 
     #[test]
+    fn linked_file_rejects_life_without_required_descriptor_or_time() {
+        use psd_great::additional_info::LinkedFilesBlock;
+
+        let mut layer = Layer::default();
+        layer.top = Some(0);
+        layer.left = Some(0);
+        layer.bottom = Some(1);
+        layer.right = Some(1);
+        layer.blend_mode = Some(BlendMode::Normal);
+        layer.opacity = Some(1.0);
+        layer.additional_info.name = Some("Linked".to_string());
+        layer.additional_info.linked_files = Some(LinkedFilesBlock {
+            key: psd_great::PsdStringCode::from("lnkD"),
+            items: vec![psd_great::LinkedFile {
+                id: "asset-id".to_string(),
+                name: "Placed Asset".to_string(),
+                item_version: Some(7),
+                data_kind: Some(psd_great::PsdStringCode::from("liFE")),
+                file_type: Some(psd_great::PsdStringCode::from("8BPS")),
+                creator: Some(psd_great::PsdStringCode::from("8BIM")),
+                data: Some(vec![1, 2, 3, 4]),
+                time: None,
+                descriptor: None,
+                child_document_id: None,
+                asset_mod_time: None,
+                asset_locked_state: None,
+                linked_file: Some(psd_great::layer::LinkedFileInfo {
+                    file_size: 99,
+                    name: "asset.jpg".to_string(),
+                    full_path: "/tmp/asset.jpg".to_string(),
+                    original_path: "/orig/asset.jpg".to_string(),
+                    relative_path: "asset.jpg".to_string(),
+                }),
+                open_descriptor: None,
+            }],
+        });
+
+        let mut psd = Psd::default();
+        psd.width = 1;
+        psd.height = 1;
+        psd.channels = Some(4);
+        psd.bits_per_channel = Some(8);
+        psd.color_mode = Some(ColorMode::RGB);
+        psd.children = Some(vec![layer]);
+
+        let err = write_psd(&psd, &WriteOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("liFE"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn linked_file_rejects_none_when_life_requires_file_metadata() {
+        use psd_great::additional_info::LinkedFilesBlock;
+        use psd_great::descriptor::Descriptor;
+
+        let mut layer = Layer::default();
+        layer.top = Some(0);
+        layer.left = Some(0);
+        layer.bottom = Some(1);
+        layer.right = Some(1);
+        layer.blend_mode = Some(BlendMode::Normal);
+        layer.opacity = Some(1.0);
+        layer.additional_info.name = Some("Linked".to_string());
+        layer.additional_info.linked_files = Some(LinkedFilesBlock {
+            key: psd_great::PsdStringCode::from("lnkD"),
+            items: vec![psd_great::LinkedFile {
+                id: "asset-id".to_string(),
+                name: "Placed Asset".to_string(),
+                item_version: Some(3),
+                data_kind: Some(psd_great::PsdStringCode::from("liFE")),
+                file_type: Some(psd_great::PsdStringCode::from("8BPS")),
+                creator: Some(psd_great::PsdStringCode::from("8BIM")),
+                data: Some(vec![1, 2, 3, 4]),
+                time: None,
+                descriptor: Some(Descriptor {
+                    name: "linked".to_string(),
+                    class_id: "lnkF".to_string(),
+                    items: std::collections::HashMap::new(),
+                }),
+                child_document_id: None,
+                asset_mod_time: None,
+                asset_locked_state: None,
+                linked_file: None,
+                open_descriptor: None,
+            }],
+        });
+
+        let mut psd = Psd::default();
+        psd.width = 1;
+        psd.height = 1;
+        psd.channels = Some(4);
+        psd.bits_per_channel = Some(8);
+        psd.color_mode = Some(ColorMode::RGB);
+        psd.children = Some(vec![layer]);
+
+        let err = write_psd(&psd, &WriteOptions::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("linked file metadata"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn roundtrip_feid_with_full_structure() {
         use psd_great::additional_info::{
             self, ChannelImageData, FilterEffectsPreview, FilterEffectsRect, FilterEffectsSlot,

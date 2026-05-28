@@ -119,28 +119,39 @@ fn color_sampler_public_model_preserves_version_specific_positions() {
             vertical: 22,
         },
         color_space: 0,
-        depth: None,
     };
     let v2 = psd::ColorSampler {
         position: psd::ColorSamplerPosition::V2 {
             horizontal: 33,
             vertical: 44,
+            depth: 16,
         },
         color_space: 8,
-        depth: Some(16),
     };
     let unsupported = psd::ColorSampler {
         position: psd::ColorSamplerPosition::Unsupported {
             version: 9,
             horizontal: 55,
             vertical: 66,
+            depth: Some(32),
         },
         color_space: 1,
-        depth: Some(32),
     };
 
     assert_ne!(v1.position, v2.position);
     assert_eq!(unsupported.position.version(), 9);
+    assert_eq!(v1.position.coordinates(), (11, 22));
+    assert_eq!(v2.position.coordinates(), (33, 44));
+
+    match v2.position {
+        psd::ColorSamplerPosition::V2 { depth, .. } => assert_eq!(depth, 16),
+        _ => panic!("expected v2 sampler"),
+    }
+
+    match unsupported.position {
+        psd::ColorSamplerPosition::Unsupported { depth, .. } => assert_eq!(depth, Some(32)),
+        _ => panic!("expected unsupported sampler"),
+    }
 }
 
 #[test]
@@ -610,6 +621,62 @@ fn slices_v6_roundtrip_preserves_per_slice_descriptor_tail() {
         psd_great::image_resources::read_image_resources(&mut reader, bytes.len()).expect("read");
 
     assert_eq!(reparsed.slices, Some(slices));
+}
+
+#[test]
+fn slices_v6_write_rejects_unsupported_source_fields() {
+    let resources = ImageResources {
+        slices: Some(psd_great::image_resources::Slices {
+            version: 6,
+            bounds: Some(psd_great::image_resources::SliceBounds {
+                top: 0,
+                left: 0,
+                bottom: 10,
+                right: 10,
+            }),
+            group_name: Some("legacy".to_string()),
+            slices: vec![psd_great::image_resources::Slice {
+                id: 1,
+                group_id: 2,
+                origin: PsdU32Code(0),
+                associated_layer_id: 0,
+                name: "slice".to_string(),
+                slice_type: PsdU32Code(0),
+                bounds: psd_great::image_resources::SliceBounds {
+                    top: 1,
+                    left: 2,
+                    bottom: 3,
+                    right: 4,
+                },
+                url: String::new(),
+                target: String::new(),
+                message: String::new(),
+                alt_tag: String::new(),
+                cell_text: String::new(),
+                horizontal_align: PsdIntCode(0),
+                vertical_align: PsdIntCode(0),
+                alpha: 0,
+                bg_color: [0, 0, 0, 0],
+                cell_is_html: false,
+                source_id: Some(42),
+                source_type: Some(PsdU32Code(7)),
+                descriptor: None,
+            }],
+            descriptor: None,
+        }),
+        ..Default::default()
+    };
+
+    let mut writer = PsdWriter::new(256);
+    let err = psd_great::image_resources::write_image_resources(&mut writer, &resources)
+        .expect_err(
+            "v6 slice write should reject unsupported source fields instead of dropping them",
+        );
+
+    assert!(
+        err.to_string().contains("source_id/source_type"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -1342,4 +1409,60 @@ fn path_resources_use_8_24_fixed_point() {
 
     assert_eq!(&bytes[14..18], &[0x01, 0x00, 0x00, 0x00]);
     assert_eq!(&bytes[18..22], &[0x00, 0x40, 0x00, 0x00]);
+}
+
+#[test]
+fn write_psd_rejects_life_version_4_without_required_time() {
+    use psd_great::additional_info::LinkedFilesBlock;
+    use psd_great::descriptor::Descriptor;
+
+    let mut layer = Layer::default();
+    layer.top = Some(0);
+    layer.left = Some(0);
+    layer.bottom = Some(1);
+    layer.right = Some(1);
+    layer.blend_mode = Some(BlendMode::Normal);
+    layer.opacity = Some(1.0);
+    layer.additional_info.linked_files = Some(LinkedFilesBlock {
+        key: psd_great::PsdStringCode::from("lnkD"),
+        items: vec![psd_great::LinkedFile {
+            id: "asset-id".to_string(),
+            name: "Placed Asset".to_string(),
+            item_version: Some(4),
+            data_kind: Some(psd_great::PsdStringCode::from("liFE")),
+            file_type: Some(psd_great::PsdStringCode::from("8BPS")),
+            creator: Some(psd_great::PsdStringCode::from("8BIM")),
+            data: Some(vec![1, 2, 3, 4]),
+            time: None,
+            descriptor: Some(Descriptor {
+                name: "linked".to_string(),
+                class_id: "lnkF".to_string(),
+                items: std::collections::HashMap::new(),
+            }),
+            child_document_id: None,
+            asset_mod_time: None,
+            asset_locked_state: None,
+            linked_file: Some(psd_great::layer::LinkedFileInfo {
+                file_size: 99,
+                name: String::new(),
+                full_path: String::new(),
+                original_path: String::new(),
+                relative_path: String::new(),
+            }),
+            open_descriptor: None,
+        }],
+    });
+
+    let psd = Psd {
+        width: 1,
+        height: 1,
+        channels: Some(4),
+        bits_per_channel: Some(8),
+        color_mode: Some(ColorMode::RGB),
+        children: Some(vec![layer]),
+        ..Default::default()
+    };
+
+    let err = write_psd(&psd, &WriteOptions::default()).unwrap_err();
+    assert!(err.to_string().contains("time"), "unexpected error: {err}");
 }

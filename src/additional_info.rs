@@ -102,6 +102,24 @@ fn validate_linked_file_item(item: &LinkedFile) -> Result<()> {
         .map(|v| v.as_ref())
         .unwrap_or("liFD");
 
+    if kind == "liFE" {
+        if item.descriptor.is_none() {
+            return Err(PsdError::InvalidFormat(
+                "liFE items require a descriptor".to_string(),
+            ));
+        }
+        if version > 3 && item.time.is_none() {
+            return Err(PsdError::InvalidFormat(
+                "liFE items with item_version > 3 require time metadata".to_string(),
+            ));
+        }
+        if item.linked_file.is_none() {
+            return Err(PsdError::InvalidFormat(
+                "liFE items require linked file metadata".to_string(),
+            ));
+        }
+    }
+
     if item.child_document_id.is_some() && version < 5 {
         return Err(PsdError::InvalidFormat(
             "linked file child_document_id requires item_version >= 5".to_string(),

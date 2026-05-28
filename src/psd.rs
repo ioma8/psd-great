@@ -227,11 +227,13 @@ pub enum ColorSamplerPosition {
     V2 {
         horizontal: i32,
         vertical: i32,
+        depth: u16,
     },
     Unsupported {
         version: u32,
         horizontal: i32,
         vertical: i32,
+        depth: Option<u16>,
     },
 }
 
@@ -253,6 +255,7 @@ impl ColorSamplerPosition {
             | Self::V2 {
                 horizontal,
                 vertical,
+                ..
             }
             | Self::Unsupported {
                 horizontal,
@@ -268,7 +271,6 @@ impl ColorSamplerPosition {
 pub struct ColorSampler {
     pub position: ColorSamplerPosition,
     pub color_space: i16,
-    pub depth: Option<u16>,
 }
 
 /// Document slices (resource 1050)

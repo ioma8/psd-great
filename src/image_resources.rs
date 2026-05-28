@@ -262,21 +262,22 @@ fn parse_color_samplers_resource(bytes: &[u8]) -> ColorSamplersResource {
             2 => crate::psd::ColorSamplerPosition::V2 {
                 horizontal,
                 vertical,
+                depth: u16::from_be_bytes([bytes[offset + 10], bytes[offset + 11]]),
             },
             _ => crate::psd::ColorSamplerPosition::Unsupported {
                 version,
                 horizontal,
                 vertical,
+                depth: if version >= 2 {
+                    Some(u16::from_be_bytes([bytes[offset + 10], bytes[offset + 11]]))
+                } else {
+                    None
+                },
             },
         };
         samplers.push(crate::psd::ColorSampler {
             position,
             color_space: i16::from_be_bytes([bytes[offset + 8], bytes[offset + 9]]),
-            depth: if version >= 2 {
-                Some(u16::from_be_bytes([bytes[offset + 10], bytes[offset + 11]]))
-            } else {
-                None
-            },
         });
         offset += record_len;
     }
@@ -317,29 +318,25 @@ fn build_color_samplers_resource(samplers: &ColorSamplersResource) -> Result<Vec
     bytes.extend_from_slice(&samplers.version.to_be_bytes());
     bytes.extend_from_slice(&(samplers.samplers.len() as u32).to_be_bytes());
     for sampler in &samplers.samplers {
-        let version = sampler.position.version();
-        if version == 1 && sampler.depth.is_some() {
-            return Err(PsdError::InvalidFormat(
-                "Color sampler version 1 must not include depth".to_string(),
-            ));
-        }
-        if version >= 2 && sampler.depth.is_none() {
-            return Err(PsdError::InvalidFormat(format!(
-                "Color sampler version {version} requires depth to serialize losslessly"
-            )));
-        }
-
         let (horizontal, vertical) = sampler.position.coordinates();
         bytes.extend_from_slice(&horizontal.to_be_bytes());
         bytes.extend_from_slice(&vertical.to_be_bytes());
         bytes.extend_from_slice(&(sampler.color_space as u16).to_be_bytes());
-        if samplers.version >= 2 {
-            bytes.extend_from_slice(
-                &sampler
-                    .depth
-                    .expect("validated depth for color sampler version >= 2")
-                    .to_be_bytes(),
-            );
+        match &sampler.position {
+            crate::psd::ColorSamplerPosition::V1 { .. } => {}
+            crate::psd::ColorSamplerPosition::V2 { depth, .. } => {
+                bytes.extend_from_slice(&depth.to_be_bytes());
+            }
+            crate::psd::ColorSamplerPosition::Unsupported { version, depth, .. } => {
+                if *version >= 2 {
+                    let depth = depth.ok_or_else(|| {
+                        PsdError::InvalidFormat(format!(
+                            "Color sampler version {version} requires depth to serialize losslessly"
+                        ))
+                    })?;
+                    bytes.extend_from_slice(&depth.to_be_bytes());
+                }
+            }
         }
     }
     Ok(bytes)
@@ -522,11 +519,17 @@ fn next_bytes_start_legacy_slice_descriptor(bytes: &[u8], offset: usize, end: us
     let name_len =
         u32::from_be_bytes(bytes[cursor..cursor + 4].try_into().expect("name length")) as usize;
     cursor += 4;
+    if name_len != 1 {
+        return false;
+    }
 
     let Some(name_bytes) = name_len.checked_mul(2) else {
         return false;
     };
     if cursor + name_bytes + 8 > end {
+        return false;
+    }
+    if bytes[cursor..cursor + 2] != [0, 0] {
         return false;
     }
     cursor += name_bytes;
@@ -1494,6 +1497,12 @@ pub fn write_image_resources(writer: &mut PsdWriter, resources: &ImageResources)
             w.write_unicode_string(slices.group_name.as_deref().unwrap_or(""))?;
             w.write_u32(slices.slices.len() as u32)?;
             for slice in &slices.slices {
+                if slice.source_id.is_some() || slice.source_type.is_some() {
+                    return Err(PsdError::UnsupportedFeature(
+                        "v6 slice source_id/source_type are unsupported by tightened descriptor-tail framing"
+                            .to_string(),
+                    ));
+                }
                 w.write_i32(slice.id as i32)?;
                 w.write_i32(slice.group_id as i32)?;
                 w.write_i32(slice.origin.0 as i32)?;
@@ -1790,9 +1799,9 @@ mod tests {
                 position: crate::psd::ColorSamplerPosition::V2 {
                     horizontal: 100,
                     vertical: 200,
+                    depth: 16,
                 },
                 color_space: 8,
-                depth: Some(16),
             }],
         };
 
@@ -1811,7 +1820,6 @@ mod tests {
                     vertical: 456,
                 },
                 color_space: 2,
-                depth: None,
             }],
         };
 
@@ -1830,9 +1838,9 @@ mod tests {
                 position: crate::psd::ColorSamplerPosition::V2 {
                     horizontal: -32,
                     vertical: 4096,
+                    depth: 16,
                 },
                 color_space: 8,
-                depth: Some(16),
             }],
         };
 
@@ -1852,9 +1860,9 @@ mod tests {
                     version: 3,
                     horizontal: 7,
                     vertical: 9,
+                    depth: Some(12),
                 },
                 color_space: 8,
-                depth: Some(12),
             }],
         };
 
@@ -1874,9 +1882,9 @@ mod tests {
                     position: crate::psd::ColorSamplerPosition::V2 {
                         horizontal: 1,
                         vertical: 2,
+                        depth: 16,
                     },
                     color_space: 8,
-                    depth: Some(16),
                 },
                 crate::psd::ColorSampler {
                     position: crate::psd::ColorSamplerPosition::V1 {
@@ -1884,7 +1892,6 @@ mod tests {
                         vertical: 4,
                     },
                     color_space: 0,
-                    depth: None,
                 },
             ],
         };
@@ -1904,9 +1911,9 @@ mod tests {
                 position: crate::psd::ColorSamplerPosition::V2 {
                     horizontal: 1,
                     vertical: 2,
+                    depth: 16,
                 },
                 color_space: 8,
-                depth: Some(16),
             }],
         };
 
@@ -1918,16 +1925,17 @@ mod tests {
     }
 
     #[test]
-    fn color_sampler_resource_rejects_missing_depth_for_version_two_or_higher() {
+    fn color_sampler_resource_rejects_missing_depth_for_unsupported_version_two_or_higher() {
         let resource = ColorSamplersResource {
-            version: 2,
+            version: 9,
             samplers: vec![crate::psd::ColorSampler {
-                position: crate::psd::ColorSamplerPosition::V2 {
+                position: crate::psd::ColorSamplerPosition::Unsupported {
+                    version: 9,
                     horizontal: 1,
                     vertical: 2,
+                    depth: None,
                 },
                 color_space: 8,
-                depth: None,
             }],
         };
 
@@ -1939,24 +1947,20 @@ mod tests {
     }
 
     #[test]
-    fn color_sampler_resource_rejects_depth_for_version_one() {
-        let resource = ColorSamplersResource {
-            version: 1,
-            samplers: vec![crate::psd::ColorSampler {
-                position: crate::psd::ColorSamplerPosition::V1 {
-                    horizontal: 1,
-                    vertical: 2,
-                },
-                color_space: 8,
-                depth: Some(16),
-            }],
+    fn color_sampler_public_model_carries_depth_in_position() {
+        let sampler = crate::psd::ColorSampler {
+            position: crate::psd::ColorSamplerPosition::V2 {
+                horizontal: 1,
+                vertical: 2,
+                depth: 16,
+            },
+            color_space: 8,
         };
 
-        let err = build_color_samplers_resource_for_test(&resource).unwrap_err();
-        assert!(
-            err.to_string().contains("must not include depth"),
-            "unexpected error: {err}"
-        );
+        match sampler.position {
+            crate::psd::ColorSamplerPosition::V2 { depth, .. } => assert_eq!(depth, 16),
+            _ => panic!("expected version 2 sampler"),
+        }
     }
 
     #[test]
@@ -2039,6 +2043,25 @@ mod tests {
         let reparsed = read_image_resources(&mut reader, len).unwrap();
 
         assert_eq!(reparsed.slices, resources.slices);
+    }
+
+    #[test]
+    fn legacy_slice_descriptor_probe_rejects_header_like_trailing_bytes_without_empty_name_prefix()
+    {
+        let bytes = [
+            0, 0, 0, 16, // descriptor version marker
+            0, 0, 0,
+            0, // invalid for tightened framing; empty descriptor names encode as len=1
+            0, 0, 0, 0, // pretend class id len
+            b'n', b'u', b'l', b'l', // pretend class id bytes
+            0, 0, 0, 0, // pretend item count
+        ];
+
+        assert!(!next_bytes_start_legacy_slice_descriptor(
+            &bytes,
+            0,
+            bytes.len()
+        ));
     }
 
     #[test]
