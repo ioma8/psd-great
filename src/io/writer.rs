@@ -459,7 +459,7 @@ fn write_layer_info(
 ) -> Result<()> {
     let psb = options.psb.unwrap_or(false);
     let bits_per_channel = psd.bits_per_channel.unwrap_or(8);
-    writer.write_section(2, psb, |writer| {
+    writer.write_section(1, psb, |writer| {
         let layers = flatten_layers(psd.children.as_ref());
         let prepared_payloads: Vec<PreparedLayerChannels> = layers
             .iter()
@@ -868,17 +868,40 @@ fn layer_channel_payload(
     bits_per_channel: u8,
     options: &WriteOptions,
 ) -> Result<Vec<u8>> {
-    let width = (layer.right.unwrap_or(0) - layer.left.unwrap_or(0)).max(0) as usize;
-    let height = (layer.bottom.unwrap_or(0) - layer.top.unwrap_or(0)).max(0) as usize;
-    let image_data = layer.image_data.as_ref();
-    let offset = match channel_id {
-        ChannelID::Color0 => 0,
-        ChannelID::Color1 => 1,
-        ChannelID::Color2 => 2,
-        ChannelID::Transparency => 3,
-        _ => 0,
+    let (width, height) = layer_channel_dimensions(layer, channel_id);
+    let raw = match channel_id {
+        ChannelID::Color0 => {
+            extract_layer_channel_data(layer.image_data.as_ref(), width, height, 0)
+        }
+        ChannelID::Color1 => {
+            extract_layer_channel_data(layer.image_data.as_ref(), width, height, 1)
+        }
+        ChannelID::Color2 => {
+            extract_layer_channel_data(layer.image_data.as_ref(), width, height, 2)
+        }
+        ChannelID::Transparency => {
+            extract_layer_channel_data(layer.image_data.as_ref(), width, height, 3)
+        }
+        ChannelID::UserMask => extract_mask_channel_data(
+            layer
+                .additional_info
+                .mask
+                .as_ref()
+                .and_then(|mask| mask.image_data.as_ref()),
+            width,
+            height,
+        ),
+        ChannelID::RealUserMask => extract_mask_channel_data(
+            layer
+                .additional_info
+                .real_mask
+                .as_ref()
+                .and_then(|mask| mask.image_data.as_ref()),
+            width,
+            height,
+        ),
+        _ => vec![0; width * height],
     };
-    let raw = extract_layer_channel_data(image_data, width, height, offset);
     let expanded = expand_samples_for_depth(&raw, bits_per_channel);
     match preferred_channel_compression(bits_per_channel, options) {
         Compression::RawData => Ok(expanded),
@@ -932,12 +955,30 @@ fn prepare_layer_channels(
         }
     }
 
-    let channel_ids = [
+    let mut channel_ids = vec![
         ChannelID::Transparency,
         ChannelID::Color0,
         ChannelID::Color1,
         ChannelID::Color2,
     ];
+    if layer
+        .additional_info
+        .mask
+        .as_ref()
+        .and_then(|mask| mask.image_data.as_ref())
+        .is_some()
+    {
+        channel_ids.push(ChannelID::UserMask);
+    }
+    if layer
+        .additional_info
+        .real_mask
+        .as_ref()
+        .and_then(|mask| mask.image_data.as_ref())
+        .is_some()
+    {
+        channel_ids.push(ChannelID::RealUserMask);
+    }
     let compression = preferred_channel_compression(bits_per_channel, options);
     let mut entries = Vec::with_capacity(channel_ids.len());
     for &channel_id in &channel_ids {
@@ -982,16 +1023,22 @@ fn layer_channel_bounds(layer: &Layer, channel_id: ChannelID) -> (i32, i32, usiz
         }
         ChannelID::RealUserMask => {
             if let Some(mask) = layer.additional_info.real_mask.as_ref() {
-                let left = mask.left.unwrap_or(layer_left);
-                let top = mask.top.unwrap_or(layer_top);
-                let right = mask.right.unwrap_or(left);
-                let bottom = mask.bottom.unwrap_or(top);
-                return (
-                    left,
-                    top,
-                    (right - left).max(0) as usize,
-                    (bottom - top).max(0) as usize,
-                );
+                if mask.left.is_some()
+                    || mask.top.is_some()
+                    || mask.right.is_some()
+                    || mask.bottom.is_some()
+                {
+                    let left = mask.left.unwrap_or(layer_left);
+                    let top = mask.top.unwrap_or(layer_top);
+                    let right = mask.right.unwrap_or(left);
+                    let bottom = mask.bottom.unwrap_or(top);
+                    return (
+                        left,
+                        top,
+                        (right - left).max(0) as usize,
+                        (bottom - top).max(0) as usize,
+                    );
+                }
             }
             if let Some(mask) = layer.additional_info.mask.as_ref() {
                 let left = mask.real_left.or(mask.left).unwrap_or(layer_left);
@@ -1139,6 +1186,20 @@ fn extract_layer_channel_data(
         }
     } else if offset == 3 {
         out.fill(255);
+    }
+    out
+}
+
+fn extract_mask_channel_data(
+    image_data: Option<&crate::api::types::PixelData>,
+    width: usize,
+    height: usize,
+) -> Vec<u8> {
+    let expected_len = width * height;
+    let mut out = vec![0u8; expected_len];
+    if let Some(image_data) = image_data {
+        let copy_len = expected_len.min(image_data.data.len());
+        out[..copy_len].copy_from_slice(&image_data.data[..copy_len]);
     }
     out
 }
@@ -1316,7 +1377,36 @@ mod tests {
     use super::*;
     use crate::api::psd::ReadOptions;
     use crate::format::additional_info::LayerAdditionalInfo;
+    use std::fs;
     use std::io::Cursor;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn roundtrip_sample_path() -> PathBuf {
+        PathBuf::from("/Users/jakubkolcar/Downloads/3D-preview-sample/3d-preview-mockup.psd")
+    }
+
+    fn find_layer_by_name_with_user_mask<'a>(layers: &'a [Layer], name: &str) -> Option<&'a Layer> {
+        for layer in layers {
+            if layer.additional_info.name.as_deref() == Some(name)
+                && layer
+                    .additional_info
+                    .mask
+                    .as_ref()
+                    .and_then(|mask| mask.image_data.as_ref())
+                    .is_some()
+            {
+                return Some(layer);
+            }
+            if let Some(children) = layer.children.as_ref() {
+                if let Some(found) = find_layer_by_name_with_user_mask(children, name) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
 
     #[test]
     fn test_write_signature() {
@@ -1484,4 +1574,140 @@ mod tests {
             Some("Child")
         );
     }
+
+    #[test]
+    fn test_prepare_layer_channels_includes_mask_channels_without_raw_data() {
+        let layer = Layer {
+            left: Some(0),
+            top: Some(0),
+            right: Some(2),
+            bottom: Some(1),
+            image_data: Some(crate::api::types::PixelData {
+                data: vec![10, 0, 0, 255, 20, 0, 0, 128],
+                width: 2,
+                height: 1,
+            }),
+            additional_info: LayerAdditionalInfo {
+                mask: Some(crate::api::layer::LayerMaskData {
+                    left: Some(0),
+                    top: Some(0),
+                    right: Some(1),
+                    bottom: Some(1),
+                    image_data: Some(crate::api::types::PixelData {
+                        data: vec![77],
+                        width: 1,
+                        height: 1,
+                    }),
+                    ..Default::default()
+                }),
+                real_mask: Some(crate::api::layer::LayerMaskData {
+                    left: Some(1),
+                    top: Some(0),
+                    right: Some(2),
+                    bottom: Some(1),
+                    image_data: Some(crate::api::types::PixelData {
+                        data: vec![33],
+                        width: 1,
+                        height: 1,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let prepared = prepare_layer_channels(
+            &layer,
+            8,
+            &WriteOptions {
+                compress: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("prepare channels");
+
+        let channel_ids: Vec<_> = prepared.entries.iter().map(|entry| entry.id).collect();
+        assert_eq!(
+            channel_ids,
+            vec![
+                ChannelID::Transparency,
+                ChannelID::Color0,
+                ChannelID::Color1,
+                ChannelID::Color2,
+                ChannelID::UserMask,
+                ChannelID::RealUserMask,
+            ]
+        );
+        assert_eq!(prepared.entries[4].payload, vec![77]);
+        assert_eq!(prepared.entries[5].payload, vec![33]);
+    }
+
+    #[test]
+    fn test_roundtrip_sample_opens_in_ts_parser_subprocess() {
+        let original = fs::read(roundtrip_sample_path()).expect("read roundtrip sample");
+        let psd = crate::read_psd(Cursor::new(original), ReadOptions::default())
+            .expect("parse roundtrip sample");
+        let output = write_psd(&psd, &WriteOptions::default()).expect("write roundtrip sample");
+
+        let output_path = std::env::temp_dir().join(format!(
+            "psd-great-roundtrip-{}-{}.psd",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        fs::write(&output_path, output).expect("write temporary roundtrip sample");
+
+        let command_output = Command::new("npx")
+            .args([
+                "--yes",
+                "tsx",
+                "-e",
+                "import { parsePsd } from './src/index.ts';\
+                 import fs from 'node:fs';\
+                 const bytes = fs.readFileSync(process.argv[1]);\
+                 const psd = parsePsd(bytes);\
+                 console.log(JSON.stringify({ width: psd.width, height: psd.height, layers: psd.layers.length }));",
+                output_path.to_str().expect("utf-8 temp path"),
+            ])
+            .current_dir("../photoshop/psd")
+            .output()
+            .expect("run ts parser subprocess");
+
+        let _ = fs::remove_file(&output_path);
+
+        assert!(
+            command_output.status.success(),
+            "TS parser failed: {}",
+            String::from_utf8_lossy(&command_output.stderr)
+        );
+    }
+
+    #[test]
+    fn test_prepare_layer_channels_for_sample_masked_layer_includes_user_mask() {
+        let original = fs::read(roundtrip_sample_path()).expect("read roundtrip sample");
+        let psd = crate::read_psd(Cursor::new(original), ReadOptions::default())
+            .expect("parse original sample for synthesized write");
+        let layer = find_layer_by_name_with_user_mask(
+            psd.children.as_deref().unwrap_or(&[]),
+            "4",
+        )
+        .expect("sample layer with user mask");
+
+        let prepared = prepare_layer_channels(
+            layer,
+            psd.bits_per_channel.unwrap_or(8),
+            &WriteOptions::default(),
+        )
+        .expect("prepare sample channels");
+
+        let channel_ids: Vec<_> = prepared.entries.iter().map(|entry| entry.id).collect();
+        assert!(
+            channel_ids.contains(&ChannelID::UserMask),
+            "prepared channels should include UserMask, got {channel_ids:?}"
+        );
+    }
+
 }

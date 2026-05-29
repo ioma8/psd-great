@@ -3161,7 +3161,12 @@ pub fn read_layer_additional_info<R: Read + Seek>(
         if even_padding != 0 {
             reader.skip_bytes(even_padding)?;
         }
-        if (reader.offset - start_offset) < length as u64 {
+        let consumed = reader.offset.saturating_sub(start_offset);
+        if consumed >= length as u64 {
+            break;
+        }
+        let remaining = length as u64 - consumed;
+        if remaining >= 4 {
             let next = reader.peek_signature()?;
             if next != "8BIM" && next != "8B64" {
                 let four_padding = (4 - (data_length % 4)) % 4;
@@ -3169,6 +3174,8 @@ pub fn read_layer_additional_info<R: Read + Seek>(
                     reader.skip_bytes(four_padding - even_padding)?;
                 }
             }
+        } else if remaining > 0 {
+            reader.skip_bytes(remaining as usize)?;
         }
     }
 
@@ -3208,8 +3215,9 @@ fn write_tagged_block(writer: &mut PsdWriter, key: &str, data: &[u8], large: boo
     }
     writer.write_u32(data.len() as u32)?;
     writer.write_bytes(data)?;
-    if data.len() % 2 != 0 {
-        writer.write_u8(0)?;
+    let padding = (4 - (data.len() % 4)) % 4;
+    if padding != 0 {
+        writer.write_zeros(padding)?;
     }
     Ok(())
 }
@@ -3436,6 +3444,35 @@ mod tests {
         assert_eq!(read_info.blend_interior_elements, Some(false));
         assert_eq!(read_info.knockout, Some(true));
         assert_eq!(read_info.name_source.as_deref(), Some("abcd"));
+    }
+
+    #[test]
+    fn test_layer_tagged_blocks_are_padded_to_four_bytes() {
+        let mut info = LayerAdditionalInfo::default();
+        info.name = Some("A".to_string());
+        info.id = Some(7);
+
+        let mut writer = PsdWriter::new(128);
+        write_layer_additional_info_with_options(&mut writer, &info, false).unwrap();
+        let buffer = writer.into_buffer();
+
+        let luni_offset = buffer
+            .windows(4)
+            .position(|window| window == b"luni")
+            .expect("luni block present");
+        let luni_len = u32::from_be_bytes(
+            buffer[luni_offset + 4..luni_offset + 8]
+                .try_into()
+                .expect("luni length bytes"),
+        ) as usize;
+        let lyid_offset = buffer
+            .windows(8)
+            .position(|window| window == b"8BIMlyid")
+            .expect("lyid block present");
+
+        assert_eq!(luni_len, 6);
+        assert_eq!(lyid_offset, luni_offset + 4 + 4 + luni_len + 2);
+        assert_eq!(&buffer[luni_offset + 8 + luni_len..lyid_offset], &[0, 0]);
     }
 
     #[test]

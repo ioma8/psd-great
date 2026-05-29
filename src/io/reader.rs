@@ -489,7 +489,7 @@ fn read_layer_and_mask_info<R: Read + Seek>(
     reader.read_section(1, |reader, end_offset| {
         // Read layer info
         if reader.bytes_left(end_offset) > 0 {
-            reader.read_section(2, |reader, end_offset| {
+            reader.read_section(1, |reader, end_offset| {
                 read_layer_info(reader, psd)?;
                 reader.skip_bytes(reader.bytes_left(end_offset))?;
                 Ok(())
