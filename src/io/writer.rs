@@ -1065,7 +1065,7 @@ fn layer_channel_bounds(layer: &Layer, channel_id: ChannelID) -> (i32, i32, usiz
 }
 
 fn preferred_channel_compression(bits_per_channel: u8, options: &WriteOptions) -> Compression {
-    if !options.compress.unwrap_or(false) {
+    if !options.compress.unwrap_or(true) {
         return Compression::RawData;
     }
     if bits_per_channel == 8 {

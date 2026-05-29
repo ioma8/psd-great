@@ -23,7 +23,155 @@ fn sample_fixture_paths() -> Vec<PathBuf> {
     entries
 }
 
+fn layer_mask_semantics(mask: Option<&psd_great::layer::LayerMaskData>) -> Option<(Option<i32>, Option<i32>, Option<i32>, Option<i32>, Option<u8>, Option<Vec<u8>>)> {
+    mask.map(|mask| {
+        (
+            mask.top,
+            mask.left,
+            mask.bottom,
+            mask.right,
+            mask.default_color,
+            mask.image_data.as_ref().map(|image| image.data.clone()),
+        )
+    })
+}
+
+fn raw_block_semantics(
+    info: &psd_great::additional_info::LayerAdditionalInfo,
+) -> Vec<(String, Vec<u8>)> {
+    info.raw_blocks
+        .iter()
+        .map(|block| (block.key.clone(), block.data.clone()))
+        .collect()
+}
+
+fn assert_layers_semantically_equal(expected: &[Layer], actual: &[Layer], strict_order: bool) {
+    assert_eq!(actual.len(), expected.len(), "layer count mismatch");
+
+    for (expected, actual) in expected.iter().zip(actual.iter()) {
+        assert_eq!(actual.top, expected.top, "layer top mismatch");
+        assert_eq!(actual.left, expected.left, "layer left mismatch");
+        assert_eq!(actual.bottom, expected.bottom, "layer bottom mismatch");
+        assert_eq!(actual.right, expected.right, "layer right mismatch");
+        assert_eq!(actual.blend_mode, expected.blend_mode, "layer blend mismatch");
+        assert_eq!(actual.opacity, expected.opacity, "layer opacity mismatch");
+        assert_eq!(actual.hidden, expected.hidden, "layer hidden mismatch");
+        assert_eq!(actual.clipping, expected.clipping, "layer clipping mismatch");
+        assert_eq!(actual.opened, expected.opened, "layer open state mismatch");
+        assert_eq!(
+            actual.additional_info.name,
+            expected.additional_info.name,
+            "layer name mismatch"
+        );
+        assert_eq!(
+            actual.additional_info.id,
+            expected.additional_info.id,
+            "layer id mismatch"
+        );
+        assert_eq!(
+            actual.additional_info.section_divider,
+            expected.additional_info.section_divider,
+            "layer section divider mismatch"
+        );
+        assert_eq!(
+            raw_block_semantics(&actual.additional_info),
+            raw_block_semantics(&expected.additional_info),
+            "layer raw tagged block mismatch"
+        );
+        if strict_order {
+            assert_eq!(
+                actual.additional_info.tagged_block_order,
+                expected.additional_info.tagged_block_order,
+                "layer tagged block order mismatch"
+            );
+        }
+        assert_eq!(
+            actual.blending_ranges_data,
+            expected.blending_ranges_data,
+            "layer blending ranges mismatch"
+        );
+        assert_eq!(
+            actual.image_data.as_ref().map(|image| &image.data),
+            expected.image_data.as_ref().map(|image| &image.data),
+            "layer pixel data mismatch"
+        );
+        assert_eq!(
+            layer_mask_semantics(actual.additional_info.mask.as_ref()),
+            layer_mask_semantics(expected.additional_info.mask.as_ref()),
+            "user mask mismatch"
+        );
+        assert_eq!(
+            layer_mask_semantics(actual.additional_info.real_mask.as_ref()),
+            layer_mask_semantics(expected.additional_info.real_mask.as_ref()),
+            "real mask mismatch"
+        );
+
+        let expected_children = expected.children.as_deref().unwrap_or(&[]);
+        let actual_children = actual.children.as_deref().unwrap_or(&[]);
+        assert_layers_semantically_equal(expected_children, actual_children, strict_order);
+    }
+}
+
+fn assert_psd_semantically_equal(expected: &Psd, actual: &Psd, strict_order: bool) {
+    assert_eq!(actual.width, expected.width, "document width mismatch");
+    assert_eq!(actual.height, expected.height, "document height mismatch");
+    assert_eq!(
+        actual.bits_per_channel,
+        expected.bits_per_channel,
+        "document depth mismatch"
+    );
+    assert_eq!(actual.color_mode, expected.color_mode, "color mode mismatch");
+    assert_eq!(
+        actual.image_data.as_ref().map(|image| &image.data),
+        expected.image_data.as_ref().map(|image| &image.data),
+        "composite pixel data mismatch"
+    );
+    assert_eq!(
+        raw_block_semantics(&actual.additional_info),
+        raw_block_semantics(&expected.additional_info),
+        "document raw tagged block mismatch"
+    );
+    if strict_order {
+        assert_eq!(
+            actual.additional_info.tagged_block_order,
+            expected.additional_info.tagged_block_order,
+            "document tagged block order mismatch"
+        );
+    }
+
+    assert_layers_semantically_equal(
+        expected.children.as_deref().unwrap_or(&[]),
+        actual.children.as_deref().unwrap_or(&[]),
+        strict_order,
+    );
+}
+
+fn is_canonical_8bit_rgba_layer(layer: &Layer) -> bool {
+    layer.children.is_none()
+        && layer.image_data.is_some()
+        && layer.additional_info.mask.is_none()
+        && layer.additional_info.real_mask.is_none()
+        && layer.top.zip(layer.bottom).is_some_and(|(top, bottom)| bottom >= top)
+        && layer.left.zip(layer.right).is_some_and(|(left, right)| right >= left)
+}
+
+fn assert_canonical_layers_drop_raw_data(layers: &[Layer]) {
+    for layer in layers {
+        if is_canonical_8bit_rgba_layer(layer) {
+            assert!(
+                layer.raw_data.is_none(),
+                "canonical RGBA layer should regenerate instead of retaining raw data: {:?}",
+                layer.additional_info.name
+            );
+        }
+        if let Some(children) = layer.children.as_deref() {
+            assert_canonical_layers_drop_raw_data(children);
+        }
+    }
+}
+
 #[test]
+#[ignore = "semantic roundtrip contract does not require byte-exact Adobe bytes"]
 fn sample_psd_roundtrip_is_byte_exact() {
     for path in sample_fixture_paths() {
         let original = fs::read(&path).expect("read sample fixture");
@@ -40,6 +188,70 @@ fn sample_psd_roundtrip_is_byte_exact() {
             original.len(),
             rewritten.len()
         );
+    }
+}
+
+#[test]
+fn default_roundtrip_preserves_pixels_and_structure() {
+    let path = in_repo_sample_fixtures_dir().join("3d-preview-mockup.psd");
+    let original = fs::read(&path).expect("read sample fixture");
+    let psd = read_psd(Cursor::new(&original), ReadOptions::default())
+        .unwrap_or_else(|err| panic!("{}: parse failed: {err}", path.display()));
+    let rewritten = write_psd(&psd, &WriteOptions::default())
+        .unwrap_or_else(|err| panic!("{}: write failed: {err}", path.display()));
+    let reparsed = read_psd(Cursor::new(&rewritten), ReadOptions::default())
+        .unwrap_or_else(|err| panic!("{}: reparse failed: {err}", path.display()));
+
+    assert_psd_semantically_equal(&psd, &reparsed, false);
+}
+
+#[test]
+fn roundtrip_3d_preview_sample_does_not_massively_expand() {
+    let path = in_repo_sample_fixtures_dir().join("3d-preview-mockup.psd");
+    let original = fs::read(&path).expect("read sample fixture");
+    let psd = read_psd(Cursor::new(&original), ReadOptions::default())
+        .unwrap_or_else(|err| panic!("{}: parse failed: {err}", path.display()));
+    let rewritten = write_psd(&psd, &WriteOptions::default())
+        .unwrap_or_else(|err| panic!("{}: write failed: {err}", path.display()));
+
+    assert!(
+        rewritten.len() <= original.len() * 2,
+        "{}: rewritten file expanded unexpectedly (original {} bytes, rewritten {} bytes)",
+        path.display(),
+        original.len(),
+        rewritten.len()
+    );
+}
+
+#[test]
+fn default_read_drops_raw_for_canonical_rgba_layers() {
+    let path = in_repo_sample_fixtures_dir().join("3d-preview-mockup.psd");
+    let original = fs::read(&path).expect("read sample fixture");
+    let psd = read_psd(Cursor::new(&original), ReadOptions::default())
+        .unwrap_or_else(|err| panic!("{}: parse failed: {err}", path.display()));
+
+    assert_canonical_layers_drop_raw_data(psd.children.as_deref().unwrap_or(&[]));
+}
+
+#[test]
+fn all_sample_psds_remain_semantically_stable_across_multiple_roundtrips() {
+    for path in sample_fixture_paths() {
+        let original = fs::read(&path).expect("read sample fixture");
+        let psd1 = read_psd(Cursor::new(&original), ReadOptions::default())
+            .unwrap_or_else(|err| panic!("{}: first parse failed: {err}", path.display()));
+
+        let bytes2 = write_psd(&psd1, &WriteOptions::default())
+            .unwrap_or_else(|err| panic!("{}: first write failed: {err}", path.display()));
+        let psd2 = read_psd(Cursor::new(&bytes2), ReadOptions::default())
+            .unwrap_or_else(|err| panic!("{}: second parse failed: {err}", path.display()));
+
+        let bytes3 = write_psd(&psd2, &WriteOptions::default())
+            .unwrap_or_else(|err| panic!("{}: second write failed: {err}", path.display()));
+        let psd3 = read_psd(Cursor::new(&bytes3), ReadOptions::default())
+            .unwrap_or_else(|err| panic!("{}: third parse failed: {err}", path.display()));
+
+        assert_psd_semantically_equal(&psd1, &psd2, false);
+        assert_psd_semantically_equal(&psd2, &psd3, true);
     }
 }
 

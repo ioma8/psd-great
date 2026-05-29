@@ -283,8 +283,16 @@ pub struct LayerAdditionalInfo {
     pub filter_effects: Option<FilterEffectsBlock>,
     /// Pixel source data (PxSD)
     pub pixel_source_data: Option<PixelSourceDataBlock>,
-    /// Opaque payloads for recognized tagged blocks that are not yet semantically modeled.
-    pub raw_blocks: HashMap<String, Vec<u8>>,
+    /// Original tagged-block order from the source PSD, including duplicates.
+    pub tagged_block_order: Vec<String>,
+    /// Opaque tagged blocks that are preserved verbatim because they are not semantically modeled.
+    pub raw_blocks: Vec<RawTaggedBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawTaggedBlock {
+    pub key: String,
+    pub data: Vec<u8>,
 }
 
 /// Text engine block (Txt2) containing engine data
@@ -1151,12 +1159,16 @@ impl<R: Read + Seek> PsdReader<R> {
                 info.text_engine = Some(TextEngineBlock { data: parsed });
             }
             "LMsk" | "Mtrn" | "Mt16" | "Mt32" | "FXid" => {
-                info.raw_blocks
-                    .insert(key.to_string(), self.read_bytes(length)?);
+                info.raw_blocks.push(RawTaggedBlock {
+                    key: key.to_string(),
+                    data: self.read_bytes(length)?,
+                });
             }
             "abdd" | "anFX" | "cinf" | "SoLE" => {
-                info.raw_blocks
-                    .insert(key.to_string(), self.read_bytes(length)?);
+                info.raw_blocks.push(RawTaggedBlock {
+                    key: key.to_string(),
+                    data: self.read_bytes(length)?,
+                });
             }
             "Anno" => {
                 let header: AnnotationHeaderRecord =
@@ -1472,7 +1484,10 @@ impl<R: Read + Seek> PsdReader<R> {
                 info.pixel_source_data = Some(PixelSourceDataBlock { items });
             }
             _ => {
-                self.skip_bytes(length)?;
+                info.raw_blocks.push(RawTaggedBlock {
+                    key: key.to_string(),
+                    data: self.read_bytes(length)?,
+                });
             }
         }
 
@@ -2930,7 +2945,7 @@ impl PsdWriter {
                 }
             }
             "LMsk" | "Mtrn" | "Mt16" | "Mt32" | "FXid" | "abdd" | "anFX" | "cinf" | "SoLE" => {
-                if let Some(raw) = info.raw_blocks.get(key) {
+                if let Some(raw) = first_raw_block(info, key) {
                     temp_writer.write_bytes(raw)?;
                 }
             }
@@ -3141,6 +3156,7 @@ pub fn read_layer_additional_info<R: Read + Seek>(
         }
 
         let key = reader.read_signature()?;
+        info.tagged_block_order.push(key.clone());
         let data_length = if signature == "8B64" {
             // Read 64-bit length
             let high = reader.read_u32()?;
@@ -3227,6 +3243,8 @@ pub(crate) fn write_layer_additional_info_with_options(
     info: &LayerAdditionalInfo,
     large: bool,
 ) -> Result<()> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+
     fn disk_key(key: &str) -> &str {
         match key {
             // TS exposes this alias in the type surface, but PSD tagged-block
@@ -3235,6 +3253,12 @@ pub(crate) fn write_layer_additional_info_with_options(
             _ => key,
         }
     }
+
+    let raw_only_sections: HashSet<&str> = [
+        "LMsk", "Mtrn", "Mt16", "Mt32", "FXid", "abdd", "anFX", "cinf", "SoLE",
+    ]
+    .into_iter()
+    .collect();
 
     let sections = vec![
         "luni", "lyid", "lclr", "iOpa", "lsct", "clbl", "infx", "knko", "lspf", "lnsr", "lyvr",
@@ -3245,13 +3269,17 @@ pub(crate) fn write_layer_additional_info_with_options(
         "abdd", "anFX", "cinf", "SoLE",
     ];
 
-    for key in sections {
+    let mut modeled_blocks = Vec::new();
+    for key in &sections {
+        if raw_only_sections.contains(disk_key(key)) {
+            continue;
+        }
         // Create temporary writer for section data
         let mut temp_writer = PsdWriter::new(1024);
         let length = temp_writer.write_additional_info(key, info)?;
 
         if length > 0 {
-            write_tagged_block(writer, disk_key(key), temp_writer.get_buffer(), large)?;
+            modeled_blocks.push((disk_key(key).to_string(), temp_writer.into_buffer()));
         }
     }
 
@@ -3261,7 +3289,7 @@ pub(crate) fn write_layer_additional_info_with_options(
         let data = adj
             .to_bytes()
             .map_err(|e| PsdError::InvalidFormat(e.to_string()))?;
-        write_tagged_block(writer, &adj_key, &data, large)?;
+        modeled_blocks.push((adj_key, data));
     }
 
     // Write layer effects descriptor (lmfx)
@@ -3269,8 +3297,7 @@ pub(crate) fn write_layer_additional_info_with_options(
         let mut lmfx_writer = PsdWriter::new(256);
         lmfx_writer.write_u32(0)?; // version
         lmfx_writer.write_version_and_descriptor(16, desc)?;
-        let data = lmfx_writer.into_buffer();
-        write_tagged_block(writer, "lmfx", &data, large)?;
+        modeled_blocks.push(("lmfx".to_string(), lmfx_writer.into_buffer()));
     }
 
     // Write pattern block (Patt/Pat2/Pat3)
@@ -3287,11 +3314,74 @@ pub(crate) fn write_layer_additional_info_with_options(
                 pattern_writer.write_zeros(4 - remainder)?;
             }
         }
-        let data = pattern_writer.into_buffer();
-        write_tagged_block(writer, block.key.as_ref(), &data, large)?;
+        modeled_blocks.push((block.key.as_ref().to_string(), pattern_writer.into_buffer()));
+    }
+
+    let emitted_keys: HashSet<&str> = modeled_blocks
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect();
+
+    let mut modeled_by_key: HashMap<String, VecDeque<Vec<u8>>> = HashMap::new();
+    for (key, data) in &modeled_blocks {
+        modeled_by_key
+            .entry(key.clone())
+            .or_default()
+            .push_back(data.clone());
+    }
+
+    let mut raw_by_key: HashMap<String, VecDeque<Vec<u8>>> = HashMap::new();
+    for raw in &info.raw_blocks {
+        raw_by_key
+            .entry(disk_key(&raw.key).to_string())
+            .or_default()
+            .push_back(raw.data.clone());
+    }
+
+    if !info.tagged_block_order.is_empty() {
+        for key in &info.tagged_block_order {
+            let key = disk_key(key).to_string();
+            if let Some(queue) = raw_by_key.get_mut(&key) {
+                if let Some(raw) = queue.pop_front() {
+                    write_tagged_block(writer, &key, &raw, large)?;
+                    continue;
+                }
+            }
+            if let Some(queue) = modeled_by_key.get_mut(&key) {
+                if let Some(data) = queue.pop_front() {
+                    write_tagged_block(writer, &key, &data, large)?;
+                }
+            }
+        }
+    }
+
+    for (key, _) in &modeled_blocks {
+        if let Some(queue) = modeled_by_key.get_mut(key) {
+            while let Some(data) = queue.pop_front() {
+                write_tagged_block(writer, key, &data, large)?;
+            }
+        }
+    }
+
+    for raw in &info.raw_blocks {
+        let key = disk_key(&raw.key).to_string();
+        if !emitted_keys.contains(key.as_str()) {
+            if let Some(queue) = raw_by_key.get_mut(&key) {
+                if let Some(data) = queue.pop_front() {
+                    write_tagged_block(writer, &key, &data, large)?;
+                }
+            }
+        }
     }
 
     Ok(())
+}
+
+fn first_raw_block<'a>(info: &'a LayerAdditionalInfo, key: &str) -> Option<&'a [u8]> {
+    info.raw_blocks
+        .iter()
+        .find(|raw| raw.key == key)
+        .map(|raw| raw.data.as_slice())
 }
 
 /// Write all additional info sections for a layer
@@ -4044,6 +4134,67 @@ mod tests {
             .read_additional_info("Txt2", len, &mut reparsed)
             .unwrap();
         assert_eq!(reparsed.text_engine, info.text_engine);
+    }
+
+    #[test]
+    fn unknown_tagged_block_roundtrips_via_raw_blocks() {
+        let mut writer = PsdWriter::new(64);
+        write_tagged_block(&mut writer, "ZZZ1", &[1, 2, 3, 4, 5], false).unwrap();
+        let bytes = writer.into_buffer();
+
+        let mut reader = PsdReader::new(std::io::Cursor::new(bytes.clone()), Default::default());
+        let parsed = read_layer_additional_info(&mut reader, bytes.len()).unwrap();
+        assert_eq!(parsed.raw_blocks.len(), 1);
+        assert_eq!(parsed.raw_blocks[0].key, "ZZZ1");
+        assert_eq!(parsed.raw_blocks[0].data, vec![1, 2, 3, 4, 5]);
+
+        let mut rewritten = PsdWriter::new(64);
+        write_layer_additional_info(&mut rewritten, &parsed).unwrap();
+        let rewritten = rewritten.into_buffer();
+        assert_eq!(rewritten, bytes);
+
+        let mut rereader =
+            PsdReader::new(std::io::Cursor::new(rewritten.clone()), Default::default());
+        let reparsed = read_layer_additional_info(&mut rereader, rewritten.len()).unwrap();
+        assert_eq!(reparsed.raw_blocks.len(), 1);
+        assert_eq!(reparsed.raw_blocks[0].key, "ZZZ1");
+        assert_eq!(reparsed.raw_blocks[0].data, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn duplicate_unknown_tagged_blocks_preserve_multiplicity_and_order() {
+        let mut writer = PsdWriter::new(128);
+        write_tagged_block(&mut writer, "ZZZ1", &[1], false).unwrap();
+        write_tagged_block(&mut writer, "ZZZ2", &[2], false).unwrap();
+        write_tagged_block(&mut writer, "ZZZ1", &[3], false).unwrap();
+        let bytes = writer.into_buffer();
+
+        let mut reader = PsdReader::new(std::io::Cursor::new(bytes.clone()), Default::default());
+        let parsed = read_layer_additional_info(&mut reader, bytes.len()).unwrap();
+
+        let mut rewritten = PsdWriter::new(128);
+        write_layer_additional_info(&mut rewritten, &parsed).unwrap();
+        let rewritten = rewritten.into_buffer();
+
+        assert_eq!(rewritten, bytes);
+    }
+
+    #[test]
+    fn mixed_modeled_and_unknown_tagged_blocks_preserve_original_order() {
+        let mut writer = PsdWriter::new(128);
+        write_tagged_block(&mut writer, "ZZZ1", &[9], false).unwrap();
+        write_tagged_block(&mut writer, "lyid", &123u32.to_be_bytes(), false).unwrap();
+        write_tagged_block(&mut writer, "ZZZ2", &[8], false).unwrap();
+        let bytes = writer.into_buffer();
+
+        let mut reader = PsdReader::new(std::io::Cursor::new(bytes.clone()), Default::default());
+        let parsed = read_layer_additional_info(&mut reader, bytes.len()).unwrap();
+
+        let mut rewritten = PsdWriter::new(128);
+        write_layer_additional_info(&mut rewritten, &parsed).unwrap();
+        let rewritten = rewritten.into_buffer();
+
+        assert_eq!(rewritten, bytes);
     }
 
     #[test]
