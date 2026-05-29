@@ -1,8 +1,47 @@
 use psd_great::additional_info::SectionDivider;
 use psd_great::*;
 use std::collections::HashMap;
+use std::fs;
 use std::fs::File;
 use std::io::Cursor;
+use std::path::PathBuf;
+
+fn in_repo_sample_fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("samples")
+}
+
+fn sample_fixture_paths() -> Vec<PathBuf> {
+    let mut entries = fs::read_dir(in_repo_sample_fixtures_dir())
+        .expect("read fixture samples directory")
+        .map(|entry| entry.expect("fixture directory entry").path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("psd"))
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries
+}
+
+#[test]
+fn sample_psd_roundtrip_is_byte_exact() {
+    for path in sample_fixture_paths() {
+        let original = fs::read(&path).expect("read sample fixture");
+        let psd = read_psd(Cursor::new(&original), ReadOptions::default())
+            .unwrap_or_else(|err| panic!("{}: parse failed: {err}", path.display()));
+        let rewritten = write_psd(&psd, &WriteOptions::default())
+            .unwrap_or_else(|err| panic!("{}: write failed: {err}", path.display()));
+
+        assert_eq!(
+            rewritten,
+            original,
+            "{}: byte mismatch after roundtrip (original {} bytes, rewritten {} bytes)",
+            path.display(),
+            original.len(),
+            rewritten.len()
+        );
+    }
+}
 
 #[test]
 fn read_color_preserves_raw_rgb_hsb_lab_values() {
