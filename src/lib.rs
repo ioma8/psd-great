@@ -14,6 +14,10 @@
 //! - `support` - Shared low-level helpers
 //! - `formats` - Additional Adobe/Photoshop-adjacent file formats
 
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 pub mod api;
 pub mod format;
 pub mod formats;

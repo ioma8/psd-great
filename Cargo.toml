@@ -10,7 +10,9 @@ keywords = ["psd", "photoshop", "image", "graphics"]
 categories = ["multimedia::images", "parser-implementations"]
 
 [features]
+default = ["jemalloc"]
 parallel-writer = ["dep:rayon"]
+jemalloc = ["dep:tikv-jemallocator"]
 
 [dependencies]
 # Compression support (equivalent to pako in JS)
@@ -29,6 +31,7 @@ quick-xml = "0.40"
 # Lazy static for static hashmaps
 lazy_static = "1.4"
 rayon = { version = "1.10", optional = true }
+tikv-jemallocator = { version = "0.7", optional = true }
 
 [dev-dependencies]
 # Testing utilities
