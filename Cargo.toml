@@ -9,6 +9,9 @@ repository = "https://github.com/ioma8/psd-great"
 keywords = ["psd", "photoshop", "image", "graphics"]
 categories = ["multimedia::images", "parser-implementations"]
 
+[features]
+parallel-writer = ["dep:rayon"]
+
 [dependencies]
 # Compression support (equivalent to pako in JS)
 flate2 = "1.0"
@@ -25,6 +28,7 @@ bitflags = "2.11"
 quick-xml = "0.40"
 # Lazy static for static hashmaps
 lazy_static = "1.4"
+rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 # Testing utilities

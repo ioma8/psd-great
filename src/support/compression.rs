@@ -132,16 +132,21 @@ pub fn compress_rle_rows(
         )));
     }
 
-    let mut rows = Vec::new();
+    // RLE output is written row-by-row but stored as one contiguous payload.
+    // Reusing this buffer avoids one temporary allocation per scanline.
+    let output_capacity = required
+        .checked_add(required.div_ceil(128))
+        .ok_or_else(|| PsdError::Compression("RLE: output size overflow".to_string()))?;
+    let mut rows = Vec::with_capacity(output_capacity);
     let mut byte_counts = Vec::with_capacity(height);
 
     for y in 0..height {
         let row_start = y * row_len;
         let row = &data[row_start..row_start + row_len];
 
-        let compressed_row = compress_rle_row(row)?;
-        byte_counts.push(compressed_row.len() as u32);
-        rows.extend_from_slice(&compressed_row);
+        let row_start = rows.len();
+        compress_rle_row_into(row, &mut rows);
+        byte_counts.push((rows.len() - row_start) as u32);
     }
     Ok((byte_counts, rows))
 }
@@ -174,8 +179,7 @@ pub fn compress_rle(data: &[u8], row_len: usize, height: usize, large: bool) -> 
 }
 
 /// Compress a single row using RLE
-fn compress_rle_row(row: &[u8]) -> Result<Vec<u8>> {
-    let mut result = Vec::new();
+fn compress_rle_row_into(row: &[u8], output: &mut Vec<u8>) {
     let mut i = 0;
 
     while i < row.len() {
@@ -185,8 +189,8 @@ fn compress_rle_row(row: &[u8]) -> Result<Vec<u8>> {
             run_len += 1;
         }
         if run_len >= 3 {
-            result.push((1i16 - run_len as i16) as u8);
-            result.push(row[i]);
+            output.push((1i16 - run_len as i16) as u8);
+            output.push(row[i]);
             i += run_len;
             continue;
         }
@@ -206,11 +210,9 @@ fn compress_rle_row(row: &[u8]) -> Result<Vec<u8>> {
             lit_len = 1;
             i += 1;
         }
-        result.push((lit_len - 1) as u8);
-        result.extend_from_slice(&row[lit_start..lit_start + lit_len]);
+        output.push((lit_len - 1) as u8);
+        output.extend_from_slice(&row[lit_start..lit_start + lit_len]);
     }
-
-    Ok(result)
 }
 
 fn sample_bytes(depth: u16) -> Result<usize> {
@@ -666,6 +668,22 @@ mod tests {
             "unexpected error: {}",
             err
         );
+    }
+
+    #[test]
+    fn compress_rle_reuses_rows_without_changing_pixels() {
+        let mut data = vec![7u8; 256];
+        for (index, byte) in data[128..].iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let encoded = compress_rle(&data, 128, 2, false).unwrap();
+        let counts = [
+            u32::from(u16::from_be_bytes([encoded[0], encoded[1]])),
+            u32::from(u16::from_be_bytes([encoded[2], encoded[3]])),
+        ];
+        let mut decoded = vec![0; data.len()];
+        decompress_rle(&encoded[4..], &mut decoded, 128, 2, &counts).unwrap();
+        assert_eq!(decoded, data);
     }
 
     #[test]

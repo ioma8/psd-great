@@ -16,6 +16,8 @@ use crate::support::helpers::{
     clamp, from_blend_mode, has_alpha, LayerBlendFlags, LayerMaskParameterFlags, LayerMaskStateBits,
 };
 use byteorder::{BigEndian, WriteBytesExt};
+#[cfg(feature = "parallel-writer")]
+use rayon::prelude::*;
 use std::io::Cursor;
 
 /// PSD writer for binary data
@@ -638,10 +640,12 @@ fn write_layer_info(
                 )));
             }
         }
-        let prepared_payloads: Vec<PreparedLayerChannels> = layers
-            .iter()
-            .map(|layer| prepare_layer_channels(layer, color_mode, bits_per_channel, options))
-            .collect::<Result<Vec<PreparedLayerChannels>>>()?;
+        let prepared_payloads = prepare_layer_payloads(
+            &layers,
+            color_mode,
+            bits_per_channel,
+            options,
+        )?;
 
         let layer_count = if global_alpha {
             -layer_count_i16(layers.len())?
@@ -733,6 +737,41 @@ struct PreparedChannel {
 #[derive(Debug, Clone)]
 struct PreparedLayerChannels {
     entries: Vec<PreparedChannel>,
+}
+
+fn prepare_layer_payloads(
+    layers: &[Layer],
+    color_mode: ColorMode,
+    bits_per_channel: u8,
+    options: &WriteOptions,
+) -> Result<Vec<PreparedLayerChannels>> {
+    let serial = || {
+        layers
+            .iter()
+            .map(|layer| prepare_layer_channels(layer, color_mode, bits_per_channel, options))
+            .collect()
+    };
+
+    #[cfg(feature = "parallel-writer")]
+    {
+        const LAYERS_PER_TASK: usize = 4;
+        if layers.len() >= LAYERS_PER_TASK {
+            return layers
+                .par_chunks(LAYERS_PER_TASK)
+                .map(|chunk| {
+                    chunk
+                        .iter()
+                        .map(|layer| {
+                            prepare_layer_channels(layer, color_mode, bits_per_channel, options)
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(|chunks| chunks.into_iter().flatten().collect());
+        }
+    }
+
+    serial()
 }
 
 /// Write a single layer record
@@ -964,10 +1003,8 @@ pub(crate) fn write_nested_layer_info_block(
         ..Default::default()
     };
     let flattened = flatten_layers(Some(&layers.to_vec()));
-    let prepared_payloads: Vec<PreparedLayerChannels> = flattened
-        .iter()
-        .map(|layer| prepare_layer_channels(layer, writer.color_mode, bits_per_channel, &options))
-        .collect::<Result<Vec<PreparedLayerChannels>>>()?;
+    let prepared_payloads =
+        prepare_layer_payloads(&flattened, writer.color_mode, bits_per_channel, &options)?;
 
     let layer_count = layer_count_i16(flattened.len())?;
     writer.write_i16(if writer.global_alpha {
