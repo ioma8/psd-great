@@ -626,13 +626,13 @@ fn write_layer_info(
     let psb = options.psb.unwrap_or(false);
     let bits_per_channel = psd.bits_per_channel.unwrap_or(8);
     writer.write_section_with_length_mode(2, psb, true, |writer| {
-        let layers = flatten_layers(psd.children.as_ref());
+        let layers = flatten_layer_refs(psd.children.as_deref());
         let color_mode = psd.color_mode.unwrap_or(ColorMode::RGB);
         if !matches!(color_mode, ColorMode::RGB | ColorMode::Grayscale) {
             // CMYK/Indexed/Bitmap samples cannot be reconstructed from the
             // 8-bit RGBA preview; require the retained native channels.
             let has_synthesized = layers.iter().any(|layer| {
-                !layer_raw_is_current(layer) && layer.image_data.is_some()
+                !layer_raw_is_current(layer.layer()) && layer.layer().image_data.is_some()
             });
             if has_synthesized {
                 return Err(PsdError::UnsupportedFeature(format!(
@@ -640,12 +640,7 @@ fn write_layer_info(
                 )));
             }
         }
-        let prepared_payloads = prepare_layer_payloads(
-            &layers,
-            color_mode,
-            bits_per_channel,
-            options,
-        )?;
+        let prepared_payloads = prepare_layer_payloads(&layers, color_mode, bits_per_channel, options)?;
 
         let layer_count = if global_alpha {
             -layer_count_i16(layers.len())?
@@ -656,7 +651,7 @@ fn write_layer_info(
 
         // Write layer records
         for (layer, payloads) in layers.iter().zip(prepared_payloads.iter()) {
-            write_layer_record(writer, layer, payloads, options)?;
+            write_layer_record(writer, layer.layer(), payloads, options)?;
         }
 
         // Write layer channel image data
@@ -669,13 +664,34 @@ fn write_layer_info(
 }
 
 /// Flatten layer hierarchy to a list
+#[allow(dead_code)]
 pub(crate) fn flatten_layers(children: Option<&Vec<Layer>>) -> Vec<Layer> {
+    flatten_layer_refs(children.map(Vec::as_slice))
+        .into_iter()
+        .map(|layer| layer.layer().clone())
+        .collect()
+}
+
+enum FlatLayer<'a> {
+    Borrowed(&'a Layer),
+    Owned(Layer),
+}
+
+impl FlatLayer<'_> {
+    fn layer(&self) -> &Layer {
+        match self {
+            Self::Borrowed(layer) => layer,
+            Self::Owned(layer) => layer,
+        }
+    }
+}
+
+fn flatten_layer_refs(children: Option<&[Layer]>) -> Vec<FlatLayer<'_>> {
     let mut result = Vec::new();
 
     if let Some(children) = children {
         for child in children {
-            if let Some(ref child_children) = child.children {
-                // Add synthetic closing marker first, matching Adobe flat layer order.
+            if let Some(child_children) = child.children.as_deref() {
                 let mut closing = Layer::default();
                 closing.additional_info.name = Some("</Layer group>".to_string());
                 closing.additional_info.id = child.additional_info.id;
@@ -684,12 +700,9 @@ pub(crate) fn flatten_layers(children: Option<&Vec<Layer>>) -> Vec<Layer> {
                     blend_mode: None,
                     sub_type: None,
                 });
-                result.push(closing);
+                result.push(FlatLayer::Owned(closing));
+                result.extend(flatten_layer_refs(Some(child_children)));
 
-                // Add children.
-                result.extend(flatten_layers(Some(child_children)));
-
-                // Add the real folder marker last.
                 let mut folder = child.clone();
                 folder.children = None;
                 let mut divider =
@@ -711,9 +724,9 @@ pub(crate) fn flatten_layers(children: Option<&Vec<Layer>>) -> Vec<Layer> {
                     crate::api::types::SectionDividerType::ClosedFolder
                 };
                 folder.additional_info.section_divider = Some(divider);
-                result.push(folder);
+                result.push(FlatLayer::Owned(folder));
             } else {
-                result.push(child.clone());
+                result.push(FlatLayer::Borrowed(child));
             }
         }
     }
@@ -740,7 +753,7 @@ struct PreparedLayerChannels {
 }
 
 fn prepare_layer_payloads(
-    layers: &[Layer],
+    layers: &[FlatLayer<'_>],
     color_mode: ColorMode,
     bits_per_channel: u8,
     options: &WriteOptions,
@@ -748,7 +761,9 @@ fn prepare_layer_payloads(
     let serial = || {
         layers
             .iter()
-            .map(|layer| prepare_layer_channels(layer, color_mode, bits_per_channel, options))
+            .map(|layer| {
+                prepare_layer_channels(layer.layer(), color_mode, bits_per_channel, options)
+            })
             .collect()
     };
 
@@ -762,7 +777,12 @@ fn prepare_layer_payloads(
                     chunk
                         .iter()
                         .map(|layer| {
-                            prepare_layer_channels(layer, color_mode, bits_per_channel, options)
+                            prepare_layer_channels(
+                                layer.layer(),
+                                color_mode,
+                                bits_per_channel,
+                                options,
+                            )
                         })
                         .collect::<Result<Vec<_>>>()
                 })
@@ -1002,7 +1022,7 @@ pub(crate) fn write_nested_layer_info_block(
         psb: Some(writer.large),
         ..Default::default()
     };
-    let flattened = flatten_layers(Some(&layers.to_vec()));
+    let flattened = flatten_layer_refs(Some(layers));
     let prepared_payloads =
         prepare_layer_payloads(&flattened, writer.color_mode, bits_per_channel, &options)?;
 
@@ -1013,7 +1033,7 @@ pub(crate) fn write_nested_layer_info_block(
         layer_count
     })?;
     for (layer, prepared) in flattened.iter().zip(prepared_payloads.iter()) {
-        write_layer_record(writer, layer, prepared, &options)?;
+        write_layer_record(writer, layer.layer(), prepared, &options)?;
     }
     for prepared in &prepared_payloads {
         write_layer_channel_data(writer, prepared)?;

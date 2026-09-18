@@ -1,0 +1,20 @@
+source_commit,rustc,platform,benchmark,mode,fixture,iterations,per_iter_ms,peak_rss_bytes,notes
+13c0674,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,baseline-jemalloc,write,tests/fixtures/samples/4901393.psd,5,101.240,,before review changes
+13c0674,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,baseline-jemalloc,write-raw,tests/fixtures/samples/4901393.psd,5,87.290,,use_raw_data=true before review changes
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,parse,tests/fixtures/samples/3d-preview-mockup.psd,5,43.819,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,write,tests/fixtures/samples/3d-preview-mockup.psd,5,31.488,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,parse,tests/fixtures/samples/4901393.psd,5,101.799,226869248,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,write,tests/fixtures/samples/4901393.psd,5,101.411,479297536,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,write-raw,tests/fixtures/samples/4901393.psd,5,77.530,669646848,use_raw_data=true
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,parse,tests/fixtures/samples/images.psd,5,10.127,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,write,tests/fixtures/samples/images.psd,5,7.099,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,parse,tests/fixtures/samples/multi-value-items.psd,5,7.577,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,write,tests/fixtures/samples/multi-value-items.psd,5,4.963,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,parse,tests/fixtures/samples/placeholders-with-frames.psd,5,15.179,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,write,tests/fixtures/samples/placeholders-with-frames.psd,5,7.095,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,parse,tests/fixtures/samples/rich-text.psd,5,9.759,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,write,tests/fixtures/samples/rich-text.psd,5,6.638,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,parse,tests/fixtures/samples/sample_1920×1280.psd,5,18.856,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,write,tests/fixtures/samples/sample_1920×1280.psd,5,25.693,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,parse,tests/fixtures/samples/text.psd,5,7.380,,default read options
+13c0674+working-tree,rustc-1.97.1-8bab26f4f,macOS-26.4-arm64,reviewed,write,tests/fixtures/samples/text.psd,5,3.767,,default read options

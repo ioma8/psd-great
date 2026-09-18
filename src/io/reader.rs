@@ -1069,7 +1069,7 @@ fn read_layer_channel_image_data<R: Read + Seek>(
                         "Invalid RLE channel data length".to_string(),
                     ));
                 }
-                let mut byte_counts = Vec::new();
+                let mut byte_counts = Vec::with_capacity(row_count);
                 for _ in 0..row_count {
                     let v = if reader.large {
                         reader.read_u32()?
@@ -1289,7 +1289,7 @@ fn read_layer_channel_raw_data<R: Read + Seek>(
                         "Invalid RLE channel data length".to_string(),
                     ));
                 }
-                let mut byte_counts = Vec::new();
+                let mut byte_counts = Vec::with_capacity(row_count);
                 for _ in 0..row_count {
                     let v = if reader.large {
                         reader.read_u32()?

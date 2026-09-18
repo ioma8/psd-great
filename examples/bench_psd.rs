@@ -16,18 +16,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|value| value.parse())
         .transpose()?
         .unwrap_or(3);
+    let use_raw_data = args.next().as_deref() == Some("raw");
     let input = fs::read(&path)?;
+    let read_options = ReadOptions {
+        use_raw_data: use_raw_data.then_some(true),
+        ..Default::default()
+    };
+    let psd = (mode == "write")
+        .then(|| read_psd(Cursor::new(&input), read_options.clone()))
+        .transpose()?;
 
     let start = Instant::now();
     match mode.as_str() {
         "parse" => {
             for _ in 0..iterations {
-                let psd = read_psd(Cursor::new(&input), ReadOptions::default())?;
+                let psd = read_psd(Cursor::new(&input), read_options.clone())?;
                 black_box(psd);
             }
         }
         "write" => {
-            let psd = read_psd(Cursor::new(&input), ReadOptions::default())?;
+            let psd = psd.expect("write benchmark PSD was prepared before timing");
             for _ in 0..iterations {
                 let bytes = write_psd(&psd, &WriteOptions::default())?;
                 black_box(bytes);
